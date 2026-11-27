@@ -3,6 +3,8 @@ use std::fmt;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use unitas_core::compat::{lookup_package_matrix, lookup_unsupported_family, CompatibilityState};
+
 use crate::binary_ser::{is_text_serialized, read_serialized_file};
 use crate::meta::parse_meta_text;
 use crate::packages::{
@@ -46,6 +48,8 @@ const RECOGNIZED_SETTINGS: [&str; 4] = [
     "DynamicsManager.asset",
     "InputManager.asset",
 ];
+
+const BUILT_IN_MODULE_PREFIX: &str = "com.unity.modules.";
 
 const UNITY_GENERATED_FOLDERS: [&str; 7] = [
     "Library",
@@ -869,6 +873,7 @@ pub struct CompatibilityFinding {
     pub catalog_id: String,
     pub tier: String,
     pub state: String,
+    pub notes: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -898,6 +903,46 @@ impl ProjectCompatibilityReport {
     }
 }
 
+/// The state names the compatibility report uses for a package; the build
+/// report parses these names, so they keep the snake_case spelling.
+fn package_state_label(state: CompatibilityState) -> &'static str {
+    match state {
+        CompatibilityState::Supported => "Supported",
+        CompatibilityState::PartiallySupported => "Partially_Supported",
+        CompatibilityState::Unsupported => "Unsupported",
+        CompatibilityState::Unknown => "Unknown",
+        CompatibilityState::PlatformLimited => "Platform_Limited",
+        CompatibilityState::ExternallyUnavailable => "Externally_Unavailable",
+    }
+}
+
+/// CMP-002: a package's compatibility state comes from the supported package
+/// matrix in unitas-core, never from the shape of its name.
+fn package_compatibility(package_id: &str) -> (String, String) {
+    if let Some(entry) = lookup_package_matrix(package_id) {
+        return (
+            package_state_label(entry.state).to_string(),
+            entry.state_notes.to_string(),
+        );
+    }
+    if let Some(family) = lookup_unsupported_family(package_id) {
+        return (
+            package_state_label(family.state).to_string(),
+            family.observable_consequence.to_string(),
+        );
+    }
+    if package_id.starts_with(BUILT_IN_MODULE_PREFIX) {
+        return (
+            package_state_label(CompatibilityState::Supported).to_string(),
+            "built-in engine module".to_string(),
+        );
+    }
+    (
+        package_state_label(CompatibilityState::Unknown).to_string(),
+        "package is not listed in the Unity 2022.3 LTS supported package matrix".to_string(),
+    )
+}
+
 pub fn build_compatibility_report(_root: &Path, report: &OpenReport) -> ProjectCompatibilityReport {
     let asset_findings = report
         .inventory
@@ -909,21 +954,22 @@ pub fn build_compatibility_report(_root: &Path, report: &OpenReport) -> ProjectC
             catalog_id: "PRJ-001".to_string(),
             tier: "Exact".to_string(),
             state: "Supported".to_string(),
+            notes: String::new(),
         })
         .collect();
     let package_findings = report
         .recognized_packages
         .iter()
-        .map(|pkg| CompatibilityFinding {
-            identity: pkg.clone(),
-            category: "package".to_string(),
-            catalog_id: "PRJ-006".to_string(),
-            tier: "Semantic".to_string(),
-            state: if pkg.starts_with("com.unity.") {
-                "Supported".to_string()
-            } else {
-                "Unknown".to_string()
-            },
+        .map(|pkg| {
+            let (state, notes) = package_compatibility(pkg);
+            CompatibilityFinding {
+                identity: pkg.clone(),
+                category: "package".to_string(),
+                catalog_id: "PRJ-006".to_string(),
+                tier: "Semantic".to_string(),
+                state,
+                notes,
+            }
         })
         .collect();
     let setting_findings = report
@@ -935,6 +981,7 @@ pub fn build_compatibility_report(_root: &Path, report: &OpenReport) -> ProjectC
             catalog_id: "PRJ-007".to_string(),
             tier: "Exact".to_string(),
             state: "Supported".to_string(),
+            notes: String::new(),
         })
         .collect();
     ProjectCompatibilityReport {

@@ -17,20 +17,44 @@ namespace Unitas.Editor.Tests
     {
         public static void Run()
         {
+            RequestWindowIsNotTheSession();
             StdioInitializeToolsAndResourcesRoundTrip().GetAwaiter().GetResult();
             StdioErrorMappingPreservesJsonRpcCodes().GetAwaiter().GetResult();
             StdioProductionToolSetAndCaptureEndToEnd().GetAwaiter().GetResult();
         }
 
-        // Starting the live play worker loads the whole sample bundle, so the
-        // request window has to cover a worker start on a machine that also
-        // runs the other verification gates.
-        private static CancellationToken RequestWindow(CancellationTokenSource source)
+        // A request window bounds one request, never the session the later
+        // requests travel over. Starting the live play worker loads the whole
+        // sample bundle, so the request window has to cover a worker start on a
+        // machine that also runs the other verification gates.
+        private const int RequestWindowSeconds = 60;
+
+        private static CancellationToken RequestWindow(CancellationTokenSource session)
         {
             // The window bounds a hung request, not a busy machine: the shared runner
             // saturates the host, so a local MCP round trip can outlast a short window.
-            source.CancelAfter(TimeSpan.FromSeconds(30));
-            return source.Token;
+            // Every request carries its own window, so a request that outruns the
+            // window cannot cancel the requests that follow it.
+            CancellationTokenSource window =
+                CancellationTokenSource.CreateLinkedTokenSource(session.Token);
+            window.CancelAfter(TimeSpan.FromSeconds(RequestWindowSeconds));
+            return window.Token;
+        }
+
+        // A request window is its own source: when it expires it must not end the
+        // session that the requests after it travel over, and the session must
+        // still end the windows of the requests that are in flight.
+        private static void RequestWindowIsNotTheSession()
+        {
+            using CancellationTokenSource session = new CancellationTokenSource();
+            CancellationToken window = RequestWindow(session);
+            Check.That(
+                "stdio: a request window does not share the session token",
+                window != session.Token);
+            session.Cancel();
+            Check.That(
+                "stdio: a request window follows the session token",
+                window.IsCancellationRequested);
         }
 
         private static async Task StdioInitializeToolsAndResourcesRoundTrip()
@@ -40,12 +64,14 @@ namespace Unitas.Editor.Tests
 
             Pipe clientToServer = new Pipe();
             Pipe serverToClient = new Pipe();
-            using CancellationTokenSource cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+            // The transport lives until the test tears it down, so one slow request
+            // cannot end the session the requests after it travel over.
+            using CancellationTokenSource cts = new CancellationTokenSource();
 
             Task serverTask = transportHost.RunAsync(
                 clientToServer.Reader.AsStream(),
                 serverToClient.Writer.AsStream(),
-                RequestWindow(cts));
+                cts.Token);
 
             StreamClientTransport clientTransport = new StreamClientTransport(
                 clientToServer.Writer.AsStream(),
@@ -63,7 +89,7 @@ namespace Unitas.Editor.Tests
                     },
                 },
                 null,
-                RequestWindow(cts)).ConfigureAwait(false);
+                cts.Token).ConfigureAwait(false);
             try
             {
                 Check.Equal(
@@ -222,12 +248,14 @@ namespace Unitas.Editor.Tests
 
             Pipe clientToServer = new Pipe();
             Pipe serverToClient = new Pipe();
-            using CancellationTokenSource cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+            // The transport lives until the test tears it down, so one slow request
+            // cannot end the session the requests after it travel over.
+            using CancellationTokenSource cts = new CancellationTokenSource();
 
             Task serverTask = transportHost.RunAsync(
                 clientToServer.Reader.AsStream(),
                 serverToClient.Writer.AsStream(),
-                RequestWindow(cts));
+                cts.Token);
 
             StreamClientTransport clientTransport = new StreamClientTransport(
                 clientToServer.Writer.AsStream(),
@@ -245,7 +273,7 @@ namespace Unitas.Editor.Tests
                     },
                 },
                 null,
-                RequestWindow(cts)).ConfigureAwait(false);
+                cts.Token).ConfigureAwait(false);
             try
             {
                 McpProtocolException? unknownTool = await CatchProtocolAsync(() =>
@@ -321,11 +349,13 @@ namespace Unitas.Editor.Tests
             StdioTransportHost transportHost = new StdioTransportHost(host);
             Pipe clientToServer = new Pipe();
             Pipe serverToClient = new Pipe();
-            using CancellationTokenSource cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+            // The transport lives until the test tears it down, so one slow request
+            // cannot end the session the requests after it travel over.
+            using CancellationTokenSource cts = new CancellationTokenSource();
             Task serverTask = transportHost.RunAsync(
                 clientToServer.Reader.AsStream(),
                 serverToClient.Writer.AsStream(),
-                RequestWindow(cts));
+                cts.Token);
             StreamClientTransport clientTransport = new StreamClientTransport(
                 clientToServer.Writer.AsStream(),
                 serverToClient.Reader.AsStream(),
@@ -341,7 +371,7 @@ namespace Unitas.Editor.Tests
                     },
                 },
                 null,
-                RequestWindow(cts)).ConfigureAwait(false);
+                cts.Token).ConfigureAwait(false);
             string playSessionId = string.Empty;
             try
             {
