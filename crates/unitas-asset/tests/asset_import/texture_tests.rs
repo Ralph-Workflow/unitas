@@ -1,4 +1,6 @@
-use unitas_asset::anim_import::{anim_import_outcome, import_animation_clip, AnimImportError};
+use unitas_asset::anim_import::{
+    anim_import_outcome, import_animation_clip, AnimImportError, ImportedAnimationClip,
+};
 use unitas_asset::dependencies::{
     AssetImportState, ImportCandidate, ImportDiagnostic, ImportOutcome, ImportSession,
 };
@@ -1826,13 +1828,43 @@ fn imports_unity_yaml_anim_clip_curves_settings_and_events(
     let anim_yaml = hero_run_anim_yaml();
 
     let clip = import_animation_clip(anim_yaml.as_bytes(), "Assets/Animations/HeroRun.anim")?;
+    assert_anim_clip_header(&clip);
+    assert_anim_clip_curves(&clip);
+    assert_anim_clip_settings_and_events(&clip);
+
+    let outcome = anim_import_outcome("Assets/Animations/HeroRun.anim", Ok(&clip));
+    assert_eq!(outcome.state, AssetImportState::Ready);
+
+    let non_anim = "%YAML 1.1\n--- !u!21 &2100000\nMaterial:\n  m_Name: TestMat\n";
+    let err = match import_animation_clip(non_anim.as_bytes(), "TestMat.anim") {
+        Ok(_) => AnimImportError::InvalidUtf8,
+        Err(error) => error,
+    };
+    assert_eq!(err, AnimImportError::MissingAnimationClipDocument);
+    let failed_outcome = anim_import_outcome("TestMat.anim", Err(&err));
+    assert_eq!(failed_outcome.state, AssetImportState::Failed);
+
+    let bad_rate =
+        "%YAML 1.1\n--- !u!74 &7400000\nAnimationClip:\n  m_Name: Bad\n  m_SampleRate: 0\n";
+    let rate_err = match import_animation_clip(bad_rate.as_bytes(), "Bad.anim") {
+        Ok(_) => AnimImportError::InvalidUtf8,
+        Err(error) => error,
+    };
+    assert!(matches!(rate_err, AnimImportError::InvalidSampleRate(_)));
+
+    Ok(())
+}
+
+fn assert_anim_clip_header(clip: &ImportedAnimationClip) {
     assert_eq!(clip.name, "HeroRun");
     assert!(!clip.legacy);
     assert!(!clip.compressed);
     assert!(clip.use_high_quality_curve);
     assert!((clip.sample_rate - 60.0).abs() < 1e-9);
     assert_eq!(clip.wrap_mode, 2);
+}
 
+fn assert_anim_clip_curves(clip: &ImportedAnimationClip) {
     assert_eq!(clip.position_curves.len(), 1);
     assert_eq!(clip.position_curves[0].path, "Rig/Root");
     let mid_pos = clip.position_curves[0].sample(0.5);
@@ -1873,7 +1905,9 @@ fn imports_unity_yaml_anim_clip_curves_settings_and_events(
         Some("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
     );
     assert_eq!(clip.pptr_curves[0].keyframes[1].file_id, 21300002);
+}
 
+fn assert_anim_clip_settings_and_events(clip: &ImportedAnimationClip) {
     assert!(clip.settings.loop_time);
     assert!(clip.settings.loop_blend);
     assert!((clip.settings.stop_time - 1.0).abs() < 1e-9);
@@ -1883,26 +1917,4 @@ fn imports_unity_yaml_anim_clip_curves_settings_and_events(
     assert_eq!(clip.events[0].data, "LeftFoot");
     assert!((clip.events[0].float_parameter - 0.75).abs() < 1e-9);
     assert_eq!(clip.events[0].int_parameter, 3);
-
-    let outcome = anim_import_outcome("Assets/Animations/HeroRun.anim", Ok(&clip));
-    assert_eq!(outcome.state, AssetImportState::Ready);
-
-    let non_anim = "%YAML 1.1\n--- !u!21 &2100000\nMaterial:\n  m_Name: TestMat\n";
-    let err = match import_animation_clip(non_anim.as_bytes(), "TestMat.anim") {
-        Ok(_) => AnimImportError::InvalidUtf8,
-        Err(error) => error,
-    };
-    assert_eq!(err, AnimImportError::MissingAnimationClipDocument);
-    let failed_outcome = anim_import_outcome("TestMat.anim", Err(&err));
-    assert_eq!(failed_outcome.state, AssetImportState::Failed);
-
-    let bad_rate =
-        "%YAML 1.1\n--- !u!74 &7400000\nAnimationClip:\n  m_Name: Bad\n  m_SampleRate: 0\n";
-    let rate_err = match import_animation_clip(bad_rate.as_bytes(), "Bad.anim") {
-        Ok(_) => AnimImportError::InvalidUtf8,
-        Err(error) => error,
-    };
-    assert!(matches!(rate_err, AnimImportError::InvalidSampleRate(_)));
-
-    Ok(())
 }

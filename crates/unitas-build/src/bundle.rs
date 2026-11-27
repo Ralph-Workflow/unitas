@@ -1977,6 +1977,24 @@ fn build_content_with_optional_baseline(
 
     let verified_bundles = collect_verified_content_bundles(config, profile, groups)?;
 
+    build_content_result(
+        config,
+        profile,
+        player_compatibility_version,
+        verified_bundles,
+        &prior_hashes,
+        output_dir,
+    )
+}
+
+fn build_content_result(
+    config: &BuildConfiguration,
+    profile: Option<&AddressablesProfile>,
+    player_compatibility_version: String,
+    verified_bundles: Vec<(ContentCatalogEntry, Vec<u8>)>,
+    prior_hashes: &BTreeMap<&str, &str>,
+    output_dir: &Path,
+) -> Result<ContentBuildResult, BundleError> {
     fs::create_dir_all(output_dir).map_err(|error| BundleError::Io {
         path: output_dir.to_path_buf(),
         message: error.to_string(),

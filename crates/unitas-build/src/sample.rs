@@ -12,7 +12,8 @@ pub const ROLL_A_BALL_COMPANY_NAME: &str = "Unitas";
 pub const ROLL_A_BALL_APPLICATION_ID: &str = "com.unitas.rollaball";
 pub const ROLL_A_BALL_VERSION: &str = "1.0.0";
 
-const ROLL_A_BALL_SCENE_YAML: &str = r"%YAML 1.1
+const ROLL_A_BALL_SCENE_YAML: &str = concat!(
+    r"%YAML 1.1
 %TAG !u! tag:unity3d.com,2011:
 --- !u!1 &1000
 GameObject:
@@ -55,7 +56,8 @@ Light:
   m_Type: 1
   m_Color: {r: 1, g: 0.98, b: 0.92, a: 1}
   m_Intensity: 0.9
---- !u!1 &2000
+",
+    r"--- !u!1 &2000
 GameObject:
   m_Name: ArenaFloor
   m_Layer: 0
@@ -187,7 +189,8 @@ CharacterController:
   m_StepOffset: 0.25
   m_SkinWidth: 0.05
   m_MinMoveDistance: 0.002
---- !u!1 &4100
+",
+    r"--- !u!1 &4100
 GameObject:
   m_Name: Pickup_1
   m_Layer: 0
@@ -263,7 +266,8 @@ SphereCollider:
   m_IsTrigger: 1
   m_Radius: 0.45
   m_Center: {x: 0, y: 0, z: 0}
-";
+"
+);
 
 pub fn roll_a_ball_scene_yaml() -> &'static str {
     ROLL_A_BALL_SCENE_YAML

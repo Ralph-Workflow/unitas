@@ -613,11 +613,11 @@ impl InputState {
         };
 
         self.clear_frame_edges();
-        self.apply_pointer_delta();
-        self.apply_scroll_delta();
-        self.apply_queued_key_events();
-        self.apply_queued_mouse_events();
-        self.apply_queued_gamepad_events();
+        self.apply_queued_pointer_move();
+        self.apply_queued_scroll();
+        self.apply_queued_keys();
+        self.apply_queued_mouse_buttons();
+        self.apply_queued_gamepad_buttons();
         self.update_axes(dt);
     }
 
@@ -632,7 +632,7 @@ impl InputState {
         self.buttons_released.clear();
     }
 
-    fn apply_pointer_delta(&mut self) {
+    fn apply_queued_pointer_move(&mut self) {
         if let Some((next_x, next_y)) = self.queued_pointer_move.take() {
             self.pointer_dx = next_x - self.pointer_x;
             self.pointer_dy = next_y - self.pointer_y;
@@ -644,13 +644,13 @@ impl InputState {
         }
     }
 
-    fn apply_scroll_delta(&mut self) {
+    fn apply_queued_scroll(&mut self) {
         self.scroll_x = self.queued_scroll.0;
         self.scroll_y = self.queued_scroll.1;
         self.queued_scroll = (0.0, 0.0);
     }
 
-    fn apply_queued_key_events(&mut self) {
+    fn apply_queued_keys(&mut self) {
         let queued_keys = std::mem::take(&mut self.queued_keys);
         for (key, pressed) in queued_keys {
             if pressed {
@@ -663,7 +663,7 @@ impl InputState {
         }
     }
 
-    fn apply_queued_mouse_events(&mut self) {
+    fn apply_queued_mouse_buttons(&mut self) {
         let queued_mouse = std::mem::take(&mut self.queued_mouse_buttons);
         for (button, pressed) in queued_mouse {
             if pressed {
@@ -676,7 +676,7 @@ impl InputState {
         }
     }
 
-    fn apply_queued_gamepad_events(&mut self) {
+    fn apply_queued_gamepad_buttons(&mut self) {
         let queued_gamepad = std::mem::take(&mut self.queued_gamepad_buttons);
         for (button, pressed) in queued_gamepad {
             if pressed {
