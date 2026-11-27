@@ -93,8 +93,8 @@ extern "C" fn test_shell_callback(event_ptr: usize) -> usize {
         .unwrap_or("unknown");
     let dto = json!({
         "titleText": format!("unitas Editor — {event_type}"),
-        "hierarchyText": "- Main Camera (100)\n- PlayerBall (131)",
-        "inspectorText": "Main Camera [Active]\nTransform (0, 1, -10)",
+        "hierarchyRows": ["> Main Camera (100)", "  PlayerBall (131)"],
+        "propertyRows": ["[Transform]", "> m_LocalPosition = {x: 0, y: 1, z: -10}"],
         "playStateText": "Play: Stopped",
         "selectedObjectId": "100",
         "selectedObjectName": "Main Camera",
@@ -147,10 +147,94 @@ fn editor_abi_run_shell_dispatches_reverse_callback_and_renders_offscreen_captur
         t.as_str()
             .is_some_and(|s| s.contains("unitas Editor — select"))
     }));
+    assert!(
+        texts
+            .iter()
+            .any(|t| t.as_str() == Some("> Main Camera (100)"))
+    );
+    assert!(
+        texts
+            .iter()
+            .any(|t| t.as_str() == Some("  PlayerBall (131)"))
+    );
+    assert!(texts.iter().any(|t| t.as_str() == Some("[Transform]")));
+    assert!(
+        texts
+            .iter()
+            .any(|t| { t.as_str() == Some("> m_LocalPosition = {x: 0, y: 1, z: -10}") })
+    );
+    assert_eq!(
+        payload["lastWorkspaceState"]["hierarchyRows"],
+        json!(["> Main Camera (100)", "  PlayerBall (131)"])
+    );
+    assert_eq!(
+        payload["lastWorkspaceState"]["propertyRows"],
+        json!(["[Transform]", "> m_LocalPosition = {x: 0, y: 1, z: -10}"])
+    );
     assert!(capture_path.is_file());
     let bmp_bytes = std::fs::read(&capture_path)?;
     assert!(bmp_bytes.len() > 54);
     assert_eq!(&bmp_bytes[0..2], b"BM");
     let _ = std::fs::remove_file(&capture_path);
+    Ok(())
+}
+
+extern "C" fn shrinking_rows_callback(event_ptr: usize) -> usize {
+    let event_text = read_c_string(event_ptr)
+        .and_then(Result::ok)
+        .unwrap_or_default();
+    let parsed = serde_json::from_str::<Value>(&event_text).unwrap_or_else(|_| json!({}));
+    let event_type = parsed.get("type").and_then(Value::as_str).unwrap_or("");
+    let dto = if event_type == "init" {
+        json!({
+            "titleText": "unitas Editor — init",
+            "hierarchyRows": ["Row0", "Row1", "Row2"],
+            "propertyRows": ["Prop0", "Prop1"],
+            "playStateText": "Play: Stopped"
+        })
+    } else {
+        json!({
+            "titleText": "unitas Editor — shrunk",
+            "hierarchyRows": ["Row0"],
+            "propertyRows": [],
+            "playStateText": "Play: Stopped"
+        })
+    };
+    allocate_c_string(&dto.to_string())
+}
+
+#[test]
+fn editor_abi_run_shell_blanks_unused_hierarchy_and_property_rows()
+-> Result<(), Box<dyn std::error::Error>> {
+    let shell_project =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../editor/shell-project");
+    let shell_ptr = allocate_c_string(&shell_project.to_string_lossy());
+    let options = json!({
+        "targetProjectPath": shell_project.to_string_lossy(),
+        "headless": true,
+        "maxFrames": 2,
+        "width": 320,
+        "height": 180,
+        "events": [{"type": "init"}, {"type": "select", "index": 0}]
+    });
+    let options_ptr = allocate_c_string(&options.to_string());
+    let result_ptr = unitas_editor_run_shell(shell_ptr, options_ptr, Some(shrinking_rows_callback));
+    free_c_string(shell_ptr);
+    free_c_string(options_ptr);
+    assert_ne!(result_ptr, 0);
+    let result_text = read_c_string(result_ptr)
+        .and_then(Result::ok)
+        .ok_or("missing shell response string")?;
+    unitas_editor_string_free(result_ptr);
+    let payload: Value = serde_json::from_str(&result_text)?;
+    assert_eq!(payload["ok"], json!(true));
+    let texts = payload["canvasTexts"]
+        .as_array()
+        .ok_or("missing canvasTexts array")?;
+    assert!(texts.iter().any(|t| t.as_str() == Some("Row0")));
+    assert!(!texts.iter().any(|t| t.as_str() == Some("Row1")));
+    assert!(!texts.iter().any(|t| t.as_str() == Some("Row2")));
+    assert!(!texts.iter().any(|t| t.as_str() == Some("Prop0")));
+    assert!(!texts.iter().any(|t| t.as_str() == Some("Prop1")));
     Ok(())
 }

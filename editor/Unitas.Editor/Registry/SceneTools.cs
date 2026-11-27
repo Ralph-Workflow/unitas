@@ -7,25 +7,16 @@ using Unitas.Editor.Scene;
 
 namespace Unitas.Editor.Mcp
 {
-    /// <summary>
-    /// Scene authoring commands. One registry entry per command keeps the MCP surface and
-    /// the headless CLI on the same implementation, with the same scopes, the same
-    /// untrusted-content marking and the same change-set provenance as the other tools.
-    /// </summary>
     public static class SceneTools
     {
         public const string HierarchyOrigin = "unitas://scene/hierarchy";
         public const string EditOrigin = "unitas://scene/edit";
 
-        // A duplicate without a parent keeps the parent of the object it copies.
         private const long KeepParentFileId = -1;
 
-        // The registry lives for the whole process, so the open documents and their undo
-        // histories are shared state behind one lock.
         private static readonly object Gate = new object();
         private static readonly Dictionary<string, OpenScene> Scenes = new Dictionary<string, OpenScene>(StringComparer.Ordinal);
 
-        // The edit-time state of every open scene, captured before play mode starts.
         private static readonly Dictionary<string, string> EditStates = new Dictionary<string, string>(StringComparer.Ordinal);
         private static string? currentScene;
 
@@ -505,6 +496,7 @@ namespace Unitas.Editor.Mcp
                     properties.Add(new JsonObject
                     {
                         ["name"] = property.Name,
+                        ["path"] = property.Name,
                         ["value"] = property.Value,
                     });
                 }
@@ -681,10 +673,6 @@ namespace Unitas.Editor.Mcp
             return ToolOutput.Untrusted(EditOrigin, restored);
         }
 
-        /// <summary>
-        /// Captures the edit-time state of the open scene. The play mode calls this when a
-        /// session starts, so the state the developer left behind is the state that comes back.
-        /// </summary>
         public static JsonObject? TryCaptureEditState()
         {
             lock (Gate)
@@ -706,7 +694,6 @@ namespace Unitas.Editor.Mcp
             }
         }
 
-        /// <summary>Restores the captured edit-time state of the open scene, byte for byte.</summary>
         public static JsonObject? TryRestoreEditState()
         {
             lock (Gate)
@@ -741,10 +728,6 @@ namespace Unitas.Editor.Mcp
             }
         }
 
-        /// <summary>
-        /// Applies a runtime change to the open scene. A runtime change is not an editor
-        /// edit: it stays out of the undo history and the play mode discards it on exit.
-        /// </summary>
         public static JsonObject ApplyRuntimeProperty(long fileId, string path, string value)
         {
             OpenScene scene = CurrentScene("play.set_runtime_property");
@@ -882,9 +865,6 @@ namespace Unitas.Editor.Mcp
             return ToolOutput.Untrusted(EditOrigin, HistoryPayload(scene, result, "editor.redo"));
         }
 
-        // The hierarchy is the view of the document, so it is rebuilt from the current
-        // document text: a property edit changes that text without touching the objects
-        // the document cached when it was loaded.
         private static JsonObject HierarchyPayload(OpenScene scene)
         {
             JsonArray objects = new JsonArray();
@@ -964,8 +944,6 @@ namespace Unitas.Editor.Mcp
             };
         }
 
-        // Reloading the document text rebuilds the object model from it; the text is the
-        // document's own text, so the reload changes the model and not the document.
         private static void RefreshModel(SceneDocument document)
         {
             string text = document.Save();
@@ -1071,8 +1049,6 @@ namespace Unitas.Editor.Mcp
                     return text;
                 }
 
-                // A number is a valid scene value too, and the scene file spells it
-                // without a locale.
                 if (value.TryGetValue(out double number))
                 {
                     return number.ToString(CultureInfo.InvariantCulture);
@@ -1171,8 +1147,6 @@ namespace Unitas.Editor.Mcp
             return false;
         }
 
-        // One open scene: the document the commands edit and the undo stack of that
-        // document, so undo and redo restore the bytes the edit replaced.
         private sealed class OpenScene
         {
             public OpenScene(string relativePath, string fullPath, SceneDocument document)

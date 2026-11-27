@@ -77,10 +77,8 @@ namespace Unitas.Testing
             TestRunOptions effectiveOptions = options ?? new TestRunOptions();
             Stopwatch runStopwatch = Stopwatch.StartNew();
 
-            // A run starts from a clean log-assertion state: leftovers from an
-            // earlier host test would otherwise be attributed to the first case.
-            LogAssert.Reset();
             LogRecorder.Clear();
+            LogAssert.ResetToStart();
 
             string outputDir = !string.IsNullOrEmpty(effectiveOptions.OutputDirectory)
                 ? Path.GetFullPath(effectiveOptions.OutputDirectory)
@@ -542,7 +540,7 @@ namespace Unitas.Testing
 
             Stopwatch caseTimer = Stopwatch.StartNew();
             LogRecorder.Clear();
-            LogAssert.Reset();
+            LogAssert.ResetToStart();
             int consumedLogCount = 0;
             List<string> capturedLogs = new List<string>();
 
@@ -668,11 +666,10 @@ namespace Unitas.Testing
             }
             else if (logProblemText.Length > 0)
             {
-                // Keep the log-assertion verdict even when the body already failed.
                 failureMessage = failureMessage + "; " + logProblemText;
             }
 
-            LogAssert.Reset();
+            LogAssert.ResetToStart();
             double duration = caseTimer.Elapsed.TotalSeconds;
 
             if (!string.IsNullOrEmpty(failureMessage))

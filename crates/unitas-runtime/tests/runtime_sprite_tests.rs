@@ -90,7 +90,6 @@ fn script_sprite_draws_in_the_same_sorted_pass_as_the_scene_sprites()
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir)?;
     let texture = dir.join("sprite.tga");
-    // A white texture, so the tint the script sets is the colour the frame shows.
     write_test_tga(&texture, 100, 50, [255, 255, 255])?;
     write_scene(&dir, &texture)?;
 
@@ -133,7 +132,6 @@ fn script_sprite_draws_in_the_same_sorted_pass_as_the_scene_sprites()
     let scene_only_frame = runtime.capture_scene_frame(64, 64)?;
     assert!(runtime.set_runtime_sprite_enabled(entity, true));
     assert_eq!(runtime.sprite_instances().len(), 2);
-    // Without the script sprite the scene sprite is the one the frame shows.
     assert_eq!(
         scene_only_frame.image.get_pixel(16, 31),
         [255, 255, 255, 255]
@@ -152,17 +150,12 @@ fn script_sprite_draws_in_the_same_sorted_pass_as_the_scene_sprites()
     assert!(runtime.set_runtime_sprite_color(entity, [0.0, 1.0, 0.0, 1.0]));
     assert!(runtime.set_runtime_sprite_sorting(entity, 0, 10));
     let front_frame = runtime.capture_scene_frame(64, 64)?;
-    // The script sprite sits at the world origin, which is where the default
-    // camera looks, so the centre of the frame is the sprite.
     let front_pixel = front_frame.image.get_pixel(32, 32);
     assert_eq!(
         front_pixel,
         [0, 255, 0, 255],
         "the script sprite must be drawn into the captured frame"
     );
-    // The scene sprite and the script sprite share the frame, and the script
-    // sprite sorts in front of it, so it covers the scene sprite where they
-    // overlap.
     assert_eq!(front_frame.image.get_pixel(16, 31), [0, 255, 0, 255]);
 
     assert!(runtime.set_runtime_sprite_color(entity, [0.0, 0.0, 1.0, 1.0]));

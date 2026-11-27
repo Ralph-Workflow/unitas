@@ -39,6 +39,10 @@ namespace UnityEngine.TestTools
         public static void DrainFromLogRecorder()
         {
             IReadOnlyList<LogEntry> entries = LogRecorder.Entries;
+            if (_consumedRecorderIndex > entries.Count)
+            {
+                _consumedRecorderIndex = 0;
+            }
             while (_consumedRecorderIndex < entries.Count)
             {
                 LogEntry entry = entries[_consumedRecorderIndex];
@@ -98,6 +102,14 @@ namespace UnityEngine.TestTools
             Pending.Clear();
             Unexpected.Clear();
             _consumedRecorderIndex = LogRecorder.Entries.Count;
+            ignoreFailingMessages = false;
+        }
+
+        public static void ResetToStart()
+        {
+            Pending.Clear();
+            Unexpected.Clear();
+            _consumedRecorderIndex = 0;
             ignoreFailingMessages = false;
         }
 

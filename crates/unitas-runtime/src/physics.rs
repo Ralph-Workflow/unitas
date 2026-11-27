@@ -437,6 +437,16 @@ impl PhysicsRuntimeWorld {
         let Some(id) = self.body_id_2d(entity) else {
             return false;
         };
+        let is_dynamic = self.world_2d.body(id).is_some_and(|body| body.is_dynamic());
+        if is_dynamic {
+            if !self.world_2d.set_body_position(id, target) {
+                return false;
+            }
+            if let Some(body) = self.world_2d.body_mut(id) {
+                body.wake_up();
+            }
+            return true;
+        }
         let Some(body) = self.world_2d.body_mut(id) else {
             return false;
         };

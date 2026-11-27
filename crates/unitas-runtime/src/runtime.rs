@@ -1450,6 +1450,7 @@ impl Runtime {
                     hook(self, &mut || {
                         callback(user_data, scaled_delta);
                     });
+                    self.dispatch_physics_messages(hook);
                 }
                 PlayerLoopStep::FixedPhase { steps } => {
                     self.run_fixed_update_phase(steps, scaled_delta, delta_seconds, hook)?;

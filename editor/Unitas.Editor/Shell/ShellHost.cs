@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.IO;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -84,6 +85,7 @@ namespace Unitas.Editor.Shell
             this.workspaceState = workspaceState;
             sessionId = host.CreateSession(
                 new SessionIdentity(ShellAgentName, ShellClientName, ShellAuthorizedBy));
+            host.GrantScope(sessionId, Scope.ReadProject, GrantAuthority.Person);
             host.GrantScope(sessionId, Scope.EditContent, GrantAuthority.Person);
             host.GrantScope(sessionId, Scope.ExecuteProjectCode, GrantAuthority.Person);
             playController = new ShellPlay(host, sessionId, workspaceState);
@@ -134,6 +136,34 @@ namespace Unitas.Editor.Shell
             if (string.Equals(shellEvent.Type, ShellEvent.TypeSelectNext, StringComparison.Ordinal))
             {
                 workspaceState.SelectNext(host, sessionId);
+                return;
+            }
+
+            if (string.Equals(shellEvent.Type, ShellEvent.TypeSelectProperty, StringComparison.Ordinal))
+            {
+                if (shellEvent.Index.HasValue)
+                {
+                    workspaceState.SelectProperty(shellEvent.Index.Value);
+                }
+
+                return;
+            }
+
+            if (string.Equals(shellEvent.Type, ShellEvent.TypeStepProperty, StringComparison.Ordinal))
+            {
+                workspaceState.StepPropertyValue(host, sessionId, shellEvent.Delta ?? 1.0);
+                return;
+            }
+
+            if (string.Equals(shellEvent.Type, ShellEvent.TypeToggleProperty, StringComparison.Ordinal))
+            {
+                workspaceState.TogglePropertyValue(host, sessionId);
+                return;
+            }
+
+            if (string.Equals(shellEvent.Type, ShellEvent.TypeToggleActive, StringComparison.Ordinal))
+            {
+                workspaceState.ToggleActive(host, sessionId);
                 return;
             }
 
@@ -267,11 +297,34 @@ namespace Unitas.Editor.Shell
                 JsonObject callArgs = arguments != null
                     ? (JsonObject)arguments.DeepClone()
                     : new JsonObject();
+                PopulateDefaultCommandArguments(command, callArgs);
                 host.CallTool(sessionId, command, callArgs);
                 workspaceState.RefreshFromOpenScene(host, sessionId);
             }
             catch (McpError)
             {
+            }
+        }
+
+        private void PopulateDefaultCommandArguments(string command, JsonObject callArgs)
+        {
+            if (string.Equals(command, "scene.create_object", StringComparison.Ordinal)
+                && callArgs["name"] == null)
+            {
+                callArgs["name"] = "GameObject";
+                return;
+            }
+
+            if ((string.Equals(command, "scene.duplicate_object", StringComparison.Ordinal)
+                || string.Equals(command, "scene.destroy_object", StringComparison.Ordinal))
+                && callArgs["fileId"] == null
+                && long.TryParse(
+                    workspaceState.SelectedObjectId,
+                    NumberStyles.Integer,
+                    CultureInfo.InvariantCulture,
+                    out long selectedId))
+            {
+                callArgs["fileId"] = selectedId;
             }
         }
     }

@@ -13,6 +13,8 @@ const DEFAULT_HEIGHT: u32 = 720;
 const DEFAULT_HEADLESS_FRAMES: u64 = 4;
 const DEFAULT_SCENE_RELATIVE: &str = "Assets/Scenes/WorkspaceShell.unity";
 const BACKGROUND_RGB: [u8; 3] = [28, 31, 38];
+const HIERARCHY_ROW_COUNT: usize = 12;
+const PROPERTY_ROW_COUNT: usize = 8;
 
 struct ShellOptions {
     target_project_path: String,
@@ -26,11 +28,22 @@ struct ShellOptions {
 
 struct ShellEntityMap {
     title_text: Option<EntityId>,
-    hierarchy_text: Option<EntityId>,
-    inspector_text: Option<EntityId>,
     play_status_text: Option<EntityId>,
     select_next_button: Option<EntityId>,
     play_toggle_button: Option<EntityId>,
+    hierarchy_row_buttons: [Option<EntityId>; HIERARCHY_ROW_COUNT],
+    hierarchy_row_labels: [Option<EntityId>; HIERARCHY_ROW_COUNT],
+    property_row_buttons: [Option<EntityId>; PROPERTY_ROW_COUNT],
+    property_row_labels: [Option<EntityId>; PROPERTY_ROW_COUNT],
+    step_up_button: Option<EntityId>,
+    step_down_button: Option<EntityId>,
+    toggle_value_button: Option<EntityId>,
+    create_object_button: Option<EntityId>,
+    duplicate_object_button: Option<EntityId>,
+    delete_object_button: Option<EntityId>,
+    active_toggle_button: Option<EntityId>,
+    undo_button: Option<EntityId>,
+    redo_button: Option<EntityId>,
 }
 
 struct ShellLoopState {
@@ -93,10 +106,10 @@ fn parse_shell_options(options_json_ptr: usize) -> Result<ShellOptions, (&'stati
         let Some(Ok(raw)) = read_c_string(options_json_ptr) else {
             return Err(("invalid-args", "optionsJson is not valid UTF-8".to_string()));
         };
-        serde_json::from_str::<Value>(&raw).map_err(|err| {
+        serde_json::from_str::<Value>(&raw).map_err(|e| {
             (
                 "invalid-args",
-                format!("optionsJson is not valid JSON: {err}"),
+                format!("optionsJson is not valid JSON: {e}"),
             )
         })?
     };
@@ -104,60 +117,49 @@ fn parse_shell_options(options_json_ptr: usize) -> Result<ShellOptions, (&'stati
 }
 
 fn extract_shell_options(parsed: &Value) -> ShellOptions {
-    let env_headless = std::env::var("UNITAS_SHELL_HEADLESS")
+    let env_hl = std::env::var("UNITAS_SHELL_HEADLESS")
         .ok()
-        .is_some_and(|val| val == "1" || val.eq_ignore_ascii_case("true"));
+        .is_some_and(|v| v == "1" || v.eq_ignore_ascii_case("true"));
     let headless = parsed
         .get("headless")
         .and_then(Value::as_bool)
         .unwrap_or(false)
-        || env_headless;
-    let env_frames = std::env::var("UNITAS_SHELL_MAX_FRAMES")
+        || env_hl;
+    let env_fr = std::env::var("UNITAS_SHELL_MAX_FRAMES")
         .ok()
-        .and_then(|val| val.parse::<u64>().ok());
-    let max_frames = parsed
-        .get("maxFrames")
-        .and_then(Value::as_u64)
-        .or(env_frames);
-    let width = parsed
-        .get("width")
-        .and_then(Value::as_u64)
-        .and_then(|val| u32::try_from(val).ok())
-        .filter(|&val| val > 0)
-        .unwrap_or(DEFAULT_WIDTH);
-    let height = parsed
-        .get("height")
-        .and_then(Value::as_u64)
-        .and_then(|val| u32::try_from(val).ok())
-        .filter(|&val| val > 0)
-        .unwrap_or(DEFAULT_HEIGHT);
+        .and_then(|v| v.parse::<u64>().ok());
+    let max_frames = parsed.get("maxFrames").and_then(Value::as_u64).or(env_fr);
+    let dim = |k, def| {
+        parsed
+            .get(k)
+            .and_then(Value::as_u64)
+            .and_then(|v| u32::try_from(v).ok())
+            .filter(|&v| v > 0)
+            .unwrap_or(def)
+    };
     let capture_out = parsed
         .get("captureOut")
         .and_then(Value::as_str)
-        .filter(|val| !val.trim().is_empty())
-        .map(PathBuf::from)
-        .or_else(|| {
-            std::env::var("UNITAS_SHELL_CAPTURE_PATH")
-                .ok()
-                .filter(|val| !val.trim().is_empty())
-                .map(PathBuf::from)
-        });
-    let events = parsed
-        .get("events")
-        .and_then(Value::as_array)
-        .cloned()
-        .unwrap_or_default();
+        .map(str::to_owned)
+        .or_else(|| std::env::var("UNITAS_SHELL_CAPTURE_PATH").ok())
+        .filter(|v| !v.trim().is_empty())
+        .map(PathBuf::from);
     let target_project_path = parsed
         .get("targetProjectPath")
         .and_then(Value::as_str)
         .unwrap_or_default()
         .to_string();
+    let events = parsed
+        .get("events")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
     ShellOptions {
         target_project_path,
         headless,
         max_frames,
-        width,
-        height,
+        width: dim("width", DEFAULT_WIDTH),
+        height: dim("height", DEFAULT_HEIGHT),
         capture_out,
         events,
     }
@@ -178,13 +180,25 @@ fn resolve_shell_scene_path(shell_root: &Path) -> Result<PathBuf, (&'static str,
 }
 
 fn discover_shell_entities(runtime: &Runtime) -> ShellEntityMap {
+    let find = |name: &str| runtime.find_entity_by_name(name);
     ShellEntityMap {
-        title_text: runtime.find_entity_by_name("WorkspaceTitleText"),
-        hierarchy_text: runtime.find_entity_by_name("HierarchyListText"),
-        inspector_text: runtime.find_entity_by_name("InspectorPanelText"),
-        play_status_text: runtime.find_entity_by_name("PlayStatusText"),
-        select_next_button: runtime.find_entity_by_name("SelectNextButton"),
-        play_toggle_button: runtime.find_entity_by_name("PlayToggleButton"),
+        title_text: find("WorkspaceTitleText"),
+        play_status_text: find("PlayStatusText"),
+        select_next_button: find("SelectNextButton"),
+        play_toggle_button: find("PlayToggleButton"),
+        hierarchy_row_buttons: std::array::from_fn(|i| find(&format!("HierarchyRowButton{i}"))),
+        hierarchy_row_labels: std::array::from_fn(|i| find(&format!("HierarchyRowLabel{i}"))),
+        property_row_buttons: std::array::from_fn(|i| find(&format!("PropertyRowButton{i}"))),
+        property_row_labels: std::array::from_fn(|i| find(&format!("PropertyRowLabel{i}"))),
+        step_up_button: find("StepUpButton"),
+        step_down_button: find("StepDownButton"),
+        toggle_value_button: find("ToggleValueButton"),
+        create_object_button: find("CreateObjectButton"),
+        duplicate_object_button: find("DuplicateObjectButton"),
+        delete_object_button: find("DeleteObjectButton"),
+        active_toggle_button: find("ActiveToggleButton"),
+        undo_button: find("UndoButton"),
+        redo_button: find("RedoButton"),
     }
 }
 
@@ -201,10 +215,7 @@ fn build_initial_loop_state(
         .and_then(Value::as_str)
         .is_some_and(|kind| kind == "init");
     if !has_init {
-        pending_events.push(json!({
-            "type": "init",
-            "projectPath": options.target_project_path,
-        }));
+        pending_events.push(json!({"type": "init", "projectPath": options.target_project_path}));
     }
     pending_events.extend(options.events.iter().cloned());
     ShellLoopState {
@@ -217,9 +228,7 @@ fn build_initial_loop_state(
 }
 
 fn dispatch_event_to_managed(runtime: &mut Runtime, state: &mut ShellLoopState, event: &Value) {
-    let Some(cb) = state.callback else {
-        return;
-    };
+    let Some(cb) = state.callback else { return };
     let event_ptr = allocate_c_string(&event.to_string());
     if event_ptr == 0 {
         return;
@@ -241,30 +250,91 @@ fn dispatch_event_to_managed(runtime: &mut Runtime, state: &mut ShellLoopState, 
 }
 
 fn apply_workspace_state(runtime: &mut Runtime, entities: &ShellEntityMap, state: &Value) {
-    if let (Some(id), Some(text)) = (
+    if let (Some(id), Some(t)) = (
         entities.title_text,
         state.get("titleText").and_then(Value::as_str),
     ) {
-        runtime.set_ui_text(id.as_u64(), text);
+        runtime.set_ui_text(id.as_u64(), t);
     }
-    if let (Some(id), Some(text)) = (
-        entities.hierarchy_text,
-        state.get("hierarchyText").and_then(Value::as_str),
-    ) {
-        runtime.set_ui_text(id.as_u64(), text);
-    }
-    if let (Some(id), Some(text)) = (
-        entities.inspector_text,
-        state.get("inspectorText").and_then(Value::as_str),
-    ) {
-        runtime.set_ui_text(id.as_u64(), text);
-    }
-    if let (Some(id), Some(text)) = (
+    if let (Some(id), Some(t)) = (
         entities.play_status_text,
         state.get("playStateText").and_then(Value::as_str),
     ) {
-        runtime.set_ui_text(id.as_u64(), text);
+        runtime.set_ui_text(id.as_u64(), t);
     }
+    let set_rows = |rt: &mut Runtime,
+                    labels: &[Option<EntityId>],
+                    btns: &[Option<EntityId>],
+                    rows: &[Value]| {
+        for (idx, (lbl, btn)) in labels.iter().zip(btns.iter()).enumerate() {
+            let text = rows.get(idx).and_then(Value::as_str).unwrap_or("");
+            if let Some(id) = lbl {
+                rt.set_ui_text(id.as_u64(), text);
+            }
+            if let Some(id) = btn {
+                rt.set_ui_text(id.as_u64(), text);
+            }
+        }
+    };
+    if let Some(rows) = state.get("hierarchyRows").and_then(Value::as_array) {
+        set_rows(
+            runtime,
+            &entities.hierarchy_row_labels,
+            &entities.hierarchy_row_buttons,
+            rows,
+        );
+    }
+    if let Some(rows) = state.get("propertyRows").and_then(Value::as_array) {
+        set_rows(
+            runtime,
+            &entities.property_row_labels,
+            &entities.property_row_buttons,
+            rows,
+        );
+    }
+}
+
+fn map_clicked_entity(e: &ShellEntityMap, clicked: EntityId) -> Option<Value> {
+    if let Some(idx) = e
+        .hierarchy_row_buttons
+        .iter()
+        .position(|&b| b == Some(clicked))
+    {
+        return Some(json!({"type": "select", "index": idx}));
+    }
+    if let Some(idx) = e
+        .property_row_buttons
+        .iter()
+        .position(|&b| b == Some(clicked))
+    {
+        return Some(json!({"type": "select_property", "index": idx}));
+    }
+    let t = Some(clicked);
+    if t == e.step_up_button {
+        return Some(json!({"type": "step_property", "delta": 1}));
+    }
+    if t == e.step_down_button {
+        return Some(json!({"type": "step_property", "delta": -1}));
+    }
+    if t == e.toggle_value_button {
+        return Some(json!({"type": "toggle_property"}));
+    }
+    if t == e.active_toggle_button {
+        return Some(json!({"type": "toggle_active"}));
+    }
+    if t == e.select_next_button {
+        return Some(json!({"type": "select_next"}));
+    }
+    let cmds = [
+        (e.create_object_button, "scene.create_object"),
+        (e.duplicate_object_button, "scene.duplicate_object"),
+        (e.delete_object_button, "scene.destroy_object"),
+        (e.undo_button, "editor.undo"),
+        (e.redo_button, "editor.redo"),
+        (e.play_toggle_button, "play.toggle"),
+    ];
+    cmds.into_iter()
+        .find_map(|(b, cmd)| (b == t).then(|| json!({"type": "command", "command": cmd})))
 }
 
 fn dispatch_pending_events_for_frame(
@@ -286,14 +356,7 @@ fn dispatch_pending_events_for_frame(
     }
     for clicked_id in runtime.take_ui_clicks() {
         let clicked = EntityId::new(clicked_id);
-        let mapped = if Some(clicked) == state.entities.select_next_button {
-            Some(json!({"type": "select_next"}))
-        } else if Some(clicked) == state.entities.play_toggle_button {
-            Some(json!({"type": "command", "command": "play.toggle"}))
-        } else {
-            None
-        };
-        if let Some(ev) = mapped {
+        if let Some(ev) = map_clicked_entity(&state.entities, clicked) {
             dispatch_event_to_managed(runtime, state, &ev);
         }
     }
@@ -381,8 +444,8 @@ fn run_windowed_loop(
         dispatch_pending_events_for_frame(rt, state, frame.frame_index);
         Ok(())
     });
-    let run_result = run_windowed_gpu(runtime, &config, &mut presenter);
-    run_result.map_err(|err| ("window-loop", err.to_string()))?;
+    run_windowed_gpu(runtime, &config, &mut presenter)
+        .map_err(|err| ("window-loop", err.to_string()))?;
     Ok(presenter.frames_presented().max(1))
 }
 
@@ -409,10 +472,9 @@ fn count_non_background_pixels(image: &Image) -> usize {
         .pixels
         .iter()
         .filter(|&&px| {
-            let dr = i32::from(px[0]) - i32::from(BACKGROUND_RGB[0]);
-            let dg = i32::from(px[1]) - i32::from(BACKGROUND_RGB[1]);
-            let db = i32::from(px[2]) - i32::from(BACKGROUND_RGB[2]);
-            dr.abs() > 3 || dg.abs() > 3 || db.abs() > 3
+            (i32::from(px[0]) - i32::from(BACKGROUND_RGB[0])).abs() > 3
+                || (i32::from(px[1]) - i32::from(BACKGROUND_RGB[1])).abs() > 3
+                || (i32::from(px[2]) - i32::from(BACKGROUND_RGB[2])).abs() > 3
         })
         .count()
 }
@@ -423,4 +485,50 @@ fn collect_canvas_texts(runtime: &Runtime) -> Vec<String> {
         .into_iter()
         .filter_map(|item| item.text.map(|t| t.text))
         .collect()
+}
+
+#[cfg(test)]
+#[test]
+fn map_clicked_entity_covers_all_rows_and_action_buttons() {
+    let f = |i| Some(EntityId::new(i));
+    let e = ShellEntityMap {
+        title_text: f(1),
+        play_status_text: f(2),
+        select_next_button: f(10),
+        play_toggle_button: f(11),
+        hierarchy_row_buttons: std::array::from_fn(|i| f(100 + i as u64)),
+        hierarchy_row_labels: std::array::from_fn(|i| f(200 + i as u64)),
+        property_row_buttons: std::array::from_fn(|i| f(300 + i as u64)),
+        property_row_labels: std::array::from_fn(|i| f(400 + i as u64)),
+        step_up_button: f(20),
+        step_down_button: f(21),
+        toggle_value_button: f(22),
+        create_object_button: f(23),
+        duplicate_object_button: f(24),
+        delete_object_button: f(25),
+        active_toggle_button: f(26),
+        undo_button: f(27),
+        redo_button: f(28),
+    };
+    let m = |id| map_clicked_entity(&e, EntityId::new(id));
+    assert_eq!(m(100), Some(json!({"type": "select", "index": 0})));
+    assert_eq!(m(111), Some(json!({"type": "select", "index": 11})));
+    assert_eq!(m(300), Some(json!({"type": "select_property", "index": 0})));
+    assert_eq!(m(307), Some(json!({"type": "select_property", "index": 7})));
+    assert_eq!(m(20), Some(json!({"type": "step_property", "delta": 1})));
+    assert_eq!(m(21), Some(json!({"type": "step_property", "delta": -1})));
+    assert_eq!(m(22), Some(json!({"type": "toggle_property"})));
+    assert_eq!(m(26), Some(json!({"type": "toggle_active"})));
+    assert_eq!(m(10), Some(json!({"type": "select_next"})));
+    for (id, c) in [
+        (23, "scene.create_object"),
+        (24, "scene.duplicate_object"),
+        (25, "scene.destroy_object"),
+        (27, "editor.undo"),
+        (28, "editor.redo"),
+        (11, "play.toggle"),
+    ] {
+        assert_eq!(m(id), Some(json!({"type": "command", "command": c})));
+    }
+    assert_eq!(m(999), None);
 }

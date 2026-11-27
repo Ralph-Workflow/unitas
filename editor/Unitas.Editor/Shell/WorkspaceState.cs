@@ -2,7 +2,6 @@ using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
-using System.Text;
 using System.Text.Json.Nodes;
 using Unitas.Editor.Mcp;
 
@@ -15,21 +14,30 @@ namespace Unitas.Editor.Shell
         IReadOnlyList<long> ChildFileIds,
         IReadOnlyList<long> ComponentFileIds);
 
-    public sealed record WorkspacePropertyEntry(
-        string Name,
-        string Value);
+    public sealed record WorkspacePropertyEntry(string Name, string Path, string Value);
 
     public sealed record WorkspaceComponentEntry(
         long FileId,
         string Type,
         IReadOnlyList<WorkspacePropertyEntry> Properties);
 
+    public sealed record WorkspaceInspectorRow(
+        string Text,
+        long ComponentFileId,
+        string Path,
+        string Value,
+        string Kind);
+
     public sealed class WorkspaceState
     {
-        private readonly List<WorkspaceHierarchyEntry> hierarchyEntries =
-            new List<WorkspaceHierarchyEntry>();
-        private readonly List<WorkspaceComponentEntry> inspectorComponents =
-            new List<WorkspaceComponentEntry>();
+        public const int MaxHierarchyRows = 12;
+        public const int MaxPropertyRows = 8;
+
+        private readonly List<WorkspaceHierarchyEntry> hierarchyEntries = new List<WorkspaceHierarchyEntry>();
+        private readonly List<WorkspaceComponentEntry> inspectorComponents = new List<WorkspaceComponentEntry>();
+        private readonly List<WorkspaceInspectorRow> inspectorRows = new List<WorkspaceInspectorRow>();
+        private readonly List<string> hierarchyRows = new List<string>();
+        private readonly List<string> propertyRows = new List<string>();
 
         public string ProjectPath { get; set; } = string.Empty;
 
@@ -47,15 +55,17 @@ namespace Unitas.Editor.Shell
 
         public IReadOnlyList<WorkspaceComponentEntry> InspectorComponents => inspectorComponents;
 
+        public int SelectedPropertyIndex { get; set; } = -1;
+
+        public IReadOnlyList<string> HierarchyRows => hierarchyRows;
+
+        public IReadOnlyList<string> PropertyRows => propertyRows;
+
         public string PlayState { get; set; } = ShellPlay.StateStopped;
 
         public string? ActivePlaySessionId { get; set; }
 
         public string TitleText { get; set; } = "unitas Editor";
-
-        public string HierarchyText { get; set; } = "Hierarchy: (none)";
-
-        public string InspectorText { get; set; } = "Inspector: (no selection)";
 
         public string PlayStateText { get; set; } = "Play: Stopped";
 
@@ -63,18 +73,9 @@ namespace Unitas.Editor.Shell
         {
             ArgumentNullException.ThrowIfNull(host);
             ArgumentNullException.ThrowIfNull(sessionId);
-            if (!string.IsNullOrWhiteSpace(projectPath))
-            {
-                ProjectPath = Path.GetFullPath(projectPath);
-            }
-            else if (!string.IsNullOrWhiteSpace(host.ProjectPath))
-            {
-                ProjectPath = host.ProjectPath!;
-            }
-            else
-            {
-                ProjectPath = Directory.GetCurrentDirectory();
-            }
+            ProjectPath = !string.IsNullOrWhiteSpace(projectPath)
+                ? Path.GetFullPath(projectPath)
+                : (!string.IsNullOrWhiteSpace(host.ProjectPath) ? host.ProjectPath! : Directory.GetCurrentDirectory());
 
             string? firstScene = LoadProjectStatusAndFirstScene(host, sessionId, ProjectPath);
             if (!string.IsNullOrWhiteSpace(firstScene))
@@ -94,17 +95,12 @@ namespace Unitas.Editor.Shell
             ArgumentNullException.ThrowIfNull(host);
             ArgumentNullException.ThrowIfNull(sessionId);
             ArgumentNullException.ThrowIfNull(sceneRelativePath);
-
             try
             {
                 JsonNode envelope = host.CallTool(
                     sessionId,
                     "scene.open",
-                    new JsonObject
-                    {
-                        ["projectPath"] = ProjectPath,
-                        ["path"] = sceneRelativePath,
-                    });
+                    new JsonObject { ["projectPath"] = ProjectPath, ["path"] = sceneRelativePath });
                 ApplyHierarchyPayload(UnwrapContent(envelope));
             }
             catch (McpError)
@@ -119,7 +115,6 @@ namespace Unitas.Editor.Shell
         {
             ArgumentNullException.ThrowIfNull(host);
             ArgumentNullException.ThrowIfNull(sessionId);
-
             try
             {
                 JsonObject args = new JsonObject();
@@ -128,8 +123,7 @@ namespace Unitas.Editor.Shell
                     args["projectPath"] = ProjectPath;
                 }
 
-                JsonNode envelope = host.CallTool(sessionId, "scene.hierarchy", args);
-                ApplyHierarchyPayload(UnwrapContent(envelope));
+                ApplyHierarchyPayload(UnwrapContent(host.CallTool(sessionId, "scene.hierarchy", args)));
             }
             catch (McpError)
             {
@@ -143,7 +137,6 @@ namespace Unitas.Editor.Shell
         {
             ArgumentNullException.ThrowIfNull(host);
             ArgumentNullException.ThrowIfNull(sessionId);
-
             if (hierarchyEntries.Count == 0)
             {
                 return;
@@ -153,6 +146,7 @@ namespace Unitas.Editor.Shell
             WorkspaceHierarchyEntry entry = hierarchyEntries[clamped];
             SelectedObjectId = entry.FileId.ToString(CultureInfo.InvariantCulture);
             SelectedObjectName = entry.Name;
+            SelectedPropertyIndex = -1;
             InspectObject(host, sessionId, entry.FileId);
             RebuildFormattedTexts();
         }
@@ -161,17 +155,19 @@ namespace Unitas.Editor.Shell
         {
             ArgumentNullException.ThrowIfNull(host);
             ArgumentNullException.ThrowIfNull(sessionId);
-            if (string.IsNullOrWhiteSpace(targetId))
+            if (string.IsNullOrWhiteSpace(targetId)
+                || !long.TryParse(targetId, NumberStyles.Integer, CultureInfo.InvariantCulture, out long fileId))
             {
                 return;
             }
 
-            if (!long.TryParse(targetId, NumberStyles.Integer, CultureInfo.InvariantCulture, out long fileId))
+            string normalized = fileId.ToString(CultureInfo.InvariantCulture);
+            if (!string.Equals(SelectedObjectId, normalized, StringComparison.Ordinal))
             {
-                return;
+                SelectedPropertyIndex = -1;
             }
 
-            SelectedObjectId = fileId.ToString(CultureInfo.InvariantCulture);
+            SelectedObjectId = normalized;
             foreach (WorkspaceHierarchyEntry entry in hierarchyEntries)
             {
                 if (entry.FileId == fileId)
@@ -189,7 +185,6 @@ namespace Unitas.Editor.Shell
         {
             ArgumentNullException.ThrowIfNull(host);
             ArgumentNullException.ThrowIfNull(sessionId);
-
             if (hierarchyEntries.Count == 0)
             {
                 return;
@@ -198,10 +193,8 @@ namespace Unitas.Editor.Shell
             int currentIndex = -1;
             for (int i = 0; i < hierarchyEntries.Count; i++)
             {
-                if (string.Equals(
-                    hierarchyEntries[i].FileId.ToString(CultureInfo.InvariantCulture),
-                    SelectedObjectId,
-                    StringComparison.Ordinal))
+                string idText = hierarchyEntries[i].FileId.ToString(CultureInfo.InvariantCulture);
+                if (string.Equals(idText, SelectedObjectId, StringComparison.Ordinal))
                 {
                     currentIndex = i;
                     break;
@@ -209,6 +202,68 @@ namespace Unitas.Editor.Shell
             }
 
             SelectByIndex(host, sessionId, currentIndex + 1);
+        }
+
+        public void SelectProperty(int index)
+        {
+            if (inspectorRows.Count == 0 || index < 0 || index >= inspectorRows.Count)
+            {
+                return;
+            }
+
+            for (int i = index; i < inspectorRows.Count; i++)
+            {
+                if (inspectorRows[i].ComponentFileId != 0)
+                {
+                    SelectedPropertyIndex = i;
+                    RebuildFormattedTexts();
+                    return;
+                }
+            }
+        }
+
+        public void StepPropertyValue(McpHost host, string sessionId, double delta)
+        {
+            ArgumentNullException.ThrowIfNull(host);
+            ArgumentNullException.ThrowIfNull(sessionId);
+            WorkspaceInspectorRow? selected = GetSelectedPropertyRow();
+            if (selected != null && TryStepNumericValue(selected.Value, delta, out string nextValue))
+            {
+                ApplyPropertyMutation(host, sessionId, selected.ComponentFileId, selected.Path, nextValue);
+            }
+        }
+
+        public void TogglePropertyValue(McpHost host, string sessionId)
+        {
+            ArgumentNullException.ThrowIfNull(host);
+            ArgumentNullException.ThrowIfNull(sessionId);
+            WorkspaceInspectorRow? selected = GetSelectedPropertyRow();
+            if (selected != null && TryToggleBoolValue(selected.Value, out string nextValue))
+            {
+                ApplyPropertyMutation(host, sessionId, selected.ComponentFileId, selected.Path, nextValue);
+            }
+        }
+
+        public void ToggleActive(McpHost host, string sessionId)
+        {
+            ArgumentNullException.ThrowIfNull(host);
+            ArgumentNullException.ThrowIfNull(sessionId);
+            if (!long.TryParse(SelectedObjectId, NumberStyles.Integer, CultureInfo.InvariantCulture, out long fileId))
+            {
+                return;
+            }
+
+            try
+            {
+                host.CallTool(
+                    sessionId,
+                    "scene.set_active",
+                    new JsonObject { ["fileId"] = fileId, ["active"] = !SelectedObjectActive });
+                RefreshFromOpenScene(host, sessionId);
+            }
+            catch (McpError)
+            {
+            }
         }
 
         public void HandlePlayCommand(McpHost host, string sessionId, string command, JsonObject? arguments)
@@ -223,38 +278,214 @@ namespace Unitas.Editor.Shell
                 ["projectPath"] = ProjectPath,
                 ["activeScenePath"] = ActiveScenePath,
                 ["titleText"] = TitleText,
-                ["hierarchyText"] = HierarchyText,
-                ["inspectorText"] = InspectorText,
+                ["hierarchyRows"] = BuildStringJsonArray(hierarchyRows),
+                ["propertyRows"] = BuildStringJsonArray(propertyRows),
                 ["playStateText"] = PlayStateText,
                 ["selectedObjectId"] = SelectedObjectId,
                 ["selectedObjectName"] = SelectedObjectName,
+                ["selectedObjectActive"] = SelectedObjectActive,
+                ["selectedPropertyIndex"] = SelectedPropertyIndex,
                 ["playMode"] = PlayState,
                 ["hierarchyCount"] = hierarchyEntries.Count,
                 ["componentCount"] = inspectorComponents.Count,
             };
         }
 
-        public string ToJson()
+        public string ToJson() => ToJsonObject().ToJsonString();
+
+        public void RebuildFormattedTexts()
         {
-            return ToJsonObject().ToJsonString();
+            string sceneDisplay = string.IsNullOrWhiteSpace(ActiveScenePath)
+                ? "Untitled"
+                : Path.GetFileName(ActiveScenePath);
+            TitleText = "unitas Editor - " + sceneDisplay;
+            PlayStateText = "Play: " + PlayState;
+            RebuildHierarchyRows();
+            RebuildPropertyRows();
         }
 
-        private static string? LoadProjectStatusAndFirstScene(
+        private void ApplyPropertyMutation(
             McpHost host,
             string sessionId,
-            string projectPath)
+            long componentFileId,
+            string propertyPath,
+            string nextValue)
+        {
+            int preservedIndex = SelectedPropertyIndex;
+            try
+            {
+                host.CallTool(
+                    sessionId,
+                    "scene.set_property",
+                    new JsonObject { ["fileId"] = componentFileId, ["path"] = propertyPath, ["value"] = nextValue });
+                RefreshFromOpenScene(host, sessionId);
+                SelectedPropertyIndex = preservedIndex;
+                RebuildFormattedTexts();
+            }
+            catch (McpError)
+            {
+            }
+        }
+
+        private WorkspaceInspectorRow? GetSelectedPropertyRow()
+        {
+            return SelectedPropertyIndex >= 0
+                && SelectedPropertyIndex < inspectorRows.Count
+                && inspectorRows[SelectedPropertyIndex].ComponentFileId != 0
+                ? inspectorRows[SelectedPropertyIndex]
+                : null;
+        }
+
+        private static bool TryStepNumericValue(string current, double delta, out string formatted)
+        {
+            if (long.TryParse(current, NumberStyles.Integer, CultureInfo.InvariantCulture, out long integral)
+                && Math.Abs(delta) >= 1.0)
+            {
+                formatted = (integral + (long)Math.Round(delta)).ToString(CultureInfo.InvariantCulture);
+                return true;
+            }
+
+            if (double.TryParse(current, NumberStyles.Float, CultureInfo.InvariantCulture, out double number))
+            {
+                double increment = Math.Abs(delta) >= 1.0 ? delta * 0.1 : delta;
+                formatted = Math.Round(number + increment, 6).ToString(CultureInfo.InvariantCulture);
+                return true;
+            }
+
+            formatted = string.Empty;
+            return false;
+        }
+
+        private static bool TryToggleBoolValue(string current, out string toggled)
+        {
+            toggled = string.Equals(current, "1", StringComparison.Ordinal) ? "0"
+                : string.Equals(current, "0", StringComparison.Ordinal) ? "1"
+                : string.Equals(current, "true", StringComparison.OrdinalIgnoreCase) ? "false"
+                : string.Equals(current, "false", StringComparison.OrdinalIgnoreCase) ? "true"
+                : string.Empty;
+            return toggled.Length > 0;
+        }
+
+        private static string ClassifyPropertyKind(string value)
+        {
+            return TryToggleBoolValue(value, out _) ? "bool"
+                : (double.TryParse(value, NumberStyles.Float, CultureInfo.InvariantCulture, out _) ? "numeric" : "read-only");
+        }
+
+        private static bool IsInspectorBoilerplateKey(string key)
+        {
+            return string.Equals(key, "m_ObjectHideFlags", StringComparison.Ordinal)
+                || string.Equals(key, "m_CorrespondingSourceObject", StringComparison.Ordinal)
+                || string.Equals(key, "m_PrefabInstance", StringComparison.Ordinal)
+                || string.Equals(key, "m_PrefabAsset", StringComparison.Ordinal)
+                || string.Equals(key, "m_GameObject", StringComparison.Ordinal)
+                || string.Equals(key, "serializedVersion", StringComparison.Ordinal)
+                || string.Equals(key, "m_Children", StringComparison.Ordinal)
+                || string.Equals(key, "m_Father", StringComparison.Ordinal)
+                || string.Equals(key, "m_EditorHideFlags", StringComparison.Ordinal)
+                || string.Equals(key, "m_Script", StringComparison.Ordinal)
+                || string.Equals(key, "m_EditorClassIdentifier", StringComparison.Ordinal)
+                || string.Equals(key, "m_IncludeLayers", StringComparison.Ordinal)
+                || string.Equals(key, "m_ExcludeLayers", StringComparison.Ordinal);
+        }
+
+        private void RebuildHierarchyRows()
+        {
+            hierarchyRows.Clear();
+            bool truncated = hierarchyEntries.Count > MaxHierarchyRows;
+            int shown = truncated ? MaxHierarchyRows - 1 : hierarchyEntries.Count;
+            for (int i = 0; i < shown; i++)
+            {
+                WorkspaceHierarchyEntry entry = hierarchyEntries[i];
+                string idText = entry.FileId.ToString(CultureInfo.InvariantCulture);
+                bool selected = string.Equals(idText, SelectedObjectId, StringComparison.Ordinal);
+                hierarchyRows.Add((selected ? "> " : "  ") + entry.Name + " (" + idText + ")");
+            }
+
+            if (truncated)
+            {
+                hierarchyRows.Add("...");
+            }
+        }
+
+        private void RebuildInspectorRows()
+        {
+            int previousSelection = SelectedPropertyIndex;
+            inspectorRows.Clear();
+            foreach (WorkspaceComponentEntry comp in inspectorComponents)
+            {
+                inspectorRows.Add(new WorkspaceInspectorRow("[" + comp.Type + "]", 0L, string.Empty, string.Empty, "header"));
+                foreach (WorkspacePropertyEntry prop in comp.Properties)
+                {
+                    if (!IsInspectorBoilerplateKey(prop.Name))
+                    {
+                        inspectorRows.Add(new WorkspaceInspectorRow(
+                            prop.Name + " = " + prop.Value,
+                            comp.FileId,
+                            prop.Path,
+                            prop.Value,
+                            ClassifyPropertyKind(prop.Value)));
+                    }
+                }
+            }
+
+            SelectedPropertyIndex = previousSelection >= 0
+                && previousSelection < inspectorRows.Count
+                && inspectorRows[previousSelection].ComponentFileId != 0
+                ? previousSelection
+                : FindDefaultPropertyIndex();
+        }
+
+        private int FindDefaultPropertyIndex()
+        {
+            int firstAny = -1;
+            for (int i = 0; i < inspectorRows.Count; i++)
+            {
+                if (inspectorRows[i].ComponentFileId != 0)
+                {
+                    if (firstAny < 0)
+                    {
+                        firstAny = i;
+                    }
+
+                    if (!string.Equals(inspectorRows[i].Kind, "read-only", StringComparison.Ordinal))
+                    {
+                        return i;
+                    }
+                }
+            }
+
+            return firstAny;
+        }
+
+        private void RebuildPropertyRows()
+        {
+            propertyRows.Clear();
+            bool truncated = inspectorRows.Count > MaxPropertyRows;
+            int shown = truncated ? MaxPropertyRows - 1 : inspectorRows.Count;
+            for (int i = 0; i < shown; i++)
+            {
+                WorkspaceInspectorRow row = inspectorRows[i];
+                propertyRows.Add(row.ComponentFileId == 0
+                    ? row.Text
+                    : (i == SelectedPropertyIndex ? "> " : "  ") + row.Text);
+            }
+
+            if (truncated)
+            {
+                propertyRows.Add("...");
+            }
+        }
+
+        private static string? LoadProjectStatusAndFirstScene(McpHost host, string sessionId, string projectPath)
         {
             try
             {
                 JsonNode envelope = host.CallTool(
                     sessionId,
                     "project.status",
-                    new JsonObject
-                    {
-                        ["projectPath"] = projectPath,
-                    });
-                JsonObject? content = UnwrapContent(envelope);
-                JsonArray? scenes = content?["scenes"] as JsonArray;
+                    new JsonObject { ["projectPath"] = projectPath });
+                JsonArray? scenes = UnwrapContent(envelope)?["scenes"] as JsonArray;
                 if (scenes != null && scenes.Count > 0 && scenes[0] is JsonObject first)
                 {
                     return first["path"]?.GetValue<string>();
@@ -281,29 +512,20 @@ namespace Unitas.Editor.Shell
             }
 
             hierarchyEntries.Clear();
-            if (!(content["objects"] is JsonArray objects))
+            if (content["objects"] is JsonArray objects)
             {
-                return;
-            }
-
-            foreach (JsonNode? node in objects)
-            {
-                if (!(node is JsonObject obj))
+                foreach (JsonNode? node in objects)
                 {
-                    continue;
+                    if (node is JsonObject obj)
+                    {
+                        hierarchyEntries.Add(new WorkspaceHierarchyEntry(
+                            obj["fileId"]?.GetValue<long>() ?? 0L,
+                            obj["name"]?.GetValue<string>() ?? "GameObject",
+                            obj["parentFileId"]?.GetValue<long>() ?? 0L,
+                            ReadLongArray(obj["children"] as JsonArray),
+                            ReadLongArray(obj["componentFileIds"] as JsonArray)));
+                    }
                 }
-
-                long fileId = obj["fileId"]?.GetValue<long>() ?? 0L;
-                string name = obj["name"]?.GetValue<string>() ?? "GameObject";
-                long parentFileId = obj["parentFileId"]?.GetValue<long>() ?? 0L;
-                List<long> children = ReadLongArray(obj["children"] as JsonArray);
-                List<long> components = ReadLongArray(obj["componentFileIds"] as JsonArray);
-                hierarchyEntries.Add(new WorkspaceHierarchyEntry(
-                    fileId,
-                    name,
-                    parentFileId,
-                    children,
-                    components));
             }
         }
 
@@ -313,7 +535,9 @@ namespace Unitas.Editor.Shell
             {
                 SelectedObjectId = string.Empty;
                 SelectedObjectName = string.Empty;
+                SelectedPropertyIndex = -1;
                 inspectorComponents.Clear();
+                inspectorRows.Clear();
                 InspectorSummary = "No objects in scene";
                 return;
             }
@@ -345,10 +569,7 @@ namespace Unitas.Editor.Shell
                 JsonNode envelope = host.CallTool(
                     sessionId,
                     "scene.inspect_object",
-                    new JsonObject
-                    {
-                        ["fileId"] = fileId,
-                    });
+                    new JsonObject { ["fileId"] = fileId });
                 ApplyInspectionPayload(UnwrapContent(envelope));
             }
             catch (McpError)
@@ -365,28 +586,25 @@ namespace Unitas.Editor.Shell
 
             SelectedObjectName = content["name"]?.GetValue<string>() ?? SelectedObjectName;
             SelectedObjectActive = content["active"]?.GetValue<bool>() ?? true;
-            string position = content["position"]?.GetValue<string>() ?? string.Empty;
-            string rotation = content["rotation"]?.GetValue<string>() ?? string.Empty;
-            string scale = content["scale"]?.GetValue<string>() ?? string.Empty;
             InspectorSummary = SelectedObjectName
                 + (SelectedObjectActive ? " [Active]" : " [Inactive]")
-                + " Pos=" + position
-                + " Rot=" + rotation
-                + " Scale=" + scale;
+                + " Pos=" + (content["position"]?.GetValue<string>() ?? string.Empty)
+                + " Rot=" + (content["rotation"]?.GetValue<string>() ?? string.Empty)
+                + " Scale=" + (content["scale"]?.GetValue<string>() ?? string.Empty);
 
             inspectorComponents.Clear();
-            if (!(content["components"] is JsonArray components))
+            if (content["components"] is JsonArray components)
             {
-                return;
-            }
-
-            foreach (JsonNode? compNode in components)
-            {
-                if (compNode is JsonObject compObj)
+                foreach (JsonNode? compNode in components)
                 {
-                    inspectorComponents.Add(ParseComponentEntry(compObj));
+                    if (compNode is JsonObject compObj)
+                    {
+                        inspectorComponents.Add(ParseComponentEntry(compObj));
+                    }
                 }
             }
+
+            RebuildInspectorRows();
         }
 
         private static WorkspaceComponentEntry ParseComponentEntry(JsonObject compObj)
@@ -401,8 +619,9 @@ namespace Unitas.Editor.Shell
                     if (propNode is JsonObject propObj)
                     {
                         string propName = propObj["name"]?.GetValue<string>() ?? string.Empty;
+                        string propPath = propObj["path"]?.GetValue<string>() ?? propName;
                         string propVal = propObj["value"]?.GetValue<string>() ?? string.Empty;
-                        props.Add(new WorkspacePropertyEntry(propName, propVal));
+                        props.Add(new WorkspacePropertyEntry(propName, propPath, propVal));
                     }
                 }
             }
@@ -410,97 +629,31 @@ namespace Unitas.Editor.Shell
             return new WorkspaceComponentEntry(compId, compType, props);
         }
 
-        public void RebuildFormattedTexts()
+        private static JsonArray BuildStringJsonArray(IReadOnlyList<string> items)
         {
-            string sceneDisplay = string.IsNullOrWhiteSpace(ActiveScenePath)
-                ? "Untitled"
-                : Path.GetFileName(ActiveScenePath);
-            TitleText = "unitas Editor - " + sceneDisplay;
-            HierarchyText = BuildHierarchyText();
-            InspectorText = BuildInspectorText();
-            PlayStateText = "Play: " + PlayState;
+            JsonArray arr = new JsonArray();
+            foreach (string item in items)
+            {
+                arr.Add(item);
+            }
+
+            return arr;
         }
 
-        private string BuildHierarchyText()
-        {
-            StringBuilder hierarchyBuilder = new StringBuilder();
-            hierarchyBuilder.Append("Hierarchy (").Append(hierarchyEntries.Count).Append("):");
-            int shown = Math.Min(hierarchyEntries.Count, 12);
-            for (int i = 0; i < shown; i++)
-            {
-                WorkspaceHierarchyEntry entry = hierarchyEntries[i];
-                string idText = entry.FileId.ToString(CultureInfo.InvariantCulture);
-                bool selected = string.Equals(idText, SelectedObjectId, StringComparison.Ordinal);
-                hierarchyBuilder
-                    .Append('\n')
-                    .Append(selected ? "> " : "  ")
-                    .Append(entry.Name)
-                    .Append(" (")
-                    .Append(idText)
-                    .Append(')');
-            }
-
-            return hierarchyBuilder.ToString();
-        }
-
-        private string BuildInspectorText()
-        {
-            if (string.IsNullOrWhiteSpace(SelectedObjectId))
-            {
-                return "Inspector: (no selection)";
-            }
-
-            StringBuilder inspectorBuilder = new StringBuilder();
-            inspectorBuilder
-                .Append("Inspector: ")
-                .Append(SelectedObjectName)
-                .Append(" (")
-                .Append(SelectedObjectId)
-                .Append(')');
-            if (!string.IsNullOrWhiteSpace(InspectorSummary))
-            {
-                inspectorBuilder.Append('\n').Append(InspectorSummary);
-            }
-
-            foreach (WorkspaceComponentEntry comp in inspectorComponents)
-            {
-                inspectorBuilder
-                    .Append("\n[")
-                    .Append(comp.Type)
-                    .Append(']');
-            }
-
-            return inspectorBuilder.ToString();
-        }
-
-        private static JsonObject? UnwrapContent(JsonNode? envelope)
-        {
-            if (envelope is JsonObject obj)
-            {
-                if (obj["content"] is JsonObject content)
-                {
-                    return content;
-                }
-
-                return obj;
-            }
-
-            return null;
-        }
+        private static JsonObject? UnwrapContent(JsonNode? envelope) =>
+            envelope is JsonObject obj ? (obj["content"] as JsonObject ?? obj) : null;
 
         private static List<long> ReadLongArray(JsonArray? array)
         {
             List<long> items = new List<long>();
-            if (array == null)
+            if (array != null)
             {
-                return items;
-            }
-
-            foreach (JsonNode? item in array)
-            {
-                if (item is JsonValue val && val.TryGetValue(out long number))
+                foreach (JsonNode? item in array)
                 {
-                    items.Add(number);
+                    if (item is JsonValue val && val.TryGetValue(out long number))
+                    {
+                        items.Add(number);
+                    }
                 }
             }
 

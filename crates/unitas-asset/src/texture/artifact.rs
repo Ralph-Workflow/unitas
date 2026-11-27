@@ -40,6 +40,19 @@ fn write_file_atomic(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     Ok(())
 }
 
+fn copy_file_atomic(src: &Path, dst: &Path) -> std::io::Result<()> {
+    let seq = COOK_TEMP_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let mut temp = dst.file_name().unwrap_or_default().to_os_string();
+    temp.push(format!(".{}.{seq}.tmp", std::process::id()));
+    let temp_path = dst.with_file_name(temp);
+    fs::copy(src, &temp_path)?;
+    if let Err(error) = fs::rename(&temp_path, dst) {
+        let _ = fs::remove_file(&temp_path);
+        return Err(error);
+    }
+    Ok(())
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct TextureArtifact {
     pub width: u32,
@@ -530,7 +543,7 @@ fn stage_cooked_outputs(
         let src = cache_cooked_dir.join(&entry.cooked_path);
         let dst = cooked_out_dir.join(&entry.cooked_path);
         if src != dst {
-            fs::copy(&src, &dst).map_err(|error| ImportCacheError {
+            copy_file_atomic(&src, &dst).map_err(|error| ImportCacheError {
                 path: dst,
                 message: error.to_string(),
             })?;
