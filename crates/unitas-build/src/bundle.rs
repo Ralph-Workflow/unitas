@@ -660,6 +660,7 @@ pub fn stage_bundle_for_host(
                 &mut entries,
                 &mut total_content_bytes,
                 &mut diagnostics,
+                config.script_debugging,
             )?;
         }
     }
@@ -939,11 +940,12 @@ fn stage_managed_payload(
     entries: &mut Vec<BundleManifestEntry>,
     total_content_bytes: &mut u64,
     diagnostics: &mut Vec<String>,
+    script_debugging: bool,
 ) -> Result<(), BundleError> {
     let mut sources: Vec<(String, PathBuf)> = Vec::new();
 
     let build_dir = output_dir.join("_managed_build");
-    match compile_project_scripts(project_root, &build_dir) {
+    match compile_project_scripts(project_root, &build_dir, script_debugging) {
         Ok(true) => {
             let mut game_assemblies: Vec<PathBuf> = fs::read_dir(&build_dir)
                 .map_err(|error| BundleError::Io {
@@ -1058,12 +1060,22 @@ fn publish_cached_assemblies(cache_dir: &Path, output_dir: &Path) -> Result<bool
     Ok(published)
 }
 
-/// The cache key of a script compile: the project's script sources and the
-/// bridge assemblies the compile reads. A change to either invalidates it.
-fn script_compile_cache_key(workspace_root: &Path, project_root: &Path) -> String {
+/// The cache key of a script compile: the project's script sources, the
+/// bridge assemblies the compile reads, and whether the compile runs with
+/// script debugging. A change to any of them invalidates it, so a debug and a
+/// non-debug compile never share a cache entry.
+fn script_compile_cache_key(
+    workspace_root: &Path,
+    project_root: &Path,
+    script_debugging: bool,
+) -> String {
     let mut parts: Vec<(String, Vec<u8>)> = Vec::new();
     collect_script_sources(&project_root.join("Assets"), "", &mut parts, 8);
     collect_bridge_assemblies(&workspace_root.join("bridge"), &mut parts, 8);
+    parts.push((
+        String::from("script-debugging"),
+        vec![u8::from(script_debugging)],
+    ));
     parts.sort_by(|left, right| left.0.cmp(&right.0));
     let mut bytes = Vec::new();
     for (name, content) in parts {
@@ -1165,10 +1177,36 @@ fn collect_published_assemblies(directory: &Path, out: &mut Vec<(String, Vec<u8>
     }
 }
 
+/// The compile command line for a project's scripts. Script debugging adds
+/// the `--debug` flag, so the compiled assemblies carry the symbols a
+/// debugger needs.
+fn script_compile_command(
+    scripting_assembly: &Path,
+    project_root: &Path,
+    staging_dir: &Path,
+    script_debugging: bool,
+) -> Command {
+    let mut command = Command::new("dotnet");
+    command
+        .arg(scripting_assembly)
+        .arg("compile")
+        .arg(project_root)
+        .arg("--player");
+    if script_debugging {
+        command.arg("--debug");
+    }
+    command.arg("--out").arg(staging_dir);
+    command
+}
+
 /// Compiles a project's scripts through the bridge compile pipeline
-/// (`Unitas.Scripting compile <projectRoot> --player`). Returns `Ok(false)`
-/// when the bridge tooling has not been built yet.
-fn compile_project_scripts(project_root: &Path, output_dir: &Path) -> Result<bool, String> {
+/// (`Unitas.Scripting compile <projectRoot> --player [--debug]`). Returns
+/// `Ok(false)` when the bridge tooling has not been built yet.
+fn compile_project_scripts(
+    project_root: &Path,
+    output_dir: &Path,
+    script_debugging: bool,
+) -> Result<bool, String> {
     let Some(workspace_root) = licensing::workspace_root() else {
         return Ok(false);
     };
@@ -1191,7 +1229,11 @@ fn compile_project_scripts(project_root: &Path, output_dir: &Path) -> Result<boo
     let cache_dir = workspace_root
         .join("target")
         .join("unitas-script-cache")
-        .join(script_compile_cache_key(&workspace_root, project_root));
+        .join(script_compile_cache_key(
+            &workspace_root,
+            project_root,
+            script_debugging,
+        ));
     if publish_cached_assemblies(&cache_dir, output_dir)? {
         return Ok(true);
     }
@@ -1202,15 +1244,14 @@ fn compile_project_scripts(project_root: &Path, output_dir: &Path) -> Result<boo
     ));
     let _ = fs::remove_dir_all(&staging_dir);
     fs::create_dir_all(&staging_dir).map_err(|error| error.to_string())?;
-    let output = Command::new("dotnet")
-        .arg(&scripting_assembly)
-        .arg("compile")
-        .arg(project_root)
-        .arg("--player")
-        .arg("--out")
-        .arg(&staging_dir)
-        .output()
-        .map_err(|error| format!("failed to launch dotnet: {error}"))?;
+    let output = script_compile_command(
+        &scripting_assembly,
+        project_root,
+        &staging_dir,
+        script_debugging,
+    )
+    .output()
+    .map_err(|error| format!("failed to launch dotnet: {error}"))?;
     if !output.status.success() {
         let _ = fs::remove_dir_all(&staging_dir);
         return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
@@ -2421,6 +2462,7 @@ pub fn validate_content_bundle(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::ffi::OsStr;
     use std::sync::atomic::{AtomicU64, Ordering};
 
     static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -2682,5 +2724,47 @@ Transform:\n\
 
         fs::remove_dir_all(&workspace)?;
         Ok(())
+    }
+
+    #[test]
+    fn script_compile_cache_key_separates_debug_and_non_debug_compiles(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let workspace = temp_dir("compile_cache_key")?;
+        let scripts_dir = workspace.join("Assets").join("Scripts");
+        fs::create_dir_all(&scripts_dir)?;
+        fs::write(scripts_dir.join("Player.cs"), "public class Player { }\n")?;
+
+        let release_key = script_compile_cache_key(&workspace, &workspace, false);
+        let debug_key = script_compile_cache_key(&workspace, &workspace, true);
+        assert_ne!(release_key, debug_key);
+        assert_eq!(
+            release_key,
+            script_compile_cache_key(&workspace, &workspace, false)
+        );
+
+        fs::remove_dir_all(&workspace)?;
+        Ok(())
+    }
+
+    #[test]
+    fn script_compile_command_passes_the_debug_flag_only_for_debugging_compiles() {
+        let release = script_compile_command(
+            Path::new("/bridge/Unitas.Scripting.dll"),
+            Path::new("/project"),
+            Path::new("/staging"),
+            false,
+        );
+        let debug = script_compile_command(
+            Path::new("/bridge/Unitas.Scripting.dll"),
+            Path::new("/project"),
+            Path::new("/staging"),
+            true,
+        );
+        let release_args: Vec<&OsStr> = release.get_args().collect();
+        let debug_args: Vec<&OsStr> = debug.get_args().collect();
+        assert!(release_args.contains(&OsStr::new("--player")));
+        assert!(debug_args.contains(&OsStr::new("compile")));
+        assert!(!release_args.contains(&OsStr::new("--debug")));
+        assert!(debug_args.contains(&OsStr::new("--debug")));
     }
 }

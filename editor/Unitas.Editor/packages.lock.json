@@ -150,6 +150,12 @@
           "UnityEngine": "[1.0.0, )"
         }
       },
+      "unitas.debugging": {
+        "type": "Project",
+        "dependencies": {
+          "UnityEngine": "[1.0.0, )"
+        }
+      },
       "unitas.scripting": {
         "type": "Project",
         "dependencies": {

@@ -22,6 +22,7 @@ EDITOR_TEST_SHARDS := AuditTests,BuildToolsTests,BuiltinDefaultsTests,ChangeRevi
 	PlayWorkerCrashTests \
 	PlayLiveCaptureTests,PlayPersonOnlyGrantTests,PlayRuntimeDisposalTests \
 	AuthoringToolsTests \
+	DebugToolsTests \
 	SceneTests,UndoHistoryTests,SceneToolsTests
 
 verify:

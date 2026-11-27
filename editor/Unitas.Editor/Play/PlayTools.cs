@@ -26,6 +26,10 @@ namespace Unitas.Editor.Mcp
                             {
                                 ["type"] = "string",
                             },
+                            ["debug"] = new JsonObject
+                            {
+                                ["type"] = "boolean",
+                            },
                         },
                     },
                     Scope.ExecuteProjectCode),
@@ -185,13 +189,14 @@ namespace Unitas.Editor.Mcp
         {
             string callerSessionId = RequireCallerSession(host);
             string? bundleDirectory = ExtractOptionalString(arguments, "bundleDirectory");
+            bool debug = ExtractOptionalBool(arguments, "debug");
             string operationId = host.StartOperation(callerSessionId, "play.session", Scope.ExecuteProjectCode);
             host.Operations.UpdateStage(operationId, "starting");
 
             PlaySession session;
             try
             {
-                session = manager.StartSession(callerSessionId, operationId, bundleDirectory);
+                session = manager.StartSession(callerSessionId, operationId, bundleDirectory, debug);
             }
             catch (McpError error)
             {
@@ -514,6 +519,18 @@ namespace Unitas.Editor.Mcp
             }
 
             return defaultValue;
+        }
+
+        private static bool ExtractOptionalBool(JsonNode arguments, string propertyName)
+        {
+            if (arguments is JsonObject obj
+                && obj[propertyName] is JsonValue value
+                && value.TryGetValue(out bool parsed))
+            {
+                return parsed;
+            }
+
+            return false;
         }
 
         private static JsonObject PlaySessionSchema()

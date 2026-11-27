@@ -17,10 +17,12 @@ use unitas_build::{
 };
 use unitas_build::{
     launch_bundle, load_and_validate_bundle_manifest, roll_a_ball_build_configuration,
-    stage_roll_a_ball_bundle, WindowedLaunchOptions,
+    sample::stage_roll_a_ball_bundle_for_host_with_script_debugging, WindowedLaunchOptions,
 };
 
-const USAGE: &str = "usage: unitas-player [<bundle-dir> | --sample] [--windowed] [--frames <N>] [--dt <seconds>] [--verify-device <ref.bmp>] [--capture-reference <out.bmp>] [--control-stdio] [--package-sample <dir>]";
+const USAGE: &str = "usage: unitas-player [<bundle-dir> | --sample] [--windowed] [--frames <N>] [--dt <seconds>] [--verify-device <ref.bmp>] [--capture-reference <out.bmp>] [--control-stdio] [--package-sample <dir>] [--debug]";
+
+const HELP: &str = "--debug   compile the staged Managed/ payload with script debugging enabled";
 
 const TRUST_REQUIRED_EXIT_CODE: u8 = 3;
 
@@ -38,6 +40,8 @@ struct CliOptions {
     verify_device: Option<PathBuf>,
     demo_input: bool,
     control_stdio: bool,
+    script_debugging: bool,
+    help: bool,
 }
 
 fn parse_cli_args<I>(args: I) -> Result<CliOptions, String>
@@ -57,6 +61,8 @@ where
     let mut verify_device: Option<PathBuf> = None;
     let mut demo_input = false;
     let mut control_stdio = false;
+    let mut script_debugging = false;
+    let mut help = false;
 
     while let Some(arg) = iter.next() {
         match arg.as_str() {
@@ -126,6 +132,12 @@ where
             "--control-stdio" => {
                 control_stdio = true;
             }
+            "--debug" => {
+                script_debugging = true;
+            }
+            "--help" => {
+                help = true;
+            }
             "--capture-reference" => {
                 let raw = iter
                     .next()
@@ -158,6 +170,7 @@ where
         && verify_device.is_none()
         && !control_stdio
         && package_sample.is_none()
+        && !help
     {
         return Err(String::from(USAGE));
     }
@@ -175,12 +188,14 @@ where
         verify_device,
         demo_input,
         control_stdio,
+        script_debugging,
+        help,
     })
 }
 
-fn run_package_sample(output_dir: &Path) -> ExitCode {
+fn run_package_sample(output_dir: &Path, script_debugging: bool) -> ExitCode {
     let config = match roll_a_ball_build_configuration(None) {
-        Ok(config) => config,
+        Ok(config) => config.with_script_debugging(script_debugging),
         Err(error) => {
             eprintln!("unitas-player packaging failed: {error}");
             return ExitCode::from(STARTUP_FAILURE_EXIT_CODE);
@@ -223,8 +238,13 @@ fn main() -> ExitCode {
         }
     };
 
+    if cli.help {
+        println!("{USAGE}\n{HELP}");
+        return ExitCode::SUCCESS;
+    }
+
     if let Some(ref output_dir) = cli.package_sample {
-        return run_package_sample(output_dir);
+        return run_package_sample(output_dir, cli.script_debugging);
     }
 
     if cli.control_stdio {
@@ -242,7 +262,11 @@ fn main() -> ExitCode {
     let mut temp_sample_dir: Option<PathBuf> = None;
     let resolved_bundle_dir = match cli.bundle_dir {
         Some(ref dir) if cli.sample && !dir.exists() => {
-            if let Err(error) = stage_roll_a_ball_bundle(dir) {
+            if let Err(error) = stage_roll_a_ball_bundle_for_host_with_script_debugging(
+                dir,
+                None,
+                cli.script_debugging,
+            ) {
                 eprintln!("unitas-player startup failed: {error}");
                 return ExitCode::from(STARTUP_FAILURE_EXIT_CODE);
             }
@@ -254,7 +278,11 @@ fn main() -> ExitCode {
                 "unitas_player_sample_bundle_{}",
                 std::process::id()
             ));
-            if let Err(error) = stage_roll_a_ball_bundle(&temp_dir) {
+            if let Err(error) = stage_roll_a_ball_bundle_for_host_with_script_debugging(
+                &temp_dir,
+                None,
+                cli.script_debugging,
+            ) {
                 eprintln!("unitas-player startup failed: {error}");
                 return ExitCode::from(STARTUP_FAILURE_EXIT_CODE);
             }
@@ -470,8 +498,12 @@ fn resolve_control_scene(cli: &CliOptions) -> Result<(PathBuf, PathBuf, Option<P
                 "unitas_player_control_bundle_{}",
                 std::process::id()
             ));
-            let staged =
-                stage_roll_a_ball_bundle(&staged_dir).map_err(|error| error.to_string())?;
+            let staged = stage_roll_a_ball_bundle_for_host_with_script_debugging(
+                &staged_dir,
+                None,
+                cli.script_debugging,
+            )
+            .map_err(|error| error.to_string())?;
             let scene_path = staged_dir.join(&staged.manifest.startup_scene_staged_path);
             Ok((staged_dir.clone(), scene_path, Some(staged_dir)))
         }
@@ -511,4 +543,30 @@ fn control_seed() -> u64 {
         .map(|elapsed| elapsed.as_nanos() as u64)
         .unwrap_or_default();
     nanos ^ (u64::from(std::process::id()) << 32)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn debug_flag_is_parsed_for_the_staging_paths() -> Result<(), Box<dyn std::error::Error>> {
+        let cli = parse_cli_args([String::from("--sample"), String::from("--debug")])
+            .map_err(std::io::Error::other)?;
+        assert!(cli.sample);
+        assert!(cli.script_debugging);
+
+        let plain = parse_cli_args([String::from("--sample")]).map_err(std::io::Error::other)?;
+        assert!(!plain.script_debugging);
+        Ok(())
+    }
+
+    #[test]
+    fn help_output_names_the_debug_flag() -> Result<(), Box<dyn std::error::Error>> {
+        let cli = parse_cli_args([String::from("--help")]).map_err(std::io::Error::other)?;
+        assert!(cli.help);
+        assert!(USAGE.contains("--debug"));
+        assert!(HELP.contains("--debug"));
+        Ok(())
+    }
 }

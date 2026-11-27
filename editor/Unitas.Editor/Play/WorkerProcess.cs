@@ -3,10 +3,13 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.Globalization;
 using System.IO;
+using System.Net;
+using System.Net.Sockets;
 using System.Text;
 using System.Text.Json.Nodes;
 using System.Threading;
 using System.Threading.Tasks;
+using Unitas.Debugging;
 
 namespace Unitas.Editor.Mcp
 {
@@ -24,6 +27,12 @@ namespace Unitas.Editor.Mcp
     }
 
     public delegate IPlayWorker PlayWorkerFactory(string? bundleDirectory);
+
+    /// <summary>
+    /// A worker factory that also receives the loopback port the worker exposes its
+    /// debug adapter on. The port is null when the session runs without debugging.
+    /// </summary>
+    public delegate IPlayWorker PlayWorkerFactoryWithDebugPort(string? bundleDirectory, int? dapPort);
 
     public sealed class WorkerProcess : IPlayWorker
     {
@@ -46,7 +55,8 @@ namespace Unitas.Editor.Mcp
             string executablePath,
             IReadOnlyList<string> arguments,
             string? workingDirectory = null,
-            TimeSpan? commandTimeout = null)
+            TimeSpan? commandTimeout = null,
+            IReadOnlyDictionary<string, string>? environment = null)
         {
             if (string.IsNullOrWhiteSpace(executablePath))
             {
@@ -78,6 +88,14 @@ namespace Unitas.Editor.Mcp
             foreach (string argument in arguments)
             {
                 startInfo.ArgumentList.Add(argument);
+            }
+
+            if (environment != null)
+            {
+                foreach (KeyValuePair<string, string> entry in environment)
+                {
+                    startInfo.Environment[entry.Key] = entry.Value;
+                }
             }
 
             Process started = new Process
@@ -148,7 +166,7 @@ namespace Unitas.Editor.Mcp
             }
         }
 
-        public static WorkerProcess StartDefault(string? bundleDirectory = null)
+        public static WorkerProcess StartDefault(string? bundleDirectory = null, int? dapPort = null)
         {
             string executable = ResolvePlayerBinaryPath();
             List<string> arguments = new List<string>();
@@ -159,7 +177,33 @@ namespace Unitas.Editor.Mcp
             }
 
             arguments.Add("--control-stdio");
-            return new WorkerProcess(executable, arguments, FindRepositoryRoot());
+            IReadOnlyDictionary<string, string>? environment = null;
+            if (dapPort.HasValue)
+            {
+                environment = new Dictionary<string, string>(StringComparer.Ordinal)
+                {
+                    [DebugAgent.DapPortEnvironmentVariable] = dapPort.Value.ToString(CultureInfo.InvariantCulture),
+                };
+            }
+
+            return new WorkerProcess(executable, arguments, FindRepositoryRoot(), null, environment);
+        }
+
+        /// <summary>
+        /// A free loopback port the worker can bind for its debug adapter. The port
+        /// is released again, so the worker claims it when it starts.
+        /// </summary>
+        public static int PickFreeLoopbackPort()
+        {
+            TcpListener listener = DebugAgent.BeginLoopbackListener(IPAddress.Loopback, 0);
+            try
+            {
+                return ((IPEndPoint)listener.LocalEndpoint).Port;
+            }
+            finally
+            {
+                listener.Stop();
+            }
         }
 
         /// The bundle a play worker runs against. A caller-supplied bundle wins;

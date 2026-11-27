@@ -96,6 +96,7 @@ pub struct BuildConfiguration {
     pub target: BuildTarget,
     pub development_build: bool,
     pub development_diagnostics: bool,
+    pub script_debugging: bool,
 }
 
 impl BuildConfiguration {
@@ -116,6 +117,7 @@ impl BuildConfiguration {
             target,
             development_build: false,
             development_diagnostics: false,
+            script_debugging: false,
         }
     }
 
@@ -147,6 +149,13 @@ impl BuildConfiguration {
 
     pub fn with_development_diagnostics(mut self, enabled: bool) -> Self {
         self.development_diagnostics = enabled;
+        self
+    }
+
+    /// Compiles the project's scripts with debugging information, so the
+    /// staged `Managed/` payload carries the symbols a debugger needs.
+    pub fn with_script_debugging(mut self, enabled: bool) -> Self {
+        self.script_debugging = enabled;
         self
     }
 
@@ -328,6 +337,17 @@ mod tests {
         assert_eq!(dev.validate_with_host(Some(host)), Ok(()));
         assert_eq!(dev.mode(), BuildMode::Development);
         assert!(dev.include_diagnostics());
+    }
+
+    #[test]
+    fn script_debugging_is_off_by_default_and_follows_the_builder() {
+        let host = BuildTarget::MACOS_ARM64;
+        let config = valid_config_for(host);
+        assert!(!config.script_debugging);
+
+        let debugging = config.clone().with_script_debugging(true);
+        assert!(debugging.script_debugging);
+        assert!(!debugging.with_script_debugging(false).script_debugging);
     }
 
     #[test]

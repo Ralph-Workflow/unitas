@@ -1,6 +1,8 @@
 using System;
 using System.Collections.Generic;
+using System.Net;
 using System.Text.Json.Nodes;
+using Unitas.Debugging;
 
 namespace Unitas.Editor.Mcp
 {
@@ -11,14 +13,24 @@ namespace Unitas.Editor.Mcp
         public const string StateStopped = "stopped";
         public const string StateSessionEnded = "session-ended";
 
+        // The worker opens its debug adapter at the first instrumented hit, so a
+        // connection attempt that fails right away means the adapter is not up yet.
+        private static readonly TimeSpan DebugConnectProbe = TimeSpan.FromMilliseconds(250);
+
         private readonly IPlayWorker worker;
         private readonly object sessionLock = new object();
+        private readonly object debugLock = new object();
+        private readonly Dictionary<string, PendingBreakpoint> pendingBreakpoints =
+            new Dictionary<string, PendingBreakpoint>(StringComparer.Ordinal);
+        private DapClient? debugClient;
+        private bool debugConfigured;
 
         public PlaySession(
             string playSessionId,
             string ownerSessionId,
             string operationId,
-            IPlayWorker worker)
+            IPlayWorker worker,
+            int? debugPort = null)
         {
             ArgumentNullException.ThrowIfNull(playSessionId);
             ArgumentNullException.ThrowIfNull(ownerSessionId);
@@ -29,6 +41,7 @@ namespace Unitas.Editor.Mcp
             OwnerSessionId = ownerSessionId;
             OperationId = operationId;
             this.worker = worker;
+            DebugPort = debugPort;
             State = StatePaused;
             DeltaSeconds = 1.0 / 60.0;
         }
@@ -52,6 +65,14 @@ namespace Unitas.Editor.Mcp
         public bool Crashed { get; private set; }
 
         public int? ExitCode => worker.ExitCode;
+
+        /// <summary>
+        /// The loopback port the worker exposes its debug adapter on, or null when
+        /// the session runs without debugging.
+        /// </summary>
+        public int? DebugPort { get; }
+
+        public bool DebugEnabled => DebugPort.HasValue;
 
         public JsonObject Play()
         {
@@ -161,6 +182,7 @@ namespace Unitas.Editor.Mcp
                 }
 
                 worker.Dispose();
+                DisposeDebugClient();
                 return BuildStatePayloadLocked();
             }
         }
@@ -212,6 +234,58 @@ namespace Unitas.Editor.Mcp
         public void Dispose()
         {
             worker.Dispose();
+            DisposeDebugClient();
+        }
+
+        /// <summary>
+        /// Sets breakpoints in the debugged worker. The response is null when the
+        /// worker has not opened its debug adapter yet; the breakpoints are then
+        /// applied as soon as the adapter answers.
+        /// </summary>
+        public JsonObject? SetBreakpoints(string path, IReadOnlyList<int> lines, IReadOnlyList<string>? conditions)
+        {
+            ArgumentNullException.ThrowIfNull(path);
+            ArgumentNullException.ThrowIfNull(lines);
+            lock (debugLock)
+            {
+                if (debugClient != null)
+                {
+                    return debugClient.SetBreakpoints(path, lines, conditions);
+                }
+
+                pendingBreakpoints[path] = new PendingBreakpoint(path, lines, conditions);
+                if (TryConnectDebugClientLocked(DebugConnectProbe) == null)
+                {
+                    return null;
+                }
+
+                Dictionary<string, JsonObject> applied = FlushPendingBreakpointsLocked();
+                return applied.TryGetValue(path, out JsonObject? response) ? response : null;
+            }
+        }
+
+        /// <summary>
+        /// The debug adapter client of this session, connected on first use.
+        /// </summary>
+        public DapClient EnsureDebugClient(TimeSpan timeout)
+        {
+            lock (debugLock)
+            {
+                if (debugClient != null)
+                {
+                    return debugClient;
+                }
+
+                if (!DebugPort.HasValue)
+                {
+                    throw new McpError.InvalidRequest(
+                        "play session " + PlaySessionId + " was not started with debugging enabled");
+                }
+
+                debugClient = ConnectDebugClientLocked(timeout);
+                FlushPendingBreakpointsLocked();
+                return debugClient;
+            }
         }
 
         private JsonObject SendAndUpdateState(JsonObject command)
@@ -295,7 +369,13 @@ namespace Unitas.Editor.Mcp
                 ["delta_seconds"] = DeltaSeconds,
                 ["random_seed"] = RandomSeed,
                 ["crashed"] = Crashed,
+                ["debug"] = DebugEnabled,
             };
+
+            if (DebugPort.HasValue)
+            {
+                payload["debugPort"] = DebugPort.Value;
+            }
 
             if (worker.ExitCode.HasValue)
             {
@@ -304,11 +384,109 @@ namespace Unitas.Editor.Mcp
 
             return payload;
         }
+
+        private DapClient? TryConnectDebugClientLocked(TimeSpan timeout)
+        {
+            if (debugClient != null)
+            {
+                return debugClient;
+            }
+
+            if (!DebugPort.HasValue)
+            {
+                return null;
+            }
+
+            try
+            {
+                debugClient = ConnectDebugClientLocked(timeout);
+            }
+            catch (TimeoutException)
+            {
+                return null;
+            }
+
+            return debugClient;
+        }
+
+        private DapClient ConnectDebugClientLocked(TimeSpan timeout)
+        {
+            DapClient client = DapClient.Connect(IPAddress.Loopback, DebugPort!.Value, timeout);
+            try
+            {
+                client.Initialize();
+                client.Attach();
+            }
+            catch (Exception error)
+            {
+                client.Dispose();
+                throw new McpError.Io(error);
+            }
+
+            return client;
+        }
+
+        private Dictionary<string, JsonObject> FlushPendingBreakpointsLocked()
+        {
+            Dictionary<string, JsonObject> applied = new Dictionary<string, JsonObject>(StringComparer.Ordinal);
+            if (debugClient == null)
+            {
+                return applied;
+            }
+
+            foreach (KeyValuePair<string, PendingBreakpoint> entry in pendingBreakpoints)
+            {
+                applied[entry.Key] = debugClient.SetBreakpoints(
+                    entry.Value.Path,
+                    entry.Value.Lines,
+                    entry.Value.Conditions);
+            }
+
+            pendingBreakpoints.Clear();
+            EnsureConfiguredLocked();
+            return applied;
+        }
+
+        private void EnsureConfiguredLocked()
+        {
+            if (debugConfigured || debugClient == null)
+            {
+                return;
+            }
+
+            debugClient.ConfigurationDone();
+            debugConfigured = true;
+        }
+
+        private void DisposeDebugClient()
+        {
+            lock (debugLock)
+            {
+                debugClient?.Dispose();
+                debugClient = null;
+            }
+        }
+
+        private sealed class PendingBreakpoint
+        {
+            public PendingBreakpoint(string path, IReadOnlyList<int> lines, IReadOnlyList<string>? conditions)
+            {
+                Path = path;
+                Lines = lines;
+                Conditions = conditions;
+            }
+
+            public string Path { get; }
+
+            public IReadOnlyList<int> Lines { get; }
+
+            public IReadOnlyList<string>? Conditions { get; }
+        }
     }
 
     public sealed class PlaySessionManager : IDisposable
     {
-        private readonly PlayWorkerFactory workerFactory;
+        private readonly PlayWorkerFactoryWithDebugPort workerFactory;
         private readonly Dictionary<string, PlaySession> sessions =
             new Dictionary<string, PlaySession>(StringComparer.Ordinal);
         private readonly Dictionary<string, string> activeByOwner =
@@ -317,33 +495,40 @@ namespace Unitas.Editor.Mcp
         private long nextPlaySessionId;
 
         public PlaySessionManager()
-            : this(bundleDir => WorkerProcess.StartDefault(bundleDir))
+            : this((bundleDir, dapPort) => WorkerProcess.StartDefault(bundleDir, dapPort))
         {
         }
 
         public PlaySessionManager(PlayWorkerFactory workerFactory)
+            : this((bundleDir, dapPort) => workerFactory(bundleDir))
+        {
+        }
+
+        public PlaySessionManager(PlayWorkerFactoryWithDebugPort workerFactory)
         {
             ArgumentNullException.ThrowIfNull(workerFactory);
             this.workerFactory = workerFactory;
         }
 
-        public PlayWorkerFactory WorkerFactory => workerFactory;
+        public PlayWorkerFactory WorkerFactory => bundleDir => workerFactory(bundleDir, null);
 
         public PlaySession StartSession(
             string ownerSessionId,
             string operationId,
-            string? bundleDirectory = null)
+            string? bundleDirectory = null,
+            bool debug = false)
         {
             ArgumentNullException.ThrowIfNull(ownerSessionId);
             ArgumentNullException.ThrowIfNull(operationId);
 
-            IPlayWorker worker = workerFactory(bundleDirectory);
+            int? debugPort = debug ? WorkerProcess.PickFreeLoopbackPort() : null;
+            IPlayWorker worker = workerFactory(bundleDirectory, debugPort);
             PlaySession session;
             lock (managerLock)
             {
                 nextPlaySessionId++;
                 string playSessionId = "play-session-" + nextPlaySessionId;
-                session = new PlaySession(playSessionId, ownerSessionId, operationId, worker);
+                session = new PlaySession(playSessionId, ownerSessionId, operationId, worker, debugPort);
                 sessions[playSessionId] = session;
                 activeByOwner[ownerSessionId] = playSessionId;
             }

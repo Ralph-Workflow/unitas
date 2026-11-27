@@ -22,6 +22,7 @@ namespace Unitas.Editor.Tests
                 ("ChangeReviewTests", ChangeReviewTests.Run),
                 ("ExecuteMethodToolsTests", ExecuteMethodToolsTests.Run),
                 ("ClockTests", ClockTests.Run),
+                ("DebugToolsTests", DebugToolsTests.Run),
                 ("HeadlessCliTests", HeadlessCliTests.Run),
                 ("HttpTransportTests", HttpTransportTests.Run),
                 ("NativeToolBridgeTests", NativeToolBridgeTests.Run),

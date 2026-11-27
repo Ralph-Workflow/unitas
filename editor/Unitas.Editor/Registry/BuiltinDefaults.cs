@@ -186,6 +186,7 @@ namespace Unitas.Editor.Mcp
             Register(host);
             AuditTools.Register(host);
             PlayTools.Register(host, playSessions);
+            DebugTools.Register(host, playSessions);
             CaptureTool.Register(host, playSessions);
             ScenarioTools.Register(host);
             ChangeSetStore changeSets = new ChangeSetStore(host);

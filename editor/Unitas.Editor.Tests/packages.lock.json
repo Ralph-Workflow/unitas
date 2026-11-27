@@ -148,12 +148,19 @@
           "UnityEngine": "[1.0.0, )"
         }
       },
+      "unitas.debugging": {
+        "type": "Project",
+        "dependencies": {
+          "UnityEngine": "[1.0.0, )"
+        }
+      },
       "unitas.editor": {
         "type": "Project",
         "dependencies": {
           "ModelContextProtocol": "[2.4.0, )",
           "ModelContextProtocol.AspNetCore": "[2.4.0, )",
           "Unitas.Bridge": "[1.0.0, )",
+          "Unitas.Debugging": "[1.0.0, )",
           "Unitas.Scripting": "[1.0.0, )",
           "Unitas.Testing": "[1.0.0, )"
         }

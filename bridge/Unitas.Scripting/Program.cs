@@ -10,7 +10,7 @@ namespace Unitas.Scripting
         {
             if (args == null || args.Length == 0)
             {
-                Console.Error.WriteLine("Usage: Unitas.Scripting <compile|generate-ide|diagnose|symbols|usages|attach-component|play|loop|scenario> <projectRoot> [--player] [--development] [--target <platform>] [--arch <arch>] [--define <SYMBOL>] [--type <TypeName>] [--script <ScriptOrGuid>] [--prefab <PrefabPath>] [--object <ObjectName>] [--field <Name=Value>] [--usages <ScriptOrGuid>] [--play [<SceneOrPrefabPath>]] [--ticks <N>] | scenario <projectRoot> <scenario.json> [--repeat 2] [--frame-rates 30,60,144,240]");
+                Console.Error.WriteLine("Usage: Unitas.Scripting <compile|generate-ide|diagnose|symbols|usages|attach-component|play|loop|scenario> <projectRoot> [--player] [--development] [--debug] [--target <platform>] [--arch <arch>] [--define <SYMBOL>] [--type <TypeName>] [--script <ScriptOrGuid>] [--prefab <PrefabPath>] [--object <ObjectName>] [--field <Name=Value>] [--usages <ScriptOrGuid>] [--play [<SceneOrPrefabPath>]] [--ticks <N>] | scenario <projectRoot> <scenario.json> [--repeat 2] [--frame-rates 30,60,144,240]");
                 return 1;
             }
 
@@ -64,7 +64,8 @@ namespace Unitas.Scripting
                 out bool enterPlayMode,
                 out string? playTarget,
                 out int playTicks,
-                out Dictionary<string, string> serializedFields);
+                out Dictionary<string, string> serializedFields,
+                out bool debuggingEnabled);
 
             return DispatchCliCommand(
                 projectRoot,
@@ -84,7 +85,8 @@ namespace Unitas.Scripting
                 enterPlayMode,
                 playTarget,
                 playTicks,
-                serializedFields);
+                serializedFields,
+                debuggingEnabled);
         }
 
         private static int RunScenarioCommand(string projectRoot, string[] args)
@@ -124,7 +126,8 @@ namespace Unitas.Scripting
             out bool enterPlayMode,
             out string? playTarget,
             out int playTicks,
-            out Dictionary<string, string> serializedFields)
+            out Dictionary<string, string> serializedFields,
+            out bool debuggingEnabled)
         {
             options = new ScriptCompilationOptions();
             typeFilter = null;
@@ -136,6 +139,7 @@ namespace Unitas.Scripting
             playTarget = null;
             playTicks = 2;
             serializedFields = new Dictionary<string, string>(StringComparer.Ordinal);
+            debuggingEnabled = false;
 
             for (int i = 2; i < args.Length; i++)
             {
@@ -151,6 +155,10 @@ namespace Unitas.Scripting
                 else if (string.Equals(arg, "--development", StringComparison.OrdinalIgnoreCase))
                 {
                     options.IsDevelopmentBuild = true;
+                }
+                else if (string.Equals(arg, "--debug", StringComparison.OrdinalIgnoreCase))
+                {
+                    debuggingEnabled = true;
                 }
                 else if (string.Equals(arg, "--untrusted", StringComparison.OrdinalIgnoreCase))
                 {
@@ -260,7 +268,8 @@ namespace Unitas.Scripting
             bool enterPlayMode,
             string? playTarget,
             int playTicks,
-            Dictionary<string, string> serializedFields)
+            Dictionary<string, string> serializedFields,
+            bool debuggingEnabled)
         {
             if (isGenerateIde)
             {
@@ -347,7 +356,7 @@ namespace Unitas.Scripting
                 return loopReport.Succeeded ? 0 : 1;
             }
 
-            ScriptCompilationResult result = ScriptCompilation.CompileProject(projectRoot, options);
+            ScriptCompilationResult result = ScriptCompilation.CompileProject(projectRoot, options, debuggingEnabled);
             IReadOnlyList<ScriptDiagnostic> diagnostics = result.Diagnostics;
             for (int i = 0; i < diagnostics.Count; i++)
             {

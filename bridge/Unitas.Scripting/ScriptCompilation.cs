@@ -59,32 +59,7 @@ namespace Unitas.Scripting
                 return _bincoreDir;
             }
 
-            List<string> roots = new List<string>();
-            string? envRoot = Environment.GetEnvironmentVariable("DOTNET_ROOT");
-            if (!string.IsNullOrEmpty(envRoot))
-            {
-                roots.Add(envRoot);
-            }
-
-            string home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
-            if (!string.IsNullOrEmpty(home))
-            {
-                roots.Add(Path.Combine(home, ".dotnet"));
-            }
-
-            roots.Add("/Users/mistlight/.dotnet");
-            roots.Add("/usr/local/share/dotnet");
-            roots.Add("/opt/homebrew/share/dotnet");
-
-            string? runtimeDir = Path.GetDirectoryName(typeof(string).Assembly.Location);
-            if (!string.IsNullOrEmpty(runtimeDir))
-            {
-                DirectoryInfo? dir = new DirectoryInfo(runtimeDir);
-                if (dir.Parent?.Parent?.Parent != null)
-                {
-                    roots.Add(dir.Parent.Parent.Parent.FullName);
-                }
-            }
+            List<string> roots = DotnetSdkRoots.GetCandidateRoots();
 
             for (int i = 0; i < roots.Count; i++)
             {
@@ -109,6 +84,94 @@ namespace Unitas.Scripting
 
             _bincoreDir = string.Empty;
             return _bincoreDir;
+        }
+    }
+
+    /// <summary>
+    /// Locates the .NET SDK roots the compile path may use: DOTNET_ROOT, the
+    /// per-user install, the running host, every `dotnet` on PATH, and the
+    /// well-known system install locations.
+    /// </summary>
+    internal static class DotnetSdkRoots
+    {
+        internal static List<string> GetCandidateRoots()
+        {
+            List<string> roots = new List<string>();
+
+            AddRoot(roots, Environment.GetEnvironmentVariable("DOTNET_ROOT"));
+
+            string home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+            if (!string.IsNullOrEmpty(home))
+            {
+                AddRoot(roots, Path.Combine(home, ".dotnet"));
+            }
+
+            string? processPath = Environment.ProcessPath;
+            if (!string.IsNullOrEmpty(processPath))
+            {
+                AddRoot(roots, Path.GetDirectoryName(processPath));
+            }
+
+            AddRootsFromPath(roots);
+
+            AddRoot(roots, "/usr/local/share/dotnet");
+            AddRoot(roots, "/opt/homebrew/share/dotnet");
+
+            string? runtimeDir = Path.GetDirectoryName(typeof(string).Assembly.Location);
+            if (!string.IsNullOrEmpty(runtimeDir))
+            {
+                DirectoryInfo? dir = new DirectoryInfo(runtimeDir);
+                if (dir.Parent?.Parent?.Parent != null)
+                {
+                    AddRoot(roots, dir.Parent.Parent.Parent.FullName);
+                }
+            }
+
+            return roots;
+        }
+
+        private static void AddRootsFromPath(List<string> roots)
+        {
+            string? pathVariable = Environment.GetEnvironmentVariable("PATH");
+            if (string.IsNullOrEmpty(pathVariable))
+            {
+                return;
+            }
+
+            string exeName = OperatingSystem.IsWindows() ? "dotnet.exe" : "dotnet";
+            string[] entries = pathVariable.Split(Path.PathSeparator);
+            for (int i = 0; i < entries.Length; i++)
+            {
+                string entry = entries[i];
+                if (string.IsNullOrEmpty(entry))
+                {
+                    continue;
+                }
+
+                if (File.Exists(Path.Combine(entry, exeName)))
+                {
+                    AddRoot(roots, entry);
+                }
+            }
+        }
+
+        private static void AddRoot(List<string> roots, string? candidate)
+        {
+            if (string.IsNullOrEmpty(candidate))
+            {
+                return;
+            }
+
+            string full = Path.GetFullPath(candidate);
+            for (int i = 0; i < roots.Count; i++)
+            {
+                if (string.Equals(roots[i], full, StringComparison.Ordinal))
+                {
+                    return;
+                }
+            }
+
+            roots.Add(full);
         }
     }
 
@@ -192,6 +255,19 @@ namespace Unitas.Scripting
 
         public static ScriptCompilationResult CompileProject(string projectRoot, ScriptCompilationOptions? options = null)
         {
+            return CompileProject(projectRoot, options, false);
+        }
+
+        /// <summary>
+        /// Compiles a project's scripts. With <paramref name="debuggingEnabled"/> the user
+        /// sources are rewritten with debug probes, the produced assemblies reference
+        /// Unitas.Debugging, and that assembly is copied next to them in the output directory.
+        /// </summary>
+        public static ScriptCompilationResult CompileProject(
+            string projectRoot,
+            ScriptCompilationOptions? options,
+            bool debuggingEnabled)
+        {
             if (string.IsNullOrEmpty(projectRoot))
             {
                 throw new ArgumentException("Project root must be non-empty.", nameof(projectRoot));
@@ -218,6 +294,24 @@ namespace Unitas.Scripting
                     0,
                     string.Empty));
                 return BuildFailedResult(outputDirectory, new List<CompiledAssemblyRecord>(), diagnostics);
+            }
+
+            string? debuggingReferencePath = null;
+            if (debuggingEnabled)
+            {
+                debuggingReferencePath = ResolveDebuggingAssemblyPath();
+                if (string.IsNullOrEmpty(debuggingReferencePath))
+                {
+                    diagnostics.Add(new ScriptDiagnostic(
+                        "UNITAS1031",
+                        ScriptDiagnosticSeverity.Error,
+                        "Unable to locate Unitas.Debugging.dll; the instrumented compile needs the debugging assembly.",
+                        fullProjectRoot,
+                        0,
+                        0,
+                        string.Empty));
+                    return BuildFailedResult(outputDirectory, new List<CompiledAssemblyRecord>(), diagnostics);
+                }
             }
 
             Dictionary<string, string> guidToPath = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
@@ -300,6 +394,7 @@ namespace Unitas.Scripting
                 allCompatibleManagedDllsByFileName,
                 pathToGuid,
                 pluginRecords,
+                debuggingReferencePath,
                 diagnostics);
         }
 
@@ -493,6 +588,7 @@ namespace Unitas.Scripting
             Dictionary<string, string> allCompatibleManagedDllsByFileName,
             Dictionary<string, string> pathToGuid,
             List<DiscoveredPluginRecord> pluginRecords,
+            string? debuggingReferencePath,
             List<ScriptDiagnostic> diagnostics)
         {
             string stagingDir = Path.Combine(
@@ -523,6 +619,7 @@ namespace Unitas.Scripting
                     allCompatibleManagedDllsByFileName,
                     previousHashes,
                     newHashes,
+                    debuggingReferencePath,
                     diagnostics,
                     out List<CompiledAssemblyRecord> compiledRecords,
                     out List<string> recompiledNames,
@@ -545,6 +642,7 @@ namespace Unitas.Scripting
                     previousHashes,
                     newHashes,
                     compiledDllPathByAssembly,
+                    debuggingReferencePath,
                     diagnostics,
                     out List<ScriptGuidBinding> allBindings,
                     out string? generatedGlueDllPath,
@@ -564,7 +662,8 @@ namespace Unitas.Scripting
                     diagnostics,
                     recompiledNames,
                     allBindings,
-                    pluginRecords);
+                    pluginRecords,
+                    debuggingReferencePath);
             }
             finally
             {
@@ -597,6 +696,7 @@ namespace Unitas.Scripting
             Dictionary<string, string> allCompatibleManagedDllsByFileName,
             Dictionary<string, string> previousHashes,
             Dictionary<string, string> newHashes,
+            string? debuggingReferencePath,
             List<ScriptDiagnostic> diagnostics,
             out List<CompiledAssemblyRecord> compiledRecords,
             out List<string> recompiledNames,
@@ -645,13 +745,20 @@ namespace Unitas.Scripting
                     directDeps,
                     compiledDllPathByAssembly);
 
+                bool debuggingEnabled = !string.IsNullOrEmpty(debuggingReferencePath);
+                if (debuggingEnabled && !externalRefs.Contains(debuggingReferencePath!))
+                {
+                    externalRefs.Add(debuggingReferencePath!);
+                }
+
                 string inputHash = ComputeAssemblyInputHash(
                     model,
                     sources,
                     sortedDefines,
                     assemblyRspMap[asmName],
                     directDeps,
-                    newHashes);
+                    newHashes,
+                    debuggingEnabled);
                 newHashes[asmName] = inputHash;
 
                 bool dependencyRecompiled = false;
@@ -696,7 +803,8 @@ namespace Unitas.Scripting
                     model.AllowUnsafeCode || assemblyRspMap[asmName].AllowUnsafe,
                     assemblyRspMap[asmName],
                     !effectiveOptions.IsEditor,
-                    diagnostics);
+                    diagnostics,
+                    debuggingEnabled ? BuildInstrumentedSources(sources, sortedDefines) : null);
 
                 if (!compileOk || HasErrorDiagnostics(diagnostics))
                 {
@@ -734,6 +842,7 @@ namespace Unitas.Scripting
             Dictionary<string, string> previousHashes,
             Dictionary<string, string> newHashes,
             Dictionary<string, string> compiledDllPathByAssembly,
+            string? debuggingReferencePath,
             List<ScriptDiagnostic> diagnostics,
             out List<ScriptGuidBinding> allBindings,
             out string? generatedGlueDllPath,
@@ -814,6 +923,11 @@ namespace Unitas.Scripting
                     }
                 }
 
+                if (!string.IsNullOrEmpty(debuggingReferencePath) && !glueRefs.Contains(debuggingReferencePath))
+                {
+                    glueRefs.Add(debuggingReferencePath);
+                }
+
                 string stagedGlueDll = Path.Combine(stagingDir, GeneratedGlueAssemblyName + ".dll");
                 List<ScriptDiagnostic> glueDiagnostics = new List<ScriptDiagnostic>();
                 bool glueOk = RunCscCompilation(
@@ -852,7 +966,8 @@ namespace Unitas.Scripting
             List<ScriptDiagnostic> diagnostics,
             List<string> recompiledNames,
             List<ScriptGuidBinding> allBindings,
-            List<DiscoveredPluginRecord> pluginRecords)
+            List<DiscoveredPluginRecord> pluginRecords,
+            string? debuggingReferencePath)
         {
             foreach (KeyValuePair<string, string> kv in compiledDllPathByAssembly)
             {
@@ -864,6 +979,8 @@ namespace Unitas.Scripting
                     File.Copy(stagedOrFinalPath, targetFinalPath, true);
                 }
             }
+
+            PublishDebuggingAssembly(outputDirectory, debuggingReferencePath);
 
             SaveCompilationState(outputDirectory, newHashes);
 
@@ -896,6 +1013,121 @@ namespace Unitas.Scripting
             }
 
             return successResult;
+        }
+
+        /// <summary>
+        /// Keeps the output directory's Unitas.Debugging.dll in step with the compile:
+        /// an instrumented compile publishes it next to the produced assemblies, a
+        /// default compile removes the copy a previous instrumented compile left.
+        /// </summary>
+        private static void PublishDebuggingAssembly(string outputDirectory, string? debuggingReferencePath)
+        {
+            string target = Path.Combine(outputDirectory, "Unitas.Debugging.dll");
+            if (string.IsNullOrEmpty(debuggingReferencePath))
+            {
+                if (File.Exists(target))
+                {
+                    File.Delete(target);
+                }
+
+                return;
+            }
+
+            string source = Path.GetFullPath(debuggingReferencePath);
+            if (!string.Equals(source, Path.GetFullPath(target), StringComparison.Ordinal))
+            {
+                File.Copy(source, target, true);
+            }
+        }
+
+        /// <summary>
+        /// Rewrites the user sources with debug probes. The rewritten text replaces the
+        /// file on disk for the compile only; the original path stays the source path so
+        /// diagnostics and breakpoints keep pointing at the user's script.
+        /// </summary>
+        private static Dictionary<string, string> BuildInstrumentedSources(
+            List<string> sources,
+            List<string> sortedDefines)
+        {
+            HashSet<string> defines = new HashSet<string>(sortedDefines, StringComparer.Ordinal);
+            Dictionary<string, string> instrumented = new Dictionary<string, string>(StringComparer.Ordinal);
+            for (int i = 0; i < sources.Count; i++)
+            {
+                string fullPath = Path.GetFullPath(sources[i]);
+                string sourceText = File.ReadAllText(fullPath, Encoding.UTF8);
+                instrumented[fullPath] = ScriptAnalyzerAndGlueGenerator.GenerateInstrumentedScriptSource(
+                    sourceText,
+                    fullPath,
+                    true,
+                    defines);
+            }
+
+            return instrumented;
+        }
+
+        /// <summary>
+        /// Locates Unitas.Debugging.dll the way the other bridge references are located:
+        /// from a loaded assembly, from beside the running one, or from the sibling
+        /// project's build output. Never a hardcoded machine path.
+        /// </summary>
+        private static string? ResolveDebuggingAssemblyPath()
+        {
+            foreach (var assembly in AppDomain.CurrentDomain.GetAssemblies())
+            {
+                if (!string.Equals(assembly.GetName().Name, "Unitas.Debugging", StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                string location = assembly.Location;
+                if (!string.IsNullOrEmpty(location) && File.Exists(location))
+                {
+                    return location;
+                }
+            }
+
+            string baseDirectory = AppContext.BaseDirectory;
+            string beside = Path.Combine(baseDirectory, "Unitas.Debugging.dll");
+            if (File.Exists(beside))
+            {
+                return beside;
+            }
+
+            string configuration = Path.GetFileName(Path.GetDirectoryName(baseDirectory) ?? string.Empty);
+            string framework = Path.GetFileName(baseDirectory);
+            DirectoryInfo? directory = new DirectoryInfo(baseDirectory);
+            while (directory != null)
+            {
+                string projectBin = Path.Combine(directory.FullName, "Unitas.Debugging", "bin");
+                if (Directory.Exists(projectBin))
+                {
+                    string preferred = Path.Combine(projectBin, configuration, framework, "Unitas.Debugging.dll");
+                    if (File.Exists(preferred))
+                    {
+                        return preferred;
+                    }
+
+                    string[] configurations = Directory.GetDirectories(projectBin);
+                    Array.Sort(configurations, StringComparer.Ordinal);
+                    for (int i = configurations.Length - 1; i >= 0; i--)
+                    {
+                        string[] frameworks = Directory.GetDirectories(configurations[i]);
+                        Array.Sort(frameworks, StringComparer.Ordinal);
+                        for (int f = frameworks.Length - 1; f >= 0; f--)
+                        {
+                            string candidate = Path.Combine(frameworks[f], "Unitas.Debugging.dll");
+                            if (File.Exists(candidate))
+                            {
+                                return candidate;
+                            }
+                        }
+                    }
+                }
+
+                directory = directory.Parent;
+            }
+
+            return null;
         }
 
         private static ScriptCompilationResult BuildFailedResult(
@@ -1340,7 +1572,8 @@ namespace Unitas.Scripting
             bool allowUnsafe,
             ResponseFileOptions rspOptions,
             bool rejectUnguardedUnityEditorReferences,
-            List<ScriptDiagnostic> diagnostics)
+            List<ScriptDiagnostic> diagnostics,
+            Dictionary<string, string>? sourceOverrides = null)
         {
             CSharpParseOptions parseOptions = new CSharpParseOptions(
                 LanguageVersion.CSharp9,
@@ -1352,7 +1585,16 @@ namespace Unitas.Scripting
             for (int i = 0; i < sourceFiles.Count; i++)
             {
                 string fullSourcePath = Path.GetFullPath(sourceFiles[i]);
-                string sourceText = File.ReadAllText(fullSourcePath, Encoding.UTF8);
+                string sourceText;
+                if (sourceOverrides != null && sourceOverrides.TryGetValue(fullSourcePath, out string? overridden))
+                {
+                    sourceText = overridden;
+                }
+                else
+                {
+                    sourceText = File.ReadAllText(fullSourcePath, Encoding.UTF8);
+                }
+
                 syntaxTrees.Add(CSharpSyntaxTree.ParseText(sourceText, parseOptions, fullSourcePath, Encoding.UTF8));
             }
 
@@ -1789,32 +2031,7 @@ namespace Unitas.Scripting
             dotnetExecutable = string.Empty;
             cscDllPath = string.Empty;
 
-            List<string> candidateRoots = new List<string>();
-            string? envDotnetRoot = Environment.GetEnvironmentVariable("DOTNET_ROOT");
-            if (!string.IsNullOrEmpty(envDotnetRoot))
-            {
-                candidateRoots.Add(envDotnetRoot);
-            }
-
-            string userHome = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
-            if (!string.IsNullOrEmpty(userHome))
-            {
-                candidateRoots.Add(Path.Combine(userHome, ".dotnet"));
-            }
-
-            candidateRoots.Add("/Users/mistlight/.dotnet");
-            candidateRoots.Add("/usr/local/share/dotnet");
-            candidateRoots.Add("/opt/homebrew/share/dotnet");
-
-            string? runtimeDir = Path.GetDirectoryName(typeof(string).Assembly.Location);
-            if (!string.IsNullOrEmpty(runtimeDir))
-            {
-                DirectoryInfo? dir = new DirectoryInfo(runtimeDir);
-                if (dir.Parent?.Parent?.Parent != null)
-                {
-                    candidateRoots.Add(dir.Parent.Parent.Parent.FullName);
-                }
-            }
+            List<string> candidateRoots = DotnetSdkRoots.GetCandidateRoots();
 
             for (int i = 0; i < candidateRoots.Count; i++)
             {
@@ -1908,13 +2125,20 @@ namespace Unitas.Scripting
             List<string> sortedDefines,
             ResponseFileOptions rsp,
             List<string> directDeps,
-            Dictionary<string, string> currentHashes)
+            Dictionary<string, string> currentHashes,
+            bool debuggingEnabled)
         {
             StringBuilder sb = new StringBuilder();
             sb.Append("ASM:").AppendLine(model.Name);
             sb.Append("UNSAFE:").AppendLine((model.AllowUnsafeCode || rsp.AllowUnsafe).ToString(CultureInfo.InvariantCulture));
             sb.Append("DEFINES:").AppendLine(string.Join(";", sortedDefines));
             sb.Append("WARNERR:").AppendLine(rsp.WarningsAsErrors.ToString(CultureInfo.InvariantCulture));
+            if (debuggingEnabled)
+            {
+                // Only the instrumented compile needs its own cache key; a default
+                // compile keeps the hash it has always written.
+                sb.Append("DEBUG:").AppendLine("1");
+            }
 
             if (!model.IsPredefined && File.Exists(model.FilePath))
             {

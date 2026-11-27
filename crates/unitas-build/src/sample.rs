@@ -314,8 +314,19 @@ pub fn stage_roll_a_ball_bundle_for_host(
     output_dir: &Path,
     host: Option<BuildTarget>,
 ) -> Result<StagedBundle, BundleError> {
+    stage_roll_a_ball_bundle_for_host_with_script_debugging(output_dir, host, false)
+}
+
+/// The roll-a-ball sample staged with its `Managed/` payload compiled with
+/// script debugging, so a debugger can attach to the running scripts.
+pub fn stage_roll_a_ball_bundle_for_host_with_script_debugging(
+    output_dir: &Path,
+    host: Option<BuildTarget>,
+    script_debugging: bool,
+) -> Result<StagedBundle, BundleError> {
     let target = host.unwrap_or_else(BuildTarget::host);
-    let config = roll_a_ball_build_configuration(Some(target))?;
+    let config =
+        roll_a_ball_build_configuration(Some(target))?.with_script_debugging(script_debugging);
     stage_bundle_for_host(&config, output_dir, Some(target))
 }
 
