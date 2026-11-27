@@ -1706,16 +1706,14 @@ def test_verify_benchmark_entry_point_passes_and_fails(tmp_path: Path) -> None:
     assert "verify-benchmark failed: inputs-present" in stdout.getvalue()
 
 
-_TIMED_GATE_CHILD_SOURCE = """import pathlib
+_TIMED_GATE_CHILD_SOURCE = """import os
+import pathlib
 import sys
 import time
 
-marker = pathlib.Path(sys.argv[1])
-deadline = time.monotonic() + 30
-while time.monotonic() < deadline:
-    with marker.open("a", encoding="utf-8") as handle:
-        handle.write("x")
-    time.sleep(0.05)
+with pathlib.Path(sys.argv[1]).open("a", encoding="utf-8") as handle:
+    handle.write(f"{os.getpid()}\\n")
+time.sleep(30)
 """
 
 _TIMED_GATE_PARENT_SOURCE = """import subprocess
@@ -1729,6 +1727,7 @@ time.sleep(30)
 
 _TIMED_GATE_BOUND_SECONDS = 10
 _TIMED_GATE_ATTEMPTS = 2
+_TIMED_GATE_EXIT_WAIT_SECONDS = 5.0
 _RED_GATE_EXIT_CODE = 3
 
 
@@ -1741,6 +1740,48 @@ class _ScriptedClock:
         if self._readings:
             self._current = self._readings.pop(0)
         return self._current
+
+
+class _ReadyBudgetClock:
+    def __init__(self, ready: Callable[[], bool], limit_seconds: float = 15.0) -> None:
+        self._ready = ready
+        self._limit = limit_seconds
+        self._started = time.monotonic()
+        self._reading = 0.0
+
+    def __call__(self) -> float:
+        if not self._ready() and time.monotonic() - self._started <= self._limit:
+            return self._reading
+        self._reading += 1.0
+        return self._reading
+
+
+def _published_pids(path: Path) -> list[int]:
+    if not path.exists():
+        return []
+    pids: list[int] = []
+    for line in path.read_text(encoding="utf-8").splitlines():
+        try:
+            pids.append(int(line))
+        except ValueError:
+            continue
+    return pids
+
+
+def _wait_for_process_exit(pid: int, timeout: float) -> bool:
+    deadline = time.monotonic() + timeout
+    while True:
+        with contextlib.suppress(ChildProcessError):
+            os.waitpid(pid, os.WNOHANG)
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return True
+        except PermissionError:
+            return False
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(0.02)
 
 
 def _run_timed(argv: list[str], clock: Callable[[], float] = time.monotonic) -> tuple[int, str]:
@@ -1816,22 +1857,20 @@ def test_timed_gate_does_not_rerun_a_command_that_exits_non_zero() -> None:
 def test_timed_gate_kills_the_process_tree_it_started(tmp_path: Path) -> None:
     child = tmp_path / "child.py"
     parent = tmp_path / "parent.py"
-    marker = tmp_path / "grandchild.log"
+    published = tmp_path / "grandchild.pids"
     child.write_text(_TIMED_GATE_CHILD_SOURCE, encoding="utf-8")
     parent.write_text(_TIMED_GATE_PARENT_SOURCE, encoding="utf-8")
-    status = verify.run_timed(
-        ["timed", "tree-gate", "1", sys.executable, str(parent), str(child), str(marker)]
+    clock = _ReadyBudgetClock(lambda: bool(_published_pids(published)))
+    status, _output = _run_timed(
+        ["timed", "tree-gate", "1", sys.executable, str(parent), str(child), str(published)],
+        clock,
     )
     assert status == 1
-    deadline = time.monotonic() + 5
-    while time.monotonic() < deadline and not marker.exists():
-        time.sleep(0.05)
-    assert marker.exists()
-    time.sleep(0.2)
-    size = marker.stat().st_size
-    assert size > 0
-    time.sleep(0.5)
-    assert marker.stat().st_size == size
+    pids = _published_pids(published)
+    assert pids, "the timed gate never started the grandchild it had to kill"
+    for pid in pids:
+        gone = _wait_for_process_exit(pid, _TIMED_GATE_EXIT_WAIT_SECONDS)
+        assert gone, f"the timed gate left the grandchild {pid} alive"
 
 
 def test_size_gate_reports_file_exceeding_max_lines(tmp_path: Path) -> None:
