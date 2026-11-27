@@ -387,7 +387,8 @@ RUST_TEST_GATE_RUNNER = "verify.py cargo-test"
 MONOLITHIC_RUST_TEST_PATTERN = re.compile(r"cargo test --workspace")
 CARGO_TEST_TARGETS = ("--workspace", "--lib", "--tests", "--bins")
 RUST_TEST_CONCURRENCY = max(4, min(12, os.cpu_count() or 4))
-RUST_TEST_PACKAGE_CONCURRENCY = 4
+RUST_TEST_PACKAGE_CONCURRENCY = 8
+RUST_TEST_HEAVIEST_PACKAGE_BINARIES = 5
 LANE_LIMIT_FACTS = (
     ("verification-policy.md", "authoritative_verify_command", "verification_enforced_limit"),
     ("verification-policy.md", "fast_path_command", "fast_path_enforced_limit"),
@@ -2562,6 +2563,21 @@ def run_one_test_binary(
     return name, completed.returncode, elapsed, output
 
 
+def run_test_binaries(
+    binaries: list[tuple[str, str, str]],
+) -> list[tuple[str, int, float, str]]:
+    package_slots: dict[str, threading.Semaphore] = {}
+    for _name, _executable, package_dir in binaries:
+        if package_dir not in package_slots:
+            package_slots[package_dir] = threading.Semaphore(RUST_TEST_PACKAGE_CONCURRENCY)
+    tasks = [
+        (name, executable, package_dir, package_slots[package_dir])
+        for name, executable, package_dir in binaries
+    ]
+    with ThreadPoolExecutor(max_workers=min(RUST_TEST_CONCURRENCY, len(tasks))) as pool:
+        return list(pool.map(run_one_test_binary, tasks))
+
+
 def run_cargo_test() -> int:
     started = time.monotonic()
     code, binaries = cargo_test_binaries()
@@ -2576,19 +2592,9 @@ def run_cargo_test() -> int:
             "cargo test --no-run compiled no test binary; the Rust test gate cannot run\n"
         )
         return 1
-    shards: dict[str, list[tuple[str, str]]] = {}
-    for name, executable, package_dir in binaries:
-        shards.setdefault(package_dir, []).append((name, executable))
-    package_slots = {
-        package_dir: threading.Semaphore(RUST_TEST_PACKAGE_CONCURRENCY) for package_dir in shards
-    }
-    tasks = [
-        (name, executable, package_dir, package_slots[package_dir])
-        for name, executable, package_dir in binaries
-    ]
-    with ThreadPoolExecutor(max_workers=min(RUST_TEST_CONCURRENCY, len(tasks))) as pool:
-        results = list(pool.map(run_one_test_binary, tasks))
+    results = run_test_binaries(binaries)
     executed = time.monotonic() - started - compiled
+    package_count = len({package_dir for _name, _executable, package_dir in binaries})
     failures = 0
     for name, code, elapsed, output in results:
         sys.stdout.write(f"rust test {name}: exit {code} ({elapsed:.2f}s)\n")
@@ -2600,7 +2606,7 @@ def run_cargo_test() -> int:
                 "gate (docs/ralph-workflow-policy/testing-policy.md)\n"
             )
     sys.stdout.write(
-        f"rust test: {len(binaries)} binaries in {len(shards)} package shards "
+        f"rust test: {len(binaries)} binaries in {package_count} package shards "
         f"(compile {compiled:.2f}s, execution {executed:.2f}s)\n"
     )
     return 1 if failures else 0

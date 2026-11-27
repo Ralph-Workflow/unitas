@@ -39,6 +39,34 @@ def test_pytest_command_matches_the_xdist_availability() -> None:
         assert command[command.index("-n") + 1] == str(verify.PYTEST_WORKERS)
 
 
+def test_rust_test_package_concurrency_covers_the_heaviest_package() -> None:
+    assert verify.RUST_TEST_PACKAGE_CONCURRENCY >= verify.RUST_TEST_HEAVIEST_PACKAGE_BINARIES
+    assert verify.RUST_TEST_PACKAGE_CONCURRENCY <= verify.RUST_TEST_CONCURRENCY
+
+
+def test_rust_test_binaries_of_one_package_are_not_serialized(tmp_path: Path) -> None:
+    package = tmp_path / "pkg"
+    package.mkdir()
+    order = tmp_path / "order.txt"
+    script = tmp_path / "fake_test.sh"
+    script.write_text(
+        f"#!/bin/sh\nprintf 's' >> '{order}'\nsleep 0.5\nprintf 'e' >> '{order}'\n",
+        encoding="utf-8",
+    )
+    script.chmod(0o755)
+    count = min(
+        verify.RUST_TEST_CONCURRENCY,
+        verify.RUST_TEST_PACKAGE_CONCURRENCY,
+        verify.RUST_TEST_HEAVIEST_PACKAGE_BINARIES,
+    )
+    binaries = [(f"fake{index}", str(script), str(package)) for index in range(count)]
+    results = verify.run_test_binaries(binaries)
+    assert [code for _name, code, _elapsed, _output in results] == [0] * count
+    written = order.read_text(encoding="utf-8")
+    assert written.count("s") == count
+    assert written.index("e") >= count
+
+
 def test_placeholder_tokens_are_detected() -> None:
     corpus = {"testing-policy.md": "RALPH-FACT: test_command: REPLACE-ME"}
     findings = verify.check_placeholders(corpus)
