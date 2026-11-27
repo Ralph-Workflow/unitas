@@ -168,7 +168,6 @@ namespace Unitas.Bridge.Scripting
             Register(hi, lo, factory, handlerFactory);
         }
 
-        /// <summary>The built-in uGUI components a Unity scene states its interface with.</summary>
         public enum BuiltInUiComponent
         {
             None = 0,
@@ -178,10 +177,6 @@ namespace Unitas.Bridge.Scripting
             CanvasScaler,
         }
 
-        /// <summary>
-        /// The script GUIDs Unity assigns to the built-in uGUI components. The
-        /// runtime hands them over as the high and low half of the GUID.
-        /// </summary>
         private static class BuiltInUiGuids
         {
             internal const ulong ButtonHi = 0x4e29b1a8efbd4b44UL;
@@ -194,10 +189,6 @@ namespace Unitas.Bridge.Scripting
             internal const ulong CanvasScalerLo = 0x3bb63640046fad76UL;
         }
 
-        /// <summary>
-        /// Registers the built-in uGUI components with the managed factories, so a
-        /// scene that states its interface with them resolves to the managed ones.
-        /// </summary>
         public static void RegisterBuiltInUiComponents()
         {
             Register<UnityEngine.UI.Button>(
@@ -218,7 +209,6 @@ namespace Unitas.Bridge.Scripting
                 () => new UnityEngine.UI.CanvasScaler());
         }
 
-        /// <summary>The built-in uGUI component a script GUID names, if it names one.</summary>
         public static BuiltInUiComponent GetBuiltInUiComponent(ulong guidHi, ulong guidLo)
         {
             if (guidHi == BuiltInUiGuids.ButtonHi && guidLo == BuiltInUiGuids.ButtonLo)
@@ -383,6 +373,53 @@ namespace Unitas.Bridge.Scripting
 
         public static void LoadGlueAssembly(string assemblyPath)
         {
+            AssemblyLoadContext context = CreateCollectibleContext("UnitasGlue", Path.GetDirectoryName(Path.GetFullPath(assemblyPath ?? string.Empty)) ?? string.Empty);
+            LoadGlueAssembly(assemblyPath ?? string.Empty, context);
+        }
+
+        public static AssemblyLoadContext CreateCollectibleContext(string namePrefix, string managedDir)
+        {
+            string prefix = string.IsNullOrEmpty(namePrefix) ? "UnitasGlue" : namePrefix;
+            AssemblyLoadContext context = new AssemblyLoadContext(
+                prefix + "_" + Guid.NewGuid().ToString("N", CultureInfo.InvariantCulture),
+                isCollectible: true);
+            context.Resolving += (alc, assemblyName) =>
+            {
+                string simpleName = assemblyName.Name ?? string.Empty;
+                foreach (var existing in AssemblyLoadContext.Default.Assemblies)
+                {
+                    if (string.Equals(existing.GetName().Name, simpleName, StringComparison.OrdinalIgnoreCase))
+                    {
+                        return existing;
+                    }
+                }
+
+                foreach (var existing in alc.Assemblies)
+                {
+                    if (string.Equals(existing.GetName().Name, simpleName, StringComparison.OrdinalIgnoreCase))
+                    {
+                        return existing;
+                    }
+                }
+
+                if (!string.IsNullOrEmpty(managedDir))
+                {
+                    string siblingPath = Path.Combine(managedDir, simpleName + ".dll");
+                    if (File.Exists(siblingPath))
+                    {
+                        using FileStream siblingStream = File.OpenRead(siblingPath);
+                        return alc.LoadFromStream(siblingStream);
+                    }
+                }
+
+                return null;
+            };
+            return context;
+        }
+
+        public static void LoadGlueAssembly(string assemblyPath, AssemblyLoadContext context)
+        {
+            ArgumentNullException.ThrowIfNull(context);
             if (string.IsNullOrEmpty(assemblyPath))
             {
                 throw new ArgumentException("Assembly path must be non-empty.", nameof(assemblyPath));
@@ -394,40 +431,102 @@ namespace Unitas.Bridge.Scripting
                 throw new FileNotFoundException("Glue assembly was not found.", fullPath);
             }
 
-            string baseDir = Path.GetDirectoryName(fullPath) ?? string.Empty;
-            AssemblyLoadContext context = new AssemblyLoadContext(
-                "UnitasGlue_" + Guid.NewGuid().ToString("N", CultureInfo.InvariantCulture),
-                isCollectible: true);
-            context.Resolving += (alc, assemblyName) =>
+            string simpleName = Path.GetFileNameWithoutExtension(fullPath);
+            foreach (var existing in AssemblyLoadContext.Default.Assemblies)
             {
-                string simpleName = assemblyName.Name ?? string.Empty;
-                var loadedInDefault = AssemblyLoadContext.Default.Assemblies;
-                foreach (var existing in loadedInDefault)
+                if (string.Equals(existing.GetName().Name, simpleName, StringComparison.OrdinalIgnoreCase))
                 {
-                    if (string.Equals(existing.GetName().Name, simpleName, StringComparison.OrdinalIgnoreCase))
-                    {
-                        return existing;
-                    }
+                    return;
                 }
+            }
 
-                if (!string.IsNullOrEmpty(baseDir))
+            foreach (var existing in context.Assemblies)
+            {
+                if (string.Equals(existing.GetName().Name, simpleName, StringComparison.OrdinalIgnoreCase))
                 {
-                    string siblingPath = Path.Combine(baseDir, simpleName + ".dll");
-                    if (File.Exists(siblingPath))
-                    {
-                        using FileStream siblingStream = File.OpenRead(siblingPath);
-                        return alc.LoadFromStream(siblingStream);
-                    }
+                    RuntimeHelpers.RunModuleConstructor(existing.ManifestModule.ModuleHandle);
+                    existing.CreateInstance("UnitasGenerated.GlueInitializer");
+                    existing.CreateInstance("UnitasGeneratedGlue");
+                    return;
                 }
-
-                return null;
-            };
+            }
 
             using FileStream stream = File.OpenRead(fullPath);
             var assembly = context.LoadFromStream(stream);
             RuntimeHelpers.RunModuleConstructor(assembly.ManifestModule.ModuleHandle);
             assembly.CreateInstance("UnitasGenerated.GlueInitializer");
             assembly.CreateInstance("UnitasGeneratedGlue");
+        }
+
+        public static void ClearSession()
+        {
+            List<UnityEngine.Object> liveObjects = UnityEngine.Object.SnapshotLiveObjects();
+            for (int i = 0; i < liveObjects.Count; i++)
+            {
+                UnityEngine.Object candidate = liveObjects[i];
+                if (candidate is UnityEngine.UI.Button button)
+                {
+                    button.onClick.RemoveAllListeners();
+                }
+
+                if (candidate is MonoBehaviour behaviour)
+                {
+                    CoroutineScheduler.OwnerDestroyed(behaviour);
+                    InvokeScheduler.OwnerDestroyed(behaviour);
+                    Unitas.Bridge.Messaging.MessageDispatcher.UnregisterHandler(behaviour);
+                }
+
+                if (candidate is GameObject gameObject)
+                {
+                    IReadOnlyList<Component> components = gameObject.Components;
+                    for (int c = 0; c < components.Count; c++)
+                    {
+                        Component component = components[c];
+                        if (component is UnityEngine.UI.Button childButton)
+                        {
+                            childButton.onClick.RemoveAllListeners();
+                        }
+
+                        if (component is MonoBehaviour childBehaviour)
+                        {
+                            CoroutineScheduler.OwnerDestroyed(childBehaviour);
+                            InvokeScheduler.OwnerDestroyed(childBehaviour);
+                            Unitas.Bridge.Messaging.MessageDispatcher.UnregisterHandler(childBehaviour);
+                        }
+
+                        UnityEngine.Object.Destroy(component);
+                        UnityEngine.Object.DeregisterLiveObject(component);
+                    }
+
+                    UnityEngine.Object.DestroySceneObject(gameObject);
+                }
+
+                UnityEngine.Object.Destroy(candidate);
+                UnityEngine.Object.DeregisterLiveObject(candidate);
+            }
+
+            UnityEngine.Object.FlushPendingDestroys(new List<UnityEngine.Object>());
+            Transform probeTransform = new Transform();
+            _ = probeTransform.GetSiblingIndex();
+            UnityEngine.Object.DestroyImmediate(probeTransform);
+            UnityEngine.UI.UiButtons.Find(ulong.MaxValue);
+            CoroutineScheduler.StopAll();
+            InvokeScheduler.StopAll();
+            UnitySynchronizationContext.Reset();
+            UnityEngine.InputSystem.InputSystem.Reset();
+            Application.ClearEvents();
+            UnityEngine.SceneManagement.SceneManager.ClearBuildScenes();
+            Resources.Clear();
+            LogRecorder.Clear();
+            LogRecorder.CurrentOrigin = null;
+            RuntimeInitializeOnLoadMethodAttribute.ClearRegisteredMethods();
+            Component.ClearAttributeRegistrations();
+            MonoBehaviour.ClearExecutionOrderOverrides();
+            MonoBehaviour.ClearRegisteredDefaultExecutionOrders();
+            ExecutionOrderSettings.Clear();
+            EditorMethodRegistry.Clear();
+            Unitas.Bridge.Messaging.MessageDispatcher.Clear();
+            Clear();
         }
 
         static ScriptGlueRegistry()

@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::Arc;
 
 use unitas_asset::scene::{MeshRendererComponent, RenderBinding, SpriteDrawMode};
@@ -1126,8 +1126,6 @@ impl Runtime {
     }
 }
 
-/// The material a scene renderer draws with: its colour, the maps its
-/// material declares and the surface floats the shader reads.
 fn render_material_for(renderer: &MeshRendererComponent) -> RenderMaterial {
     RenderMaterial {
         color: [
@@ -1181,42 +1179,23 @@ fn sprite_model(transform: &Transform, sprite: &RenderSprite) -> Mat4 {
     crate::presenter::transform_to_mat4(transform) * scale
 }
 
-/// The texture at a path as the shader reads it, decoded with the asset
-/// import path and linearised when the importer says it holds colour.
 fn load_texture_image(path: Option<&Path>) -> Option<Image> {
     let path = path?;
-    let bytes = std::fs::read(path).ok()?;
-    let name = path.file_name().and_then(|name| name.to_str())?;
-    let settings = texture_import_settings(path);
-    let imported = unitas_asset::texture::import::import_texture(&bytes, name, &settings).ok()?;
-    let mut image = image_from_decoded(&imported.texture);
-    if !settings.is_linear() {
+    let cooked = unitas_asset::texture::load_or_cook_texture(path)?;
+    let mut image = image_from_cooked(&cooked);
+    if cooked.srgb {
         linearize_image(&mut image);
     }
     Some(image)
 }
 
-/// The importer settings of the texture beside its path, which say whether it
-/// holds colour or a normal map.
-fn texture_import_settings(path: &Path) -> unitas_asset::texture::import::TextureImportSettings {
-    let mut meta = path.as_os_str().to_os_string();
-    meta.push(".meta");
-    let text = std::fs::read_to_string(PathBuf::from(meta)).ok();
-    match text {
-        Some(text) => unitas_asset::texture::import::TextureImportSettings::from_meta_text(&text)
-            .unwrap_or_default(),
-        None => unitas_asset::texture::import::TextureImportSettings::default(),
-    }
-}
-
-fn image_from_decoded(texture: &unitas_asset::texture::import::DecodedTexture) -> Image {
-    let rgba = unitas_asset::texture::import::texture_to_rgba8(texture);
-    let mut image = Image::new(texture.width, texture.height);
+fn image_from_cooked(cooked: &unitas_asset::texture::CookedTexture) -> Image {
+    let mut image = Image::new(cooked.width, cooked.height);
     for (index, pixel) in image.pixels.iter_mut().enumerate() {
         let offset = index * 4;
-        pixel[0] = rgba.get(offset).copied().unwrap_or(0);
-        pixel[1] = rgba.get(offset + 1).copied().unwrap_or(0);
-        pixel[2] = rgba.get(offset + 2).copied().unwrap_or(0);
+        pixel[0] = cooked.rgba.get(offset).copied().unwrap_or(0);
+        pixel[1] = cooked.rgba.get(offset + 1).copied().unwrap_or(0);
+        pixel[2] = cooked.rgba.get(offset + 2).copied().unwrap_or(0);
     }
     image
 }
@@ -1358,6 +1337,51 @@ SpriteRenderer:
         assert_eq!(sprites[1].color, [0.25, 0.5, 0.75, 1.0]);
         assert!((sprites[1].model.get(0, 0) - (-2.0)).abs() < 1e-6);
         assert!((sprites[1].model.get(1, 1) - 1.5).abs() < 1e-6);
+        Ok(())
+    }
+
+    #[test]
+    fn load_texture_image_reads_from_bundle_cooked_manifest_without_raw_source_file()
+    -> Result<(), Box<dyn std::error::Error>> {
+        use unitas_asset::texture::COOKED_DIR_NAME;
+        use unitas_asset::texture::cook_project_textures;
+
+        let dir = std::env::temp_dir().join(format!(
+            "unitas_runtime_cooked_bundle_tex_{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        let project_dir = dir.join("project");
+        let bundle_dir = dir.join("bundle");
+        let cache_dir = dir.join("cache");
+        std::fs::create_dir_all(project_dir.join("Assets/Textures"))?;
+        std::fs::create_dir_all(bundle_dir.join("Assets/Textures"))?;
+
+        let src_tex = project_dir.join("Assets/Textures/Tile.tga");
+        write_test_tga(&src_tex, 4, 4, [255, 0, 0])?;
+        let meta = "fileFormatVersion: 2\nguid: cccccccccccccccccccccccccccccccc\nTextureImporter:\n  sRGBTexture: 0\n  textureType: 0\n";
+        std::fs::write(project_dir.join("Assets/Textures/Tile.tga.meta"), meta)?;
+        std::fs::write(bundle_dir.join("Assets/Textures/Tile.tga.meta"), meta)?;
+        std::fs::write(bundle_dir.join("bundle.manifest"), "format_version=1\n")?;
+
+        let (manifest, report) =
+            cook_project_textures(&project_dir, &cache_dir, &bundle_dir.join(COOKED_DIR_NAME))?;
+        assert_eq!(report.imported, 1);
+        assert_eq!(manifest.entries.len(), 1);
+
+        let staged_virtual_tex_path = bundle_dir.join("Assets/Textures/Tile.tga");
+        assert!(!staged_virtual_tex_path.exists());
+
+        let image = load_texture_image(Some(&staged_virtual_tex_path))
+            .ok_or("expected cooked texture to load from bundle Cooked/ manifest")?;
+        assert_eq!(image.width, 4);
+        assert_eq!(image.height, 4);
+        assert_eq!(image.pixels[0], [255, 0, 0]);
+
+        let unindexed_bundle_tex = bundle_dir.join("Assets/Textures/Missing.tga");
+        assert!(load_texture_image(Some(&unindexed_bundle_tex)).is_none());
+
+        let _ = std::fs::remove_dir_all(&dir);
         Ok(())
     }
 }

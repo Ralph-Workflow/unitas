@@ -5,6 +5,7 @@ pub enum TargetOs {
     Windows,
     MacOs,
     Linux,
+    Web,
 }
 
 impl TargetOs {
@@ -13,6 +14,7 @@ impl TargetOs {
             TargetOs::Windows => "windows",
             TargetOs::MacOs => "macos",
             TargetOs::Linux => "linux",
+            TargetOs::Web => "web",
         }
     }
 
@@ -21,6 +23,7 @@ impl TargetOs {
             TargetOs::Windows => "Windows",
             TargetOs::MacOs => "macOS",
             TargetOs::Linux => "Linux",
+            TargetOs::Web => "Web",
         }
     }
 
@@ -29,6 +32,7 @@ impl TargetOs {
             "windows" => Some(TargetOs::Windows),
             "macos" => Some(TargetOs::MacOs),
             "linux" => Some(TargetOs::Linux),
+            "web" | "webgl" => Some(TargetOs::Web),
             _ => None,
         }
     }
@@ -44,6 +48,7 @@ impl fmt::Display for TargetOs {
 pub enum TargetArch {
     X86_64,
     Arm64,
+    Wasm32,
 }
 
 impl TargetArch {
@@ -51,6 +56,7 @@ impl TargetArch {
         match self {
             TargetArch::X86_64 => "x86_64",
             TargetArch::Arm64 => "aarch64",
+            TargetArch::Wasm32 => "wasm32",
         }
     }
 
@@ -58,6 +64,7 @@ impl TargetArch {
         match self {
             TargetArch::X86_64 => "x86-64",
             TargetArch::Arm64 => "ARM64",
+            TargetArch::Wasm32 => "Wasm32",
         }
     }
 
@@ -65,6 +72,7 @@ impl TargetArch {
         match arch {
             "x86_64" => Some(TargetArch::X86_64),
             "aarch64" | "arm64" => Some(TargetArch::Arm64),
+            "wasm32" => Some(TargetArch::Wasm32),
             _ => None,
         }
     }
@@ -107,14 +115,19 @@ impl BuildTarget {
         os: TargetOs::Linux,
         arch: TargetArch::Arm64,
     };
+    pub const WEB_WASM32: Self = Self {
+        os: TargetOs::Web,
+        arch: TargetArch::Wasm32,
+    };
 
-    pub const ALL: [Self; 6] = [
+    pub const ALL: [Self; 7] = [
         Self::WINDOWS_X86_64,
         Self::WINDOWS_ARM64,
         Self::MACOS_X86_64,
         Self::MACOS_ARM64,
         Self::LINUX_X86_64,
         Self::LINUX_ARM64,
+        Self::WEB_WASM32,
     ];
 
     pub const fn new(os: TargetOs, arch: TargetArch) -> Self {
@@ -171,6 +184,7 @@ impl BuildTarget {
             (TargetOs::MacOs, TargetArch::Arm64) => "aarch64-apple-darwin",
             (TargetOs::Linux, TargetArch::X86_64) => "x86_64-unknown-linux-gnu",
             (TargetOs::Linux, TargetArch::Arm64) => "aarch64-unknown-linux-gnu",
+            (TargetOs::Web, _) | (_, TargetArch::Wasm32) => "wasm32-unknown-unknown",
         }
     }
 
@@ -178,6 +192,7 @@ impl BuildTarget {
         match (self.os, self.arch) {
             (TargetOs::Windows, TargetArch::X86_64) => &["x86_64-pc-windows-msvc"],
             (TargetOs::Windows, TargetArch::Arm64) => &["aarch64-pc-windows-msvc"],
+            (TargetOs::Web, _) | (_, TargetArch::Wasm32) => &["wasm32-unknown-emscripten"],
             _ => &[],
         }
     }
@@ -190,6 +205,7 @@ impl BuildTarget {
             (TargetOs::MacOs, TargetArch::Arm64) => "osx-arm64",
             (TargetOs::Linux, TargetArch::X86_64) => "linux-x64",
             (TargetOs::Linux, TargetArch::Arm64) => "linux-arm64",
+            (TargetOs::Web, _) | (_, TargetArch::Wasm32) => "browser-wasm",
         }
     }
 
@@ -200,6 +216,7 @@ impl BuildTarget {
             (TargetOs::MacOs, _) => "clang",
             (TargetOs::Linux, TargetArch::X86_64) => "x86_64-linux-gnu-gcc",
             (TargetOs::Linux, TargetArch::Arm64) => "aarch64-linux-gnu-gcc",
+            (TargetOs::Web, _) | (_, TargetArch::Wasm32) => "emcc",
         }
     }
 
@@ -222,6 +239,13 @@ impl BuildTarget {
                 }
             }
             TargetOs::MacOs | TargetOs::Linux => base.to_string(),
+            TargetOs::Web => {
+                if base.ends_with(".wasm") {
+                    base.to_string()
+                } else {
+                    format!("{base}.wasm")
+                }
+            }
         }
     }
 
@@ -363,6 +387,10 @@ mod tests {
         assert_eq!(
             BuildTarget::LINUX_X86_64.executable_name("DemoGame"),
             "DemoGame"
+        );
+        assert_eq!(
+            BuildTarget::WEB_WASM32.executable_name("DemoGame"),
+            "DemoGame.wasm"
         );
     }
 }

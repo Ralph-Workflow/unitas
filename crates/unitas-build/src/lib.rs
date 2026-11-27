@@ -1,6 +1,7 @@
 pub mod bundle;
 pub mod config;
 pub mod control;
+pub mod cooked;
 pub mod licensing;
 pub mod package;
 pub mod player;
@@ -27,7 +28,8 @@ pub use config::{BuildConfiguration, BuildMode, BuildValidationError, ProductIde
 pub use package::{
     attempt_desktop_target, attempt_desktop_targets, desktop_package_targets,
     package_desktop_target, package_desktop_targets, package_linux_app, package_macos_app,
-    package_windows_app, PackageError, PackagedApp, PackagedPlayer, PackagedTarget,
+    package_web_app, package_windows_app, PackageError, PackagedApp, PackagedPlayer,
+    PackagedTarget,
 };
 pub use player::{
     apply_content_update_to_player, build_project, build_project_for_host, decode_bmp_bytes,
@@ -55,6 +57,7 @@ pub use sample::{
 pub use targets::{BuildTarget, TargetArch, TargetOs, TargetStatus};
 pub use toolchain::{
     evaluate_availability, packaging_targets, probe_target_availability, required_toolchain,
-    target_availability_report, TargetAvailability, TargetToolchain, ToolPresence, ToolchainCause,
-    ToolchainProbe, ToolchainRequirement, UnavailableToolchain,
+    target_availability_report, web_runtime_wasm32_gaps, TargetAvailability, TargetToolchain,
+    ToolPresence, ToolchainCause, ToolchainProbe, ToolchainRequirement, UnavailableToolchain,
+    WebRuntimeCompileGap, WEB_RUNTIME_WASM32_GAPS,
 };

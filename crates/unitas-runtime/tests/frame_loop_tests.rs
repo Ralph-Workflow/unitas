@@ -3,9 +3,11 @@ use std::path::Path;
 use std::sync::Mutex;
 
 use unitas_animation::{
-    AnimationClip, AnimatorController, AnimatorState, StateMotion, WrapMode,
-    encode_controller_binary,
+    AnimationClip, AnimatorController, AnimatorState, CurveBinding, CurveBindingTarget, FloatCurve,
+    Keyframe, StateMotion, WrapMode, encode_controller_binary,
 };
+use unitas_core::{EntityId, Transform};
+use unitas_jobs::JobSystem;
 use unitas_runtime::{
     Callbacks, DEFAULT_MAXIMUM_DELTA_TIME, Runtime, test_read_path_buffer, test_write_path_buffer,
     unitas_runtime_animator_attach, unitas_runtime_animator_controller_create,
@@ -23,7 +25,6 @@ const FIXED_STEPS_IN_TEN_SECONDS: usize = 500;
 
 static FIXED_STEPS: Mutex<usize> = Mutex::new(0);
 static UPDATE_DELTAS: Mutex<Vec<f64>> = Mutex::new(Vec::new());
-// The counter tests share FIXED_STEPS and UPDATE_DELTAS, so they run one at a time.
 static FRAME_LOOP_RUN_LOCK: Mutex<()> = Mutex::new(());
 
 struct AnimatorProbe {
@@ -313,5 +314,184 @@ fn frame_loop_maximum_delta_time_abi_round_trips_the_configured_value() -> Resul
         unitas_runtime_maximum_delta_time(handle),
         DEFAULT_MAXIMUM_DELTA_TIME
     );
+    Ok(())
+}
+
+fn build_parallel_animation_controller(seed: usize) -> AnimatorController {
+    let offset = (seed as f32) * 0.25 + 1.0;
+    let speed_factor = 1.0 + ((seed % 7) as f32) * 0.15;
+    let clip = AnimationClip::new(
+        format!("Move_{seed}"),
+        2.0,
+        60.0,
+        WrapMode::Loop,
+        vec![
+            CurveBinding::float(
+                CurveBindingTarget::new("", "Transform", "localPosition.x"),
+                FloatCurve::new(vec![
+                    Keyframe::linear(0.0, offset),
+                    Keyframe::linear(1.0, offset + 3.5 * speed_factor),
+                    Keyframe::linear(2.0, offset - 1.25 * speed_factor),
+                ]),
+            ),
+            CurveBinding::float(
+                CurveBindingTarget::new("", "Transform", "localPosition.y"),
+                FloatCurve::new(vec![
+                    Keyframe::linear(0.0, -offset),
+                    Keyframe::linear(2.0, offset * 2.0),
+                ]),
+            ),
+            CurveBinding::float(
+                CurveBindingTarget::new("", "Transform", "localScale.z"),
+                FloatCurve::new(vec![
+                    Keyframe::linear(0.0, 1.0),
+                    Keyframe::linear(2.0, 1.0 + speed_factor * 0.5),
+                ]),
+            ),
+        ],
+        Vec::new(),
+    );
+    AnimatorController::new(
+        format!("Controller_{seed}"),
+        Vec::new(),
+        vec![AnimatorState::with_speed(
+            "Run",
+            StateMotion::Clip(clip),
+            speed_factor,
+        )],
+        0,
+        Vec::new(),
+    )
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct FrameAnimatorSnapshot {
+    entity: u64,
+    translation_bits: [u32; 3],
+    rotation_bits: [u32; 4],
+    scale_bits: [u32; 3],
+    normalized_time_bits: u32,
+}
+
+fn run_animated_frame_loop_with_workers(
+    workers: usize,
+    entity_count: usize,
+    ticks: usize,
+) -> Result<(Runtime, Vec<FrameAnimatorSnapshot>), Box<dyn Error>> {
+    let mut runtime = Runtime::with_job_system(std::sync::Arc::new(JobSystem::new(workers)))?;
+    runtime.load_scene(Path::new(SCENE_WITH_SCRIPT))?;
+    let mut entities = Vec::with_capacity(entity_count);
+    for index in 0..entity_count {
+        let entity = {
+            let graph = runtime
+                .scene_graph_mut()
+                .ok_or_else(|| String::from("active scene graph missing"))?;
+            let id = graph.add_entity(format!("Animated_{index}"));
+            if let Some(transform) = graph.transform_mut(id) {
+                transform.translation = [index as f32 * 0.1, index as f32 * -0.05, 0.5];
+            }
+            id
+        };
+        let ensured = runtime.ensure_animator(entity.as_u64());
+        let controller = build_parallel_animation_controller(index);
+        let handle = runtime.animation_mut().register_controller(controller);
+        runtime.set_animator_controller(ensured, handle)?;
+        entities.push(ensured);
+    }
+    runtime.tick(0.0)?;
+    let mut snapshots = Vec::with_capacity(ticks * entity_count);
+    for step in 0..ticks {
+        let delta = 1.0 / 60.0 + (step % 3) as f64 * 0.0025;
+        runtime.tick(delta)?;
+        for entity in &entities {
+            let transform = runtime
+                .animation()
+                .transform(*entity)
+                .cloned()
+                .unwrap_or_else(Transform::default);
+            let graph_transform = match runtime.scene_graph() {
+                Some(graph) => graph.transform(*entity).cloned(),
+                None => None,
+            }
+            .unwrap_or_else(Transform::default);
+            assert_eq!(
+                transform.translation.map(f32::to_bits),
+                graph_transform.translation.map(f32::to_bits)
+            );
+            let state = runtime.animation().state_info(*entity)?;
+            snapshots.push(FrameAnimatorSnapshot {
+                entity: entity.as_u64(),
+                translation_bits: transform.translation.map(f32::to_bits),
+                rotation_bits: transform.rotation.map(f32::to_bits),
+                scale_bits: transform.scale.map(f32::to_bits),
+                normalized_time_bits: state.normalized_time.to_bits(),
+            });
+        }
+    }
+    Ok((runtime, snapshots))
+}
+
+#[test]
+fn frame_loop_parallel_animation_slice_dispatches_across_multiple_workers_with_bit_identical_outputs()
+-> Result<(), Box<dyn Error>> {
+    let entity_count = 64;
+    let ticks = 12;
+    let (single_runtime, single_worker_outputs) =
+        run_animated_frame_loop_with_workers(1, entity_count, ticks)?;
+    let (multi_runtime, multi_worker_outputs) =
+        run_animated_frame_loop_with_workers(4, entity_count, ticks)?;
+
+    assert_eq!(single_runtime.last_animation_job_workers(), 1);
+    assert!(
+        multi_runtime.last_animation_job_workers() > 1,
+        "expected parallel animation slice to execute across >1 worker threads, observed {}",
+        multi_runtime.last_animation_job_workers()
+    );
+    assert_eq!(single_worker_outputs.len(), ticks * entity_count);
+    assert_eq!(single_worker_outputs, multi_worker_outputs);
+    let serial_world = {
+        let mut world = unitas_runtime::AnimationWorld::new();
+        for index in 0..entity_count {
+            let entity = EntityId::new((index + 1) as u64);
+            let initial = Transform {
+                translation: [index as f32 * 0.1, index as f32 * -0.05, 0.5],
+                ..Transform::default()
+            };
+            world.ensure_animator(entity, initial);
+            let handle = world.register_controller(build_parallel_animation_controller(index));
+            world.set_controller(entity, handle)?;
+        }
+        for step in 0..ticks {
+            let delta = 1.0 / 60.0 + (step % 3) as f64 * 0.0025;
+            world.tick(delta);
+        }
+        world
+    };
+    for index in 0..entity_count {
+        let serial_entity = EntityId::new((index + 1) as u64);
+        let serial_transform = serial_world
+            .transform(serial_entity)
+            .ok_or("serial transform missing")?;
+        let snapshot = multi_worker_outputs[(ticks - 1) * entity_count + index];
+        assert_eq!(
+            serial_transform.translation.map(f32::to_bits),
+            snapshot.translation_bits
+        );
+        assert_eq!(
+            serial_transform.rotation.map(f32::to_bits),
+            snapshot.rotation_bits
+        );
+        assert_eq!(
+            serial_transform.scale.map(f32::to_bits),
+            snapshot.scale_bits
+        );
+        assert_eq!(
+            serial_world
+                .state_info(serial_entity)?
+                .normalized_time
+                .to_bits(),
+            snapshot.normalized_time_bits
+        );
+    }
     Ok(())
 }

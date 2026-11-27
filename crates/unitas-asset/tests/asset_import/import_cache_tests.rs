@@ -342,3 +342,144 @@ fn import_cache_parallel_results_match_the_serial_results() -> TestResult {
     fs::remove_dir_all(&root)?;
     Ok(())
 }
+
+fn minimal_tga_bytes(width: u16, height: u16, rgb: [u8; 3]) -> Vec<u8> {
+    let mut bytes = vec![0u8; 18 + (width as usize) * (height as usize) * 3];
+    bytes[2] = 2;
+    bytes[12..14].copy_from_slice(&width.to_le_bytes());
+    bytes[14..16].copy_from_slice(&height.to_le_bytes());
+    bytes[16] = 24;
+    bytes[17] = 0x20;
+    for chunk in bytes[18..].chunks_exact_mut(3) {
+        chunk[0] = rgb[2];
+        chunk[1] = rgb[1];
+        chunk[2] = rgb[0];
+    }
+    bytes
+}
+
+#[test]
+fn cooked_texture_format_v1_round_trips_and_rejects_corrupt_or_unknown_versions() -> TestResult {
+    use unitas_asset::texture::import::{
+        import_texture, TextureImportError, TextureImportSettings,
+    };
+    use unitas_asset::texture::{
+        CookedTexture, COOKED_TEXTURE_FORMAT_VERSION, COOKED_TEXTURE_MAGIC,
+    };
+
+    let tga = minimal_tga_bytes(4, 2, [200, 100, 50]);
+    let settings = TextureImportSettings::default();
+    let imported = import_texture(&tga, "sample.tga", &settings)?;
+    let cooked = CookedTexture::from_import(&imported);
+    assert_eq!(cooked.format_version, COOKED_TEXTURE_FORMAT_VERSION);
+    assert_eq!(cooked.width, 4);
+    assert_eq!(cooked.height, 2);
+    assert_eq!(cooked.channels, 4);
+    assert!(cooked.srgb);
+    assert!(!cooked.normal_map);
+    assert_eq!(cooked.rgba.len(), 4 * 2 * 4);
+
+    let encoded = cooked.encode();
+    assert_eq!(encoded.get(0..4), Some(COOKED_TEXTURE_MAGIC.as_slice()));
+    let decoded = CookedTexture::decode(&encoded)?;
+    assert_eq!(decoded, cooked);
+
+    let mut bad_magic = encoded.clone();
+    bad_magic[0] = b'X';
+    assert_eq!(
+        CookedTexture::decode(&bad_magic),
+        Err(TextureImportError::InvalidSignature)
+    );
+
+    let mut bad_version = encoded.clone();
+    bad_version[4..8].copy_from_slice(&2u32.to_le_bytes());
+    assert!(matches!(
+        CookedTexture::decode(&bad_version),
+        Err(TextureImportError::UnsupportedFormat(_))
+    ));
+
+    assert_eq!(
+        CookedTexture::decode(&encoded[..10]),
+        Err(TextureImportError::Truncated)
+    );
+    Ok(())
+}
+
+#[test]
+fn cook_project_textures_uses_import_cache_and_writes_cooked_manifest() -> TestResult {
+    use unitas_asset::texture::{
+        cook_project_textures, load_or_cook_texture_with_cache, CookedTexture,
+        CookedTextureManifest, COOKED_DIR_NAME, COOKED_MANIFEST_FILENAME,
+        COOKED_TEXTURE_FORMAT_VERSION,
+    };
+
+    let root = temp_dir("cooked-texture-cache")?;
+    let project = root.join("Project");
+    let tex_dir = project.join("Assets").join("Textures");
+    fs::create_dir_all(&tex_dir)?;
+    fs::create_dir_all(project.join("ProjectSettings"))?;
+
+    let albedo_path = tex_dir.join("Albedo.tga");
+    fs::write(&albedo_path, minimal_tga_bytes(8, 8, [255, 64, 32]))?;
+    fs::write(
+        tex_dir.join("Albedo.tga.meta"),
+        "fileFormatVersion: 2\nguid: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\nTextureImporter:\n  sRGBTexture: 1\n  textureType: 0\n",
+    )?;
+
+    let normal_path = tex_dir.join("Normal.tga");
+    fs::write(&normal_path, minimal_tga_bytes(4, 4, [128, 128, 255]))?;
+    fs::write(
+        tex_dir.join("Normal.tga.meta"),
+        "fileFormatVersion: 2\nguid: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\nTextureImporter:\n  sRGBTexture: 0\n  textureType: 1\n",
+    )?;
+
+    let cache_dir = root.join("Cache");
+    let out_one = root.join("OutOne").join(COOKED_DIR_NAME);
+    let (manifest_one, report_one) = cook_project_textures(&project, &cache_dir, &out_one)?;
+    assert_eq!(report_one.imported, 2);
+    assert_eq!(report_one.reused, 0);
+    assert_eq!(manifest_one.entries.len(), 2);
+    assert!(out_one.join(COOKED_MANIFEST_FILENAME).is_file());
+
+    let loaded_manifest =
+        CookedTextureManifest::load_from_dir(&out_one).ok_or("expected manifest to load")?;
+    assert_eq!(loaded_manifest, manifest_one);
+
+    let albedo_entry = manifest_one
+        .get_by_asset_path("Assets/Textures/Albedo.tga")
+        .ok_or("missing albedo entry")?;
+    assert_eq!(albedo_entry.format_version, COOKED_TEXTURE_FORMAT_VERSION);
+    assert_eq!(albedo_entry.width, 8);
+    assert_eq!(albedo_entry.height, 8);
+    assert!(albedo_entry.srgb);
+    assert!(!albedo_entry.normal_map);
+    let albedo_cooked_bytes = fs::read(out_one.join(&albedo_entry.cooked_path))?;
+    let albedo_decoded = CookedTexture::decode(&albedo_cooked_bytes)?;
+    assert_eq!(albedo_decoded.width, 8);
+    assert_eq!(albedo_decoded.height, 8);
+
+    let out_two = root.join("OutTwo").join(COOKED_DIR_NAME);
+    let (manifest_two, report_two) = cook_project_textures(&project, &cache_dir, &out_two)?;
+    assert_eq!(report_two.imported, 0);
+    assert_eq!(report_two.reused, 2);
+    assert_eq!(manifest_two, manifest_one);
+    assert!(out_two.join(&albedo_entry.cooked_path).is_file());
+
+    let direct_loaded = load_or_cook_texture_with_cache(&albedo_path, Some(&cache_dir))
+        .ok_or("expected load_or_cook_texture_with_cache to succeed")?;
+    assert_eq!(direct_loaded, albedo_decoded);
+
+    fs::write(&albedo_path, minimal_tga_bytes(16, 16, [10, 20, 30]))?;
+    let out_three = root.join("OutThree").join(COOKED_DIR_NAME);
+    let (manifest_three, report_three) = cook_project_textures(&project, &cache_dir, &out_three)?;
+    assert_eq!(report_three.imported, 1);
+    assert_eq!(report_three.reused, 1);
+    let updated_albedo = manifest_three
+        .get_by_asset_path("Assets/Textures/Albedo.tga")
+        .ok_or("missing updated albedo entry")?;
+    assert_eq!(updated_albedo.width, 16);
+    assert_eq!(updated_albedo.height, 16);
+
+    fs::remove_dir_all(&root)?;
+    Ok(())
+}

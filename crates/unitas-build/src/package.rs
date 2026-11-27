@@ -271,6 +271,25 @@ pub fn package_linux_app(
     )
 }
 
+pub fn package_web_app(
+    manifest: &BundleManifest,
+    staged_dir: &Path,
+    output_dir: &Path,
+    player_binary: &Path,
+    licensing: &LicensingRecord,
+    license_text: Option<&Path>,
+) -> Result<PackagedPlayer, PackageError> {
+    package_player_directory(
+        manifest,
+        staged_dir,
+        output_dir,
+        player_binary,
+        licensing,
+        license_text,
+        BuildTarget::WEB_WASM32,
+    )
+}
+
 fn package_player_directory(
     manifest: &BundleManifest,
     staged_dir: &Path,
@@ -396,6 +415,17 @@ pub fn package_desktop_target(
         }
         TargetOs::Linux => {
             let packaged = package_linux_app(
+                &staged.manifest,
+                &staged_dir,
+                &target_dir,
+                &player_binary,
+                &licensing,
+                license_text.as_deref(),
+            )?;
+            (packaged.app_dir, packaged.executable_path)
+        }
+        TargetOs::Web => {
+            let packaged = package_web_app(
                 &staged.manifest,
                 &staged_dir,
                 &target_dir,

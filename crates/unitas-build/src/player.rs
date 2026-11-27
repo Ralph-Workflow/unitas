@@ -1383,7 +1383,7 @@ pub(crate) fn desktop_packaging_outcomes_from_availability(
                         .join(&base_name);
                     (app, exe)
                 }
-                TargetOs::Windows | TargetOs::Linux => {
+                TargetOs::Windows | TargetOs::Linux | TargetOs::Web => {
                     let app = target_dir.join(&base_name);
                     let exe = app.join(target.executable_name(product_name));
                     (app, exe)

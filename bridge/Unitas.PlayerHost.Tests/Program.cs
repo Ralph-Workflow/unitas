@@ -1,5 +1,6 @@
 using System;
 using System.IO;
+using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Runtime.Loader;
 using Unitas.Bridge;
@@ -35,6 +36,7 @@ namespace Unitas.PlayerHost.Tests
                 PlayerHostBootTests.CompileGameAssembly(sampleRoot, managedDir);
                 PlayerHostBootTests.RunWithStagedBundle(bundleRoot);
                 PlayerHostScenePathTests.RunWithStagedBundle(bundleRoot);
+                PlayerHostCollectibleAlcTests.RunWithStagedBundle(bundleRoot);
                 PlayerHostArtifactTests.Run();
             }
             finally
@@ -46,10 +48,6 @@ namespace Unitas.PlayerHost.Tests
         }
     }
 
-    /// <summary>
-    /// Loads the built host folder the way hostfxr does: the host assembly and
-    /// every managed dependency come from that one folder, nothing else.
-    /// </summary>
     public sealed class HostFolderLoadContext : AssemblyLoadContext
     {
         private readonly string _folder;
@@ -342,6 +340,92 @@ namespace Unitas.PlayerHost.Tests
             }
             catch (Exception)
             {
+            }
+        }
+    }
+
+    public static class PlayerHostCollectibleAlcTests
+    {
+        private const double DeltaSeconds = 0.02;
+
+        public static void RunWithStagedBundle(string bundleRoot)
+        {
+            WeakReference? firstContextRef = RunIsolatedSession(bundleRoot);
+            Check.That("first session created a collectible load context", firstContextRef != null);
+            if (firstContextRef != null)
+            {
+                PumpGarbageCollector(firstContextRef);
+                Check.That("first game script AssemblyLoadContext is collected after shutdown", !firstContextRef.IsAlive);
+            }
+
+            WeakReference? secondContextRef = RunIsolatedSession(bundleRoot);
+            Check.That("reload session created a fresh collectible load context", secondContextRef != null);
+            if (secondContextRef != null)
+            {
+                PumpGarbageCollector(secondContextRef);
+                Check.That("reloaded game script AssemblyLoadContext is collected after shutdown", !secondContextRef.IsAlive);
+            }
+        }
+
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        private static WeakReference? RunIsolatedSession(string bundleRoot)
+        {
+            string persistRoot = Path.Combine(
+                Path.GetTempPath(),
+                "unitas-playerhost-alc-persist-" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(persistRoot);
+            try
+            {
+                ulong runtimeHandle = RuntimeInterop.unitas_runtime_new();
+                Check.That("collectible session native runtime handle created", runtimeHandle != 0UL);
+                string scenePath = Path.Combine(bundleRoot, "Assets", "Scenes", "RollABall.unity");
+                IntPtr bundlePtr = Marshal.StringToCoTaskMemUTF8(bundleRoot);
+                IntPtr persistPtr = Marshal.StringToCoTaskMemUTF8(persistRoot);
+                IntPtr scenePtr = Marshal.StringToCoTaskMemUTF8(scenePath);
+                int initResult;
+                try
+                {
+                    initResult = PlayerHostEntry.Init(runtimeHandle, bundlePtr, persistPtr, scenePtr);
+                }
+                finally
+                {
+                    Marshal.FreeCoTaskMem(bundlePtr);
+                    Marshal.FreeCoTaskMem(persistPtr);
+                    Marshal.FreeCoTaskMem(scenePtr);
+                }
+
+                Check.Equal("collectible session UnitasPlayerInit returns success", 0, initResult);
+                if (initResult != 0)
+                {
+                    return null;
+                }
+
+                WeakReference? contextRef = PlayerHostCore.CaptureLoadContextWeakReference();
+                Check.That("collectible load context is alive while session is running", contextRef != null && contextRef.IsAlive);
+
+                for (int frame = 0; frame < 3; frame++)
+                {
+                    Check.Equal("collectible session tick " + frame + " returns success", 0, PlayerHostEntry.Tick(DeltaSeconds));
+                }
+
+                Check.Equal("collectible session UnitasPlayerShutdown returns success", 0, PlayerHostEntry.Shutdown());
+                Check.That("load context reference cleared on PlayerHostCore after shutdown", PlayerHostCore.CaptureLoadContextWeakReference() == null);
+                return contextRef;
+            }
+            finally
+            {
+                PlayerHostBootTests.TryDelete(persistRoot);
+            }
+        }
+
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        private static void PumpGarbageCollector(WeakReference contextRef)
+        {
+            for (int i = 0; i < 10 && contextRef.IsAlive; i++)
+            {
+                GC.Collect();
+                GC.WaitForPendingFinalizers();
+                GC.Collect();
             }
         }
     }

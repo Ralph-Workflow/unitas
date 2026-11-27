@@ -2,12 +2,15 @@ use std::error::Error;
 use std::path::PathBuf;
 
 use unitas_build::toolchain::{
-    evaluate_availability, packaging_targets, required_toolchain, target_availability_report,
-    ToolPresence, ToolchainCause, ToolchainRequirement,
+    evaluate_availability, packaging_targets, probe_target_availability, required_toolchain,
+    target_availability_report, web_runtime_wasm32_gaps, ToolPresence, ToolchainCause,
+    ToolchainRequirement, WebRuntimeCompileGap,
 };
-use unitas_build::{build_project, BuildConfiguration, BuildReport, StartupStatus};
+use unitas_build::{
+    attempt_desktop_target, build_project, BuildConfiguration, BuildReport, StartupStatus,
+};
 
-use unitas_build::targets::BuildTarget;
+use unitas_build::targets::{BuildTarget, TargetArch, TargetOs};
 
 type TestResult = Result<(), Box<dyn Error>>;
 
@@ -272,5 +275,102 @@ fn desktop_packaging_outcome_builds_supported_target_and_records_externally_unav
     assert_eq!(round_trip.desktop_packaging, host_report.desktop_packaging);
 
     std::fs::remove_dir_all(&workspace)?;
+    Ok(())
+}
+
+#[test]
+fn web_target_probes_emcc_and_wasm32_and_reports_externally_unavailable_when_emcc_is_missing(
+) -> TestResult {
+    assert_eq!(BuildTarget::WEB_WASM32.os(), TargetOs::Web);
+    assert_eq!(BuildTarget::WEB_WASM32.arch(), TargetArch::Wasm32);
+    assert_eq!(BuildTarget::WEB_WASM32.identifier(), "web-wasm32");
+    assert_eq!(
+        BuildTarget::WEB_WASM32.rust_triple(),
+        "wasm32-unknown-unknown"
+    );
+    assert_eq!(BuildTarget::WEB_WASM32.primary_linker(), "emcc");
+    assert_eq!(
+        BuildTarget::from_env("web", "wasm32"),
+        Some(BuildTarget::WEB_WASM32)
+    );
+    assert_eq!(
+        BuildTarget::from_env("webgl", "wasm32"),
+        Some(BuildTarget::WEB_WASM32)
+    );
+
+    let web_toolchain = required_toolchain(BuildTarget::WEB_WASM32);
+    let web_tools: Vec<&str> = web_toolchain
+        .requirements
+        .iter()
+        .map(|req| req.tool.as_str())
+        .collect();
+    assert!(web_tools.contains(&"emcc"));
+    assert!(web_tools.contains(&"rustc"));
+    assert!(web_toolchain
+        .resolving_action
+        .contains("rustup target add wasm32-unknown-unknown"));
+    assert!(web_toolchain.resolving_action.contains("emsdk"));
+
+    let targets = packaging_targets();
+    assert!(targets.contains(&BuildTarget::WEB_WASM32));
+
+    let availability = probe_target_availability(BuildTarget::WEB_WASM32);
+    let emcc_probe = availability
+        .tools
+        .iter()
+        .find(|probe| probe.tool == "emcc")
+        .ok_or("web target availability must probe emcc")?;
+    let rustc_probe = availability
+        .tools
+        .iter()
+        .find(|probe| probe.tool == "rustc")
+        .ok_or("web target availability must probe rustc wasm32-unknown-unknown")?;
+    assert!(!rustc_probe.required_range.is_empty());
+
+    if !emcc_probe.present {
+        assert!(!availability.is_available());
+        assert_eq!(availability.state(), "externally_unavailable");
+        let unavailable = availability
+            .unavailable
+            .as_ref()
+            .ok_or("missing emcc must mark web target externally unavailable")?;
+        assert_eq!(unavailable.cause, ToolchainCause::MissingToolchain);
+        assert_eq!(unavailable.tool, "emcc");
+        assert!(unavailable.resolving_action.contains("emsdk"));
+    }
+
+    let workspace = std::env::temp_dir().join(format!(
+        "unitas_build_web_target_outcome_{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&workspace);
+    std::fs::create_dir_all(&workspace)?;
+    let mut web_config = host_config();
+    web_config.target = BuildTarget::WEB_WASM32;
+    let outcome = attempt_desktop_target(&web_config, BuildTarget::WEB_WASM32, &workspace)?;
+    if !emcc_probe.present {
+        assert_eq!(outcome.state, "externally_unavailable");
+        let unavailable = outcome
+            .unavailable
+            .as_ref()
+            .ok_or("web package outcome must record missing toolchain")?;
+        assert_eq!(unavailable.cause, ToolchainCause::MissingToolchain);
+        assert_eq!(unavailable.tool, "emcc");
+        assert!(outcome.build_report_path.is_file());
+        let report_text = std::fs::read_to_string(&outcome.build_report_path)?;
+        assert!(report_text.contains("\"target\": \"web-wasm32\""));
+        assert!(report_text.contains("\"architecture\": \"wasm32\""));
+        assert!(report_text.contains("toolchain.missing_toolchain"));
+    }
+    std::fs::remove_dir_all(&workspace)?;
+
+    let gaps: &[WebRuntimeCompileGap] = web_runtime_wasm32_gaps();
+    assert_eq!(gaps.len(), 2);
+    assert!(gaps
+        .iter()
+        .any(|gap| gap.crate_name == "slice-ring-buffer" && gap.version == "0.3.4"));
+    assert!(gaps
+        .iter()
+        .any(|gap| gap.crate_name == "minimp3-sys" && gap.version == "0.6.0"));
     Ok(())
 }

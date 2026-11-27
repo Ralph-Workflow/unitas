@@ -287,3 +287,78 @@ fn failed_build_validation_and_missing_source_scene_produce_failed_build_report(
     fs::remove_dir_all(&workspace)?;
     Ok(())
 }
+
+#[test]
+fn staged_bundle_cooks_textures_under_cooked_with_manifest_excludes_raw_textures_and_reuses_cache(
+) -> Result<(), Box<dyn std::error::Error>> {
+    use unitas_build::cooked::{
+        stage_project_cooked_textures_with_cache, CookedTexture, CookedTextureManifest,
+        COOKED_DIR_NAME, COOKED_MANIFEST_FILENAME,
+    };
+    use unitas_build::player::install_project_trust;
+    use unitas_build::sample::stage_roll_a_ball_bundle_for_host;
+
+    let workspace = temp_dir("cooked_bundle_pipeline")?;
+    let bundle_dir = workspace.join("roll_a_ball_bundle");
+    let staged = stage_roll_a_ball_bundle_for_host(&bundle_dir, None)?;
+    install_project_trust(&bundle_dir)?;
+
+    let cooked_dir = staged.output_dir.join(COOKED_DIR_NAME);
+    assert!(cooked_dir.is_dir());
+    assert!(cooked_dir.join(COOKED_MANIFEST_FILENAME).is_file());
+
+    let manifest = CookedTextureManifest::load_from_dir(&cooked_dir)
+        .ok_or("expected cooked manifest in bundle")?;
+    let pickup_entry = manifest
+        .get_by_asset_path("Assets/Textures/Pickup.png")
+        .ok_or("expected Assets/Textures/Pickup.png in cooked manifest")?;
+    let cooked_file = cooked_dir.join(&pickup_entry.cooked_path);
+    assert!(cooked_file.is_file());
+    let decoded = CookedTexture::decode(&fs::read(&cooked_file)?)?;
+    assert_eq!(decoded.width, pickup_entry.width);
+    assert_eq!(decoded.height, pickup_entry.height);
+
+    assert!(
+        !staged
+            .output_dir
+            .join("Assets")
+            .join("Textures")
+            .join("Pickup.png")
+            .exists(),
+        "raw source texture must not be copied into bundle Assets/"
+    );
+    assert!(
+        staged
+            .output_dir
+            .join("Assets")
+            .join("Textures")
+            .join("Pickup.png.meta")
+            .is_file(),
+        "texture .meta sidecar remains in bundle Assets/ for GUID resolution"
+    );
+
+    let project_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .and_then(std::path::Path::parent)
+        .ok_or("workspace root")?
+        .join("samples")
+        .join("roll-a-ball");
+    let cache_dir = workspace.join("import_cache");
+    let first_out = workspace.join("out_first");
+    let (_, first_report) =
+        stage_project_cooked_textures_with_cache(&project_root, &cache_dir, &first_out)?;
+    assert!(first_report.imported > 0);
+    assert_eq!(first_report.reused, 0);
+
+    let second_out = workspace.join("out_second");
+    let (_, second_report) =
+        stage_project_cooked_textures_with_cache(&project_root, &cache_dir, &second_out)?;
+    assert_eq!(second_report.imported, 0);
+    assert_eq!(second_report.reused, first_report.imported);
+
+    let session = launch_bundle(&bundle_dir, 2, 1.0 / 60.0)?;
+    assert!(session.root_object_count > 0);
+
+    fs::remove_dir_all(&workspace)?;
+    Ok(())
+}

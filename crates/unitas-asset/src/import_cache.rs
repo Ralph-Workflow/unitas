@@ -12,6 +12,7 @@ const CACHE_FILE_NAME: &str = "import-cache.json";
 const CACHE_FORMAT: &str = "unitas-import-cache";
 const CACHE_FORMAT_VERSION: i32 = 1;
 const TEMP_SUFFIX: &str = ".tmp";
+static TEMP_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 pub const LIBRARY_DIRECTORY: &str = "Library";
 
@@ -308,7 +309,8 @@ fn write_atomic(path: &Path, bytes: &[u8]) -> Result<(), ImportCacheError> {
 }
 
 fn temp_path(path: &Path) -> PathBuf {
+    let seq = TEMP_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let mut temp = path.file_name().unwrap_or_default().to_os_string();
-    temp.push(TEMP_SUFFIX);
+    temp.push(format!(".{}.{seq}{TEMP_SUFFIX}", std::process::id()));
     path.with_file_name(temp)
 }

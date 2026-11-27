@@ -7,10 +7,6 @@ using UnityEngine;
 
 namespace Unitas.PlayerHost.Tests
 {
-    /// <summary>
-    /// The player host loads the startup scene the native side names, so the
-    /// managed side never rescans the bundle for a scene file.
-    /// </summary>
     public static class PlayerHostScenePathTests
     {
         public static void Run()

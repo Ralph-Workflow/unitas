@@ -214,6 +214,33 @@ pub struct TargetToolchain {
     pub resolving_action: String,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct WebRuntimeCompileGap {
+    pub crate_name: &'static str,
+    pub version: &'static str,
+    pub dependency_chain: &'static str,
+    pub failure_summary: &'static str,
+}
+
+pub const WEB_RUNTIME_WASM32_GAPS: [WebRuntimeCompileGap; 2] = [
+    WebRuntimeCompileGap {
+        crate_name: "slice-ring-buffer",
+        version: "0.3.4",
+        dependency_chain: "slice-ring-buffer -> minimp3 -> unitas-asset -> unitas-audio -> unitas-runtime",
+        failure_summary: "E0425 in src/mirrored/buffer.rs: platform-specific virtual-memory functions allocation_granularity, allocate_mirrored, and deallocate_mirrored are not defined for wasm32-unknown-unknown",
+    },
+    WebRuntimeCompileGap {
+        crate_name: "minimp3-sys",
+        version: "0.6.0",
+        dependency_chain: "minimp3-sys -> minimp3 -> unitas-asset -> unitas-audio -> unitas-runtime",
+        failure_summary: "cc-rs build script fails compiling minimp3.c with clang --target=wasm32-unknown-unknown: fatal error 'stdlib.h' file not found without an Emscripten or WASI sysroot",
+    },
+];
+
+pub const fn web_runtime_wasm32_gaps() -> &'static [WebRuntimeCompileGap] {
+    &WEB_RUNTIME_WASM32_GAPS
+}
+
 fn command_requirement(
     tool: &str,
     required_range: &str,
@@ -424,6 +451,25 @@ pub fn required_toolchain(target: BuildTarget) -> TargetToolchain {
                 "install the Xcode command line tools with 'xcode-select --install', add the Rust target with 'rustup target add x86_64-apple-darwin', and restore the .NET runtime pack with 'dotnet restore -r osx-x64', then package the player on a macOS x86-64 host where unitas builds that target",
             ),
         },
+        (TargetOs::Web, _) | (_, TargetArch::Wasm32) => TargetToolchain {
+            target,
+            requirements: vec![
+                command_requirement(
+                    "emcc",
+                    "Emscripten 3.1.56 or newer",
+                    "Emscripten C/C++ compiler and WebAssembly bundler that links the Web player bundle",
+                    &["--version"],
+                ),
+                rust_requirement(
+                    target.rust_triple(),
+                    target.alternate_rust_triples(),
+                    "Rust compiler and standard library that builds the WebAssembly player for wasm32-unknown-unknown",
+                ),
+            ],
+            resolving_action: String::from(
+                "install and activate the Emscripten SDK with 'emsdk install latest && emsdk activate latest' so 'emcc' is on PATH, and add the Rust WebAssembly target with 'rustup target add wasm32-unknown-unknown'",
+            ),
+        },
     }
 }
 
@@ -457,7 +503,7 @@ pub fn evaluate_availability(
             resolving_action: resolving_action.to_string(),
         })
         .or_else(|| {
-            if BuildTarget::current_host() == Some(target) {
+            if target.os() == TargetOs::Web || BuildTarget::current_host() == Some(target) {
                 None
             } else {
                 Some(UnavailableToolchain {
@@ -486,7 +532,11 @@ pub fn probe_target_availability(target: BuildTarget) -> TargetAvailability {
 }
 
 pub fn packaging_targets() -> Vec<BuildTarget> {
-    let mut targets = vec![BuildTarget::WINDOWS_X86_64, BuildTarget::LINUX_X86_64];
+    let mut targets = vec![
+        BuildTarget::WINDOWS_X86_64,
+        BuildTarget::LINUX_X86_64,
+        BuildTarget::WEB_WASM32,
+    ];
     if let Some(host) = BuildTarget::current_host() {
         targets.push(host);
     }

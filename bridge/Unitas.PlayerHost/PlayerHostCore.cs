@@ -28,6 +28,7 @@ namespace Unitas.PlayerHost
         private static readonly StreamWriter ManagedLogWriter =
             new StreamWriter(Console.OpenStandardError()) { AutoFlush = true };
         private static BridgeHost? _host;
+        private static AssemblyLoadContext? _loadContext;
 
         public static BridgeHost? Host
         {
@@ -37,6 +38,14 @@ namespace Unitas.PlayerHost
                 {
                     return _host;
                 }
+            }
+        }
+
+        public static WeakReference? CaptureLoadContextWeakReference()
+        {
+            lock (Gate)
+            {
+                return _loadContext != null ? new WeakReference(_loadContext) : null;
             }
         }
 
@@ -62,12 +71,9 @@ namespace Unitas.PlayerHost
                 }
 
                 BridgeHost? host = null;
+                AssemblyLoadContext? loadContext = null;
                 try
                 {
-                    // The control protocol owns stdout; managed logging must not
-                    // corrupt the JSON the host parses. Only the player process
-                    // asks for that: the editor hosts the same managed code and
-                    // speaks its own JSON protocol on stdout.
                     if (Environment.GetEnvironmentVariable("UNITAS_MANAGED_LOG_TO_STDERR") == "1")
                     {
                         Console.SetOut(ManagedLogWriter);
@@ -88,25 +94,18 @@ namespace Unitas.PlayerHost
 
                     string[] assemblies = Directory.GetFiles(managedDir, "*.dll");
                     Array.Sort(assemblies, StringComparer.Ordinal);
-                    foreach (string path in assemblies)
-                    {
-                        string simpleName = Path.GetFileNameWithoutExtension(path);
-                        if (IsAlreadyLoaded(simpleName))
-                        {
-                            continue;
-                        }
-
-                        AssemblyLoadContext.Default.LoadFromAssemblyPath(path);
-                    }
-
+                    loadContext = ScriptGlueRegistry.CreateCollectibleContext("UnitasPlayerHost", managedDir);
                     foreach (string path in assemblies)
                     {
                         try
                         {
-                            ScriptGlueRegistry.LoadGlueAssembly(path);
+                            ScriptGlueRegistry.LoadGlueAssembly(path, loadContext);
                         }
                         catch (Exception)
                         {
+                            ScriptGlueRegistry.ClearSession();
+                            loadContext.Unload();
+                            loadContext = null;
                             return (int)PlayerHostStage.AssemblyLoadFailed;
                         }
                     }
@@ -116,17 +115,23 @@ namespace Unitas.PlayerHost
                     host.BuildKind = ApplicationBuildKind.ReleasePlayer;
                     host.LoadScene(fullScenePath);
                     _host = host;
+                    _loadContext = loadContext;
                     host = null;
+                    loadContext = null;
                     return (int)PlayerHostStage.Ok;
                 }
-                catch (Exception u0debug)
+                catch (Exception)
                 {
-                    Console.Error.WriteLine($"U0DEBUG Init failed: {u0debug}");
                     return (int)PlayerHostStage.BootFailed;
                 }
                 finally
                 {
                     host?.Dispose();
+                    if (loadContext != null)
+                    {
+                        ScriptGlueRegistry.ClearSession();
+                        loadContext.Unload();
+                    }
                 }
             }
         }
@@ -165,6 +170,8 @@ namespace Unitas.PlayerHost
                 }
 
                 _host = null;
+                AssemblyLoadContext? loadContext = _loadContext;
+                _loadContext = null;
                 try
                 {
                     host.Shutdown();
@@ -173,6 +180,11 @@ namespace Unitas.PlayerHost
                 catch (Exception)
                 {
                     return (int)PlayerHostStage.ShutdownFailed;
+                }
+                finally
+                {
+                    ScriptGlueRegistry.ClearSession();
+                    loadContext?.Unload();
                 }
             }
         }
@@ -205,19 +217,6 @@ namespace Unitas.PlayerHost
             }
 
             return "libunitas_runtime.so";
-        }
-
-        private static bool IsAlreadyLoaded(string simpleName)
-        {
-            foreach (var assembly in AssemblyLoadContext.Default.Assemblies)
-            {
-                if (string.Equals(assembly.GetName().Name, simpleName, StringComparison.OrdinalIgnoreCase))
-                {
-                    return true;
-                }
-            }
-
-            return false;
         }
     }
 }

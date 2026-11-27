@@ -1,13 +1,16 @@
 use std::collections::{BTreeMap, BTreeSet};
+use std::sync::{Arc, Mutex};
 
 use unitas_animation::curve::AssetReference;
 use unitas_animation::{
     AnimatedValue, AnimationClip, AnimationDiagnostic, AnimationError, AnimationEvent, Animator,
-    AnimatorController, AnimatorCullingMode, AnimatorFrame, AnimatorStateInfo, AnimatorUpdateMode,
-    CurveBindingTarget, SampledBinding, StateMachineCallback, StateMachineCallbackKind,
-    TransformChannel, TransformProperty, WrapMode, blend_sampled_bindings,
+    AnimatorController, AnimatorCullingMode, AnimatorFrame, AnimatorStateInfo, AnimatorStepResult,
+    AnimatorUpdateMode, CurveBindingTarget, SampledBinding, StateMachineCallback,
+    StateMachineCallbackKind, TransformChannel, TransformProperty, WrapMode,
+    blend_sampled_bindings,
 };
 use unitas_core::{EntityId, Transform, compose_world, normalize_rotation};
+use unitas_jobs::JobSystem;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum AnimationRuntimeDiagnostic {
@@ -58,6 +61,14 @@ pub struct AppliedObjectReference {
     pub reference: AssetReference,
     pub changes: u32,
 }
+
+struct ParallelAnimatorOutput {
+    animator: Animator,
+    result: AnimatorStepResult,
+    worker: std::thread::ThreadId,
+}
+
+type ParallelAnimatorSlot = Arc<Mutex<Option<ParallelAnimatorOutput>>>;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct EntityAnimatorEntry {
@@ -116,10 +127,9 @@ pub struct AnimationWorld {
     next_controller_handle: u64,
     entries: BTreeMap<EntityId, EntityAnimatorEntry>,
     legacy: BTreeMap<EntityId, LegacyAnimationComponent>,
-    /// The entries that carry a controller, the only ones a frame has to evaluate.
     animated: BTreeSet<EntityId>,
-    /// The entries whose transform changed and still has to reach the scene graph.
     pending_transform_writes: BTreeSet<EntityId>,
+    last_job_workers: usize,
 }
 
 impl AnimationWorld {
@@ -131,7 +141,12 @@ impl AnimationWorld {
             legacy: BTreeMap::new(),
             animated: BTreeSet::new(),
             pending_transform_writes: BTreeSet::new(),
+            last_job_workers: 0,
         }
+    }
+
+    pub fn last_job_workers(&self) -> usize {
+        self.last_job_workers
     }
 
     pub fn register_controller(&mut self, controller: AnimatorController) -> u64 {
@@ -206,15 +221,12 @@ impl AnimationWorld {
         self.entries.keys().copied().collect()
     }
 
-    /// The entities whose transform changed since the last frame and still has to
-    /// reach the scene graph, in entity order.
     pub(crate) fn take_pending_transform_writes(&mut self) -> Vec<EntityId> {
         std::mem::take(&mut self.pending_transform_writes)
             .into_iter()
             .collect()
     }
 
-    /// Re-queue the transform write of an entity that has no scene graph yet.
     pub(crate) fn queue_transform_write(&mut self, entity: EntityId) {
         self.pending_transform_writes.insert(entity);
     }
@@ -501,6 +513,19 @@ impl AnimationWorld {
         self.tick_frame(&AnimatorFrame::new(delta, delta, 1.0 / 60.0))
     }
 
+    pub fn tick_parallel(
+        &mut self,
+        scaled_delta_seconds: f64,
+        jobs: &JobSystem,
+    ) -> Vec<(EntityId, Vec<SampledBinding>)> {
+        let delta = if scaled_delta_seconds.is_finite() && scaled_delta_seconds > 0.0 {
+            scaled_delta_seconds as f32
+        } else {
+            0.0
+        };
+        self.tick_frame_parallel(&AnimatorFrame::new(delta, delta, 1.0 / 60.0), jobs)
+    }
+
     pub fn tick_frame(&mut self, frame: &AnimatorFrame) -> Vec<(EntityId, Vec<SampledBinding>)> {
         let mut all_child_bindings = Vec::new();
         let animated: Vec<EntityId> = self.animated.iter().copied().collect();
@@ -516,33 +541,147 @@ impl AnimationWorld {
                 continue;
             };
             let step_result = animator.step_frame(frame);
-            for diag in step_result.diagnostics {
-                entry.push_diagnostic(AnimationRuntimeDiagnostic::Controller(diag));
-            }
-            entry.fired_events.extend(step_result.fired_events);
-            entry.callbacks = step_result.callbacks;
-            entry.writes_transforms = step_result.writes_transforms;
-            let previous = entry.transform.clone();
-            let mut sampled = entry.transform.clone();
-            let child_bindings =
-                apply_bindings_to_transform(entity, entry, &mut sampled, &step_result.bindings);
-            entry.root_motion = AnimatorRootMotion {
-                delta_position: subtract_vectors(sampled.translation, previous.translation),
-                delta_rotation: rotation_delta(previous.rotation, sampled.rotation),
-            };
-            if step_result.writes_transforms {
-                entry.transform = sampled;
+            if Self::commit_animator_step(entity, entry, step_result, &mut all_child_bindings) {
                 written.push(entity);
-            }
-            if !child_bindings.is_empty() {
-                all_child_bindings.push((entity, child_bindings));
             }
         }
         for entity in written {
             self.pending_transform_writes.insert(entity);
         }
+        self.last_job_workers = usize::from(!self.animated.is_empty());
         self.tick_legacy(frame, &mut all_child_bindings);
         all_child_bindings
+    }
+
+    pub fn tick_frame_parallel(
+        &mut self,
+        frame: &AnimatorFrame,
+        jobs: &JobSystem,
+    ) -> Vec<(EntityId, Vec<SampledBinding>)> {
+        let mut all_child_bindings = Vec::new();
+        let animated: Vec<EntityId> = self.animated.iter().copied().collect();
+        let mut tasks = Vec::with_capacity(animated.len());
+        let mut slots: Vec<ParallelAnimatorSlot> = Vec::with_capacity(animated.len());
+        for entity in animated {
+            let Some(entry) = self.entries.get_mut(&entity) else {
+                continue;
+            };
+            if !entry.enabled {
+                continue;
+            }
+            let Some(animator) = entry.animator.take() else {
+                continue;
+            };
+            tasks.push((entity, Mutex::new(Some(animator))));
+            slots.push(Arc::new(Mutex::new(None)));
+        }
+        let task_count = tasks.len();
+        if task_count == 0 {
+            self.last_job_workers = 0;
+            self.tick_legacy(frame, &mut all_child_bindings);
+            return all_child_bindings;
+        }
+        let shared_tasks = Arc::new(tasks);
+        let shared_slots = Arc::new(slots);
+        let frame_copy = *frame;
+        let workers = jobs.active_workers().max(1);
+        let batch_size = if workers <= 1 {
+            i64::try_from(task_count).unwrap_or(1)
+        } else {
+            let target_batches = (workers * 4).min(task_count).max(workers);
+            let raw = (task_count / target_batches).max(1);
+            i64::try_from(raw).unwrap_or(1)
+        };
+        let length = i64::try_from(task_count).unwrap_or(0);
+        let job_tasks = Arc::clone(&shared_tasks);
+        let job_slots = Arc::clone(&shared_slots);
+        let handle = jobs.schedule_parallel_for(
+            length,
+            batch_size,
+            move |start, count| {
+                let worker = std::thread::current().id();
+                let start_idx = usize::try_from(start).unwrap_or(0);
+                let count_idx = usize::try_from(count).unwrap_or(0);
+                let end_idx = start_idx.saturating_add(count_idx).min(job_tasks.len());
+                for idx in start_idx..end_idx {
+                    let taken = job_tasks[idx]
+                        .1
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner)
+                        .take();
+                    if let Some(mut animator) = taken {
+                        let result = animator.step_frame(&frame_copy);
+                        let mut slot = job_slots[idx]
+                            .lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner);
+                        *slot = Some(ParallelAnimatorOutput {
+                            animator,
+                            result,
+                            worker,
+                        });
+                    }
+                }
+            },
+            &[],
+        );
+        jobs.complete(handle);
+        let mut written = Vec::new();
+        let mut observed_threads = Vec::new();
+        for (idx, (entity, _)) in shared_tasks.iter().enumerate() {
+            let outcome = shared_slots[idx]
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .take();
+            let Some(output) = outcome else {
+                continue;
+            };
+            if !observed_threads.contains(&output.worker) {
+                observed_threads.push(output.worker);
+            }
+            let Some(entry) = self.entries.get_mut(entity) else {
+                continue;
+            };
+            entry.animator = Some(output.animator);
+            if Self::commit_animator_step(*entity, entry, output.result, &mut all_child_bindings) {
+                written.push(*entity);
+            }
+        }
+        for entity in written {
+            self.pending_transform_writes.insert(entity);
+        }
+        self.last_job_workers = observed_threads.len();
+        self.tick_legacy(frame, &mut all_child_bindings);
+        all_child_bindings
+    }
+
+    fn commit_animator_step(
+        entity: EntityId,
+        entry: &mut EntityAnimatorEntry,
+        step_result: AnimatorStepResult,
+        all_child_bindings: &mut Vec<(EntityId, Vec<SampledBinding>)>,
+    ) -> bool {
+        for diag in step_result.diagnostics {
+            entry.push_diagnostic(AnimationRuntimeDiagnostic::Controller(diag));
+        }
+        entry.fired_events.extend(step_result.fired_events);
+        entry.callbacks = step_result.callbacks;
+        entry.writes_transforms = step_result.writes_transforms;
+        let previous = entry.transform.clone();
+        let mut sampled = entry.transform.clone();
+        let child_bindings =
+            apply_bindings_to_transform(entity, entry, &mut sampled, &step_result.bindings);
+        entry.root_motion = AnimatorRootMotion {
+            delta_position: subtract_vectors(sampled.translation, previous.translation),
+            delta_rotation: rotation_delta(previous.rotation, sampled.rotation),
+        };
+        let wrote = step_result.writes_transforms;
+        if wrote {
+            entry.transform = sampled;
+        }
+        if !child_bindings.is_empty() {
+            all_child_bindings.push((entity, child_bindings));
+        }
+        wrote
     }
 
     fn tick_legacy(

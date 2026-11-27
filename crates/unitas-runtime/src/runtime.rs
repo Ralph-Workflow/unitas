@@ -40,6 +40,7 @@ use self::ui_components::UiComponents;
 use crate::animation::{AnimationRuntimeDiagnostic, AnimationWorld, apply_transform_property};
 use crate::error::RuntimeError;
 use crate::input::{AxisConfig, InputState, default_axis_configs};
+use crate::jobs::shared_job_system;
 use crate::navigation::NavigationRuntimeWorld;
 use crate::particles::{ParticleDrawItem, ParticleRuntimeWorld, ParticleRuntimeWorld2D};
 use crate::physics::{CollisionPayload2D, ContactEvent, PhysicsRuntimeWorld};
@@ -52,6 +53,7 @@ use crate::player_loop::{
 };
 use crate::terrain::TerrainWorld;
 use crate::trails::{TrailDrawItem, TrailRuntimeWorld};
+use unitas_jobs::JobSystem;
 
 #[path = "ui_components.rs"]
 pub(crate) mod ui_components;
@@ -150,8 +152,6 @@ impl LoadedScene {
         &self.bodies
     }
 
-    /// The colliders the scene bound to one body, one per Unity collider
-    /// component of the GameObject.
     pub fn body_colliders(&self, entity: EntityId) -> &[ColliderDesc] {
         self.body_colliders
             .iter()
@@ -191,9 +191,6 @@ pub struct Callbacks {
     pub trigger: extern "C" fn(u64, u64, u32),
 }
 
-/// The physics messages one fixed step produced. They are dispatched after the
-/// step's script callbacks, the way the engine dispatched them before the player
-/// loop tree existed.
 pub(crate) struct PhysicsMessages {
     events: Vec<CollisionEvent>,
     trigger_events: Vec<TriggerEvent>,
@@ -245,8 +242,6 @@ pub struct ScriptInstance {
     pub start_called: bool,
 }
 
-/// The screen size the interface falls back to when no canvas scaler states a
-/// reference resolution.
 pub const DEFAULT_UI_REFERENCE_RESOLUTION: [f32; 2] = [800.0, 600.0];
 
 pub const DEFAULT_MAXIMUM_DELTA_TIME: f64 = 1.0 / 3.0;
@@ -297,10 +292,15 @@ pub struct Runtime {
     pub(crate) destroy_channel: Option<DestroyChannel>,
     pub(crate) player_loop: PlayerLoop,
     pub(crate) pending_physics_messages: Option<PhysicsMessages>,
+    pub(crate) job_system: Arc<JobSystem>,
 }
 
 impl Runtime {
     pub fn new() -> Result<Self, RuntimeError> {
+        Self::with_job_system(shared_job_system())
+    }
+
+    pub fn with_job_system(job_system: Arc<JobSystem>) -> Result<Self, RuntimeError> {
         Ok(Self {
             scenes: Vec::new(),
             active_scene: None,
@@ -347,7 +347,16 @@ impl Runtime {
             destroy_channel: None,
             player_loop: PlayerLoop::new(),
             pending_physics_messages: None,
+            job_system,
         })
+    }
+
+    pub fn job_system(&self) -> &JobSystem {
+        &self.job_system
+    }
+
+    pub fn last_animation_job_workers(&self) -> usize {
+        self.animation.last_job_workers()
     }
 
     pub fn load_scene(&mut self, path: &Path) -> Result<usize, RuntimeError> {
@@ -1011,7 +1020,7 @@ impl Runtime {
                 }
             }
         }
-        let child_updates = self.animation.tick(scaled_delta);
+        let child_updates = self.animation.tick_parallel(scaled_delta, &self.job_system);
         for entity in self.animation.take_pending_transform_writes() {
             if !self.write_back_animator_transform(entity) {
                 self.animation.queue_transform_write(entity);
@@ -1297,24 +1306,18 @@ impl Runtime {
         self.callbacks = Some(callbacks);
     }
 
-    /// The player loop the runtime walks every frame.
     pub fn player_loop(&self) -> &PlayerLoop {
         &self.player_loop
     }
 
-    /// The current player loop tree.
     pub fn player_loop_tree(&self) -> &PlayerLoopSystem {
         self.player_loop.root()
     }
 
-    /// Replaces the player loop tree. A tree that drops a subsystem drops the
-    /// work that subsystem carried.
     pub fn set_player_loop_tree(&mut self, tree: PlayerLoopSystem) -> Result<(), PlayerLoopError> {
         self.player_loop.set_root(tree)
     }
 
-    /// Registers a custom player loop system next to the system it is
-    /// anchored to. It runs every frame at that position.
     pub fn register_player_loop_custom_system(
         &mut self,
         name: &str,
@@ -1334,7 +1337,6 @@ impl Runtime {
         )
     }
 
-    /// Removes a custom player loop system and the node it runs in.
     pub fn unregister_player_loop_custom_system(&mut self, type_name: &str) -> bool {
         self.player_loop.unregister_custom_system(type_name)
     }
@@ -1567,11 +1569,6 @@ impl Runtime {
         let Some(callbacks) = self.callbacks else {
             return;
         };
-        // A step's physics messages are dispatched before the next step
-        // runs, so the message order does not depend on how many fixed
-        // steps a rendered frame happens to batch. The 2D contacts join
-        // the 3D ones on one contact-event path, and the `is_2d`
-        // discriminator keeps a 2D contact off the 3D handlers.
         let mut contacts: Vec<ContactEvent> = Vec::new();
         for event in messages.events {
             contacts.push(ContactEvent {
@@ -1952,8 +1949,6 @@ impl Runtime {
 
     pub fn set_time_scale(&mut self, time_scale: f64) {
         self.time_scale = time_scale;
-        // A frozen scaled clock is the gameplay-pause signal: the audio bus
-        // silences every mixer group but Menu until time flows again.
         self.audio.set_gameplay_paused(time_scale == 0.0);
     }
 

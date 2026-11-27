@@ -647,6 +647,7 @@ pub fn stage_bundle_for_host(
         .and_then(|scene_path| unity_project_root(scene_path))
     {
         stage_project_assets(&project_root, output_dir)?;
+        crate::cooked::stage_project_cooked_textures(&project_root, output_dir)?;
         stage_project_settings(&project_root, output_dir)?;
         if project_has_scripts(&project_root) {
             script_host = ScriptHost::CoreClr;
@@ -753,8 +754,6 @@ pub fn stage_bundle_for_host(
     })
 }
 
-/// Stages the launcher of a desktop target that ships no application bundle:
-/// the player binary itself, so the shipped player is a real executable.
 fn stage_player_launcher(
     manifest: &BundleManifest,
     output_dir: &Path,
@@ -772,23 +771,10 @@ fn stage_player_launcher(
     Ok(path)
 }
 
-/// Copies the project assets into the bundle so the staged scenes keep the
-/// external references (prefab instances, materials, scripts) they carry.
 fn stage_project_assets(project_root: &Path, output_dir: &Path) -> Result<(), BundleError> {
-    let source = project_root.join("Assets");
-    if !source.is_dir() {
-        return Ok(());
-    }
-    let destination = output_dir.join("Assets");
-    if destination.starts_with(&source) {
-        return Ok(());
-    }
-    copy_directory(&source, &destination)
+    crate::cooked::stage_project_assets_without_raw_textures(project_root, output_dir)
 }
 
-/// Copies the project settings into the bundle so the player resolves the
-/// project's quality levels (and the shadows they enable) instead of falling
-/// back to the settings-less defaults.
 fn stage_project_settings(project_root: &Path, output_dir: &Path) -> Result<(), BundleError> {
     let source = project_root.join(PROJECT_SETTINGS_DIR_NAME);
     if !source.is_dir() {
