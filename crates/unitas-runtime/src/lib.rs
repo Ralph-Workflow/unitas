@@ -18,6 +18,7 @@ pub mod resources;
 mod runtime;
 mod runtime_objects;
 mod scene_query;
+pub mod scriptable_object;
 pub mod scripting;
 pub mod terrain;
 pub mod timeline;

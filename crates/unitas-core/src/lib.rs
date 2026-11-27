@@ -2,6 +2,7 @@ mod changes;
 pub mod compat;
 mod entity;
 mod error;
+pub mod object;
 mod scene_graph;
 pub mod transform;
 

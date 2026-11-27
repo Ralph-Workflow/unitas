@@ -73,6 +73,8 @@ namespace Unitas.Bridge
         private readonly RuntimeRenderProvider _renderProvider;
         private readonly RuntimeUiProvider _uiProvider;
         private readonly RuntimeTrailProvider _trailProvider;
+        private readonly ScriptableObjectProvider _scriptableObjectProvider;
+        private readonly RuntimeCinemachineProvider _cinemachineProvider;
         private ISceneProvider _sceneProvider;
         private ISceneBackend _sceneBackend;
         private static int _nextSceneHandle = 1;
@@ -129,6 +131,8 @@ namespace Unitas.Bridge
             _renderProvider = new RuntimeRenderProvider(runtimeHandle);
             _uiProvider = new RuntimeUiProvider(runtimeHandle);
             _trailProvider = new RuntimeTrailProvider(runtimeHandle);
+            _scriptableObjectProvider = new ScriptableObjectProvider(runtimeHandle);
+            _cinemachineProvider = new RuntimeCinemachineProvider();
             _sceneProvider = _defaultSceneProvider;
             _sceneBackend = _defaultSceneBackend;
 
@@ -183,6 +187,8 @@ namespace Unitas.Bridge
             RuntimeObjectProvider.Current = this;
             RuntimeObjectProvider.ScriptFactoryRegistrar = ScriptGlueRegistry.RegisterTypeFactory;
             RuntimeObjectProvider.RuntimeObjectRegistrationHandler = RegisterRuntimeGameObject;
+            ScriptableObject.Provider = _scriptableObjectProvider;
+            Cinemachine.CinemachineProvider.Current = _cinemachineProvider;
             Animator.Provider = _animationProvider;
             Camera.Provider = _renderProvider;
             Mesh.Provider = _renderProvider;
@@ -1028,6 +1034,14 @@ namespace Unitas.Bridge
                 {
                     RuntimeObjectProvider.Current = null;
                     RuntimeObjectProvider.RuntimeObjectRegistrationHandler = null;
+                }
+                if (ReferenceEquals(ScriptableObject.Provider, _scriptableObjectProvider))
+                {
+                    ScriptableObject.Provider = null;
+                }
+                if (ReferenceEquals(Cinemachine.CinemachineProvider.Current, _cinemachineProvider))
+                {
+                    Cinemachine.CinemachineProvider.Current = null;
                 }
                 if (ReferenceEquals(Animator.Provider, _animationProvider))
                 {
@@ -3351,8 +3365,12 @@ namespace Unitas.Bridge
                 ? parsed.ClipName
                 : "SceneAudioClip";
             AudioClip? loadedClip = null;
+            // "scene" binds the clip the runtime imported for the serialized
+            // reference; "path" re-loads the asset and registers a second copy.
+            string binding = "none";
             if (audioConfig.ClipId != 0UL)
             {
+                binding = "scene";
                 if (TryGetAudioClipInfo(audioConfig.ClipId, out uint channels, out uint sampleRate, out ulong _, out double durationSeconds))
                 {
                     loadedClip = new AudioClip(clipName, (float)durationSeconds, (int)channels, (int)sampleRate, audioConfig.ClipId);
@@ -3364,6 +3382,7 @@ namespace Unitas.Bridge
             }
             else if (hasParsed && !string.IsNullOrEmpty(parsed.ClipPath))
             {
+                binding = "path";
                 loadedClip = LoadClip(parsed.ClipPath);
                 if (loadedClip != null && loadedClip.NativeClipId != 0UL)
                 {
@@ -3382,12 +3401,12 @@ namespace Unitas.Bridge
                         audioConfig.Enabled);
                 }
             }
-            else if (audioConfig.ClipDuration > 0.0)
-            {
-                loadedClip = new AudioClip(clipName, (float)audioConfig.ClipDuration, 1, 44100, 0UL);
-            }
 
             audioSource.ApplyNativeConfig(nativeEntity, audioConfig, loadedClip);
+            if (loadedClip != null && loadedClip.NativeClipId != 0UL)
+            {
+                Debug.Log($"[scene-audio] source={owner.name} clip={loadedClip.name} binding={binding} native_clip_id={loadedClip.NativeClipId} samples={loadedClip.samples} channels={loadedClip.channels} sample_rate={loadedClip.frequency}");
+            }
         }
 
         /// <summary>

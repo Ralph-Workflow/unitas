@@ -523,6 +523,14 @@ namespace UnityEngine
                 return;
             }
 
+            if (obj is ScriptableObject scriptableObject)
+            {
+                scriptableObject.DestroyInstance();
+                obj._destroyed = true;
+                DeregisterLiveObject(obj);
+                return;
+            }
+
             if (obj is Component candidateComponent)
             {
                 GameObject? owner = candidateComponent.OwnerOrNull;

@@ -356,7 +356,7 @@ pub const SUPPORTED_PACKAGE_MATRIX: &[PackageMatrixEntry] = &[
         state: CompatibilityState::Unsupported,
         owning_spec: "scripting-runtime.md",
         owning_feature_id: "RUN-011",
-        state_notes: "Unsupported: no native container allocator, disposal, or job safety system exists; the Collections API is unavailable",
+        state_notes: "Unsupported: the com.unity.collections package API is unavailable; the native container unitas ships as UnityEngine.Collections.NativeArray provides the Temp and Persistent allocators, disposal, leak reporting, and job-safety checks, but the package's own containers and the Unity.Collections namespace are not provided",
     },
     PackageMatrixEntry {
         package_id: "com.unity.nuget.newtonsoft-json",
@@ -2935,6 +2935,71 @@ pub const OWNED_FEATURE_CAPABILITIES: &[OwnedFeatureCapability] = &[
                 ],
                 missing: None,
             },
+            OwnedCapabilityPart {
+                behavior: "a ScriptableObject created with CreateInstance is held by the native world under its own identity and lifetime, receives the Awake, OnEnable, and OnValidate callbacks on creation and the OnDisable and OnDestroy callbacks on destruction, and compares equal to null once destroyed",
+                location: "bridge/UnityEngine/ScriptableObject.cs",
+                evidence: &[
+                    "bridge/Unitas.Bridge.Tests/ScriptableObjectTests.cs::TestScriptableObjectCreateInstanceLifecycle",
+                    "bridge/Unitas.Bridge.Tests/ScriptableObjectTests.cs::TestScriptableObjectDestroyFakeNullAndDoubleDestroy",
+                ],
+                missing: None,
+            },
+            OwnedCapabilityPart {
+                behavior: "a ScriptableObject is stored in a project .asset file, is offered for creation by the editor's CreateAssetMenu attribute, is cloned by Object.Instantiate, and is loaded from a Resources folder or the Preloaded Assets player setting",
+                location: "bridge/UnityEngine/ScriptableObject.cs",
+                evidence: &[],
+                missing: Some("a ScriptableObject is not serialized to a .asset file, carries no CreateAssetMenu attribute, is not cloned by Object.Instantiate, and is not loaded from a Resources folder or the Preloaded Assets player setting, so a ScriptableObject exists only as a runtime instance"),
+            },
+        ],
+    },
+    OwnedFeatureCapability {
+        feature_id: "RUN-002",
+        owning_spec: "scripting-runtime.md",
+        capability: "C# scripting profile and UnityEngine-compatible APIs",
+        parts: &[
+            OwnedCapabilityPart {
+                behavior: "project scripts compile against the UnityEngine-compatible API assembly with the C# 9 language profile and the Unity 2022.3 symbols of the selected target",
+                location: "bridge/Unitas.Scripting/ScriptCompilation.cs",
+                evidence: &[
+                    "bridge/Unitas.Bridge.Tests/CompilationTests.cs::TestStory7TargetDefinesEditorAndPlayers",
+                    "bridge/Unitas.Bridge.Tests/CompilationTests.cs::TestCliCompileEntryPoint",
+                ],
+                missing: None,
+            },
+            OwnedCapabilityPart {
+                behavior: "the generated glue dispatches Unity's messages to project scripts without reflection",
+                location: "bridge/Unitas.Scripting/ScriptAnalyzerAndGlueGenerator.cs",
+                evidence: &[
+                    "bridge/Unitas.Bridge.Tests/CompilationTests.cs::TestGeneratedGlueAndZeroReflectionMessageDispatch",
+                ],
+                missing: None,
+            },
+            OwnedCapabilityPart {
+                behavior: "the Mathf functions the scripting profile exposes behave as Unity",
+                location: "bridge/UnityEngine/Mathf.cs",
+                evidence: &[
+                    "bridge/Unitas.Bridge.Tests/CoreApiTests.cs::TestMathfSurface",
+                ],
+                missing: None,
+            },
+            OwnedCapabilityPart {
+                behavior: "the native interop members of the scripting profile are available on the targets that provide them and raise Unity's exception on the targets that do not",
+                location: "bridge/UnityEngine/UnityEngine.csproj",
+                evidence: &[],
+                missing: Some("the UnityEngine assembly defines no AndroidJavaObject, AndroidJavaClass, AndroidJavaProxy, AndroidJNI, AndroidJNIHelper, or UnitySendMessage member, so a project that calls one does not compile and no build report lists the use as Platform-limited naming the calling member"),
+            },
+            OwnedCapabilityPart {
+                behavior: "the API compatibility level the project's Player settings choose is applied to the compilation of each target",
+                location: "bridge/Unitas.Scripting/ScriptCompilation.cs",
+                evidence: &[],
+                missing: Some("the compiler always references the host's netstandard.dll and System.* assemblies and nothing reads the API compatibility level from ProjectSettings, so a project that selects the .NET Framework level compiles against .NET Standard 2.1 instead"),
+            },
+            OwnedCapabilityPart {
+                behavior: "the Visual Scripting package's script graphs and state graphs run in editor, headless, and player sessions",
+                location: "bridge/UnityEngine/UnityEngine.csproj",
+                evidence: &[],
+                missing: Some("the UnityEngine assembly defines no Visual Scripting type, so no script machine, state machine, flow graph, or node library runs and the com.unity.visualscripting package stays unsupported"),
+            },
         ],
     },
     OwnedFeatureCapability {
@@ -3024,6 +3089,139 @@ pub const OWNED_FEATURE_CAPABILITIES: &[OwnedFeatureCapability] = &[
         ],
     },
     OwnedFeatureCapability {
+        feature_id: "RUN-006",
+        owning_spec: "scripting-runtime.md",
+        capability: "Resource loading, residency, release, and content catalogs",
+        parts: &[
+            OwnedCapabilityPart {
+                behavior: "Resources.Load, Resources.LoadAll, and Resources.LoadAsync find assets in any Resources folder by their path without the extension, a missing path returns null, and Resources.UnloadAsset and Resources.UnloadUnusedAssets release them",
+                location: "bridge/UnityEngine/Resources.cs",
+                evidence: &[
+                    "bridge/Unitas.Bridge.Tests/ResourcesSceneTests.cs::TestResourcesLoadTextAssetPrefabInstantiateAndMissingPaths",
+                    "bridge/Unitas.Bridge.Tests/ResourcesSceneTests.cs::TestResourcesUnloadUnusedAssetsAndUnloadAssetValidation",
+                ],
+                missing: None,
+            },
+            OwnedCapabilityPart {
+                behavior: "the resident assets, their paths, and the references held on them are inspectable, and the references decide when an asset is released",
+                location: "bridge/UnityEngine/Resources.cs",
+                evidence: &[
+                    "bridge/Unitas.Bridge.Tests/ResourcesSceneTests.cs::TestResourcesUnloadUnusedAssetsReferenceTrackingAndResidencyVisibility",
+                ],
+                missing: None,
+            },
+            OwnedCapabilityPart {
+                behavior: "the resident assets, their reference counts, and the origin of each load are visible in the editor and through automation",
+                location: "crates/unitas-editor-abi/src/asset_tools.rs",
+                evidence: &[],
+                missing: Some("the residency counters live in the managed bridge and the editor ABI exposes no tool that reports them, so the residency of a loaded asset is not visible through automation"),
+            },
+            OwnedCapabilityPart {
+                behavior: "an AssetBundle loads from a file, a memory block, a stream, or a web request, exposes its assets and scenes, and unloads with Unity's two modes",
+                location: "bridge/UnityEngine/UnityEngine.csproj",
+                evidence: &[],
+                missing: Some("the UnityEngine assembly defines no AssetBundle type, so no bundle is loaded at runtime, a bundle unitas built is never read by a player, and the dependency, duplicate-load, and Unload(false) rules of the specification are not implemented"),
+            },
+            OwnedCapabilityPart {
+                behavior: "Addressables content loads by address key, label, and AssetReference, and a handle carries its status, progress, result, exception, and reference count",
+                location: "bridge/UnityEngine/UnityEngine.csproj",
+                evidence: &[],
+                missing: Some("the UnityEngine assembly defines no Addressables type, so no addressable catalog, key, label, handle, or reference count exists and content cannot be loaded by address"),
+            },
+        ],
+    },
+    OwnedFeatureCapability {
+        feature_id: "RUN-007",
+        owning_spec: "scripting-runtime.md",
+        capability: "Script compilation, assemblies, defines, and plugins",
+        parts: &[
+            OwnedCapabilityPart {
+                behavior: "scripts outside an assembly definition compile into Unity's predefined assemblies with Unity's folder rules, and assembly definition and assembly reference files define named assemblies with their references, platform exclusion, define constraints, version defines, and the scripts they claim",
+                location: "bridge/Unitas.Scripting/AssemblyDiscovery.cs",
+                evidence: &[
+                    "bridge/Unitas.Bridge.Tests/CompilationTests.cs::TestStory6AssembliesAsmrefDefinesAndVersionDefines",
+                    "bridge/Unitas.Bridge.Tests/CompilationTests.cs::TestStory6ReferenceCycleDiagnostic",
+                    "bridge/Unitas.Bridge.Tests/CompilationTests.cs::TestStory6OverrideReferencesHonorsPrecompiledReferences",
+                ],
+                missing: None,
+            },
+            OwnedCapabilityPart {
+                behavior: "the compilation defines the Unity 2022.3 symbols of the selected target, including the editor, platform, development, and scripting backend symbols, and a csc.rsp contributes its defines",
+                location: "bridge/Unitas.Scripting/DefinesAndResponseParser.cs",
+                evidence: &[
+                    "bridge/Unitas.Bridge.Tests/CompilationTests.cs::TestStory7TargetDefinesEditorAndPlayers",
+                ],
+                missing: None,
+            },
+            OwnedCapabilityPart {
+                behavior: "a failed edit leaves the last valid assemblies in effect and only the affected assemblies and their dependents recompile, a plugin excluded for the running architecture fails its DllImport with a diagnostic naming the library, target, architecture, and calling member, and a player build refuses a runtime script that references UnityEditor unguarded",
+                location: "bridge/Unitas.Scripting/ScriptCompilation.cs",
+                evidence: &[
+                    "bridge/Unitas.Bridge.Tests/CompilationTests.cs::TestStory1And4FailedEditPreservesLastValidAndIncrementalRecompile",
+                    "bridge/Unitas.Bridge.Tests/CompilationTests.cs::TestStory10IncompatibleNativePluginDllImportDiagnostic",
+                    "bridge/Unitas.Bridge.Tests/CompilationTests.cs::TestStory29PlayerBuildRejectsUnguardedUnityEditorReference",
+                ],
+                missing: None,
+            },
+            OwnedCapabilityPart {
+                behavior: "Roslyn analyzers and source generators run against the assemblies Unity's analyzer scoping rules apply them to, and their diagnostics and generated types join the compilation",
+                location: "bridge/Unitas.Scripting/ScriptCompilation.cs",
+                evidence: &[],
+                missing: Some("the compiler loads no analyzer and no source generator, so an analyzer's warning and a generator's added type never appear in the compilation report and a trusted project's generated code is never compiled"),
+            },
+            OwnedCapabilityPart {
+                behavior: "every compiler option a csc.rsp carries takes Unity's effect, and an option Unity 2022.3 rejects is reported naming the option and the file",
+                location: "bridge/Unitas.Scripting/DefinesAndResponseParser.cs",
+                evidence: &[],
+                missing: Some("the response file parser honors defines, warning suppression, warnings as errors, the unmanaged-memory option, and additional references and reports every other option as an unsupported compiler option, so the remaining Unity 2022.3 response file options never take Unity's effect"),
+            },
+        ],
+    },
+    OwnedFeatureCapability {
+        feature_id: "RUN-008",
+        owning_spec: "scripting-runtime.md",
+        capability: "Serialized events, messages, and delayed invocation",
+        parts: &[
+            OwnedCapabilityPart {
+                behavior: "a UnityEvent and its generic arities keep persistent listeners with their target, method, argument mode, and call state, invoke the enabled persistent listeners in serialized order before the dynamic ones, and report a persistent listener whose target or method no longer exists",
+                location: "bridge/UnityEngine/UnityEvent.cs",
+                evidence: &[
+                    "bridge/Unitas.Bridge.Tests/EventsTests.cs::TestUnityEventPersistentBeforeDynamicOrdering",
+                    "bridge/Unitas.Bridge.Tests/EventsTests.cs::TestUnityEventGenericPersistentAndDynamicListeners",
+                    "bridge/Unitas.Bridge.Tests/EventsTests.cs::TestUnityEventMissingOrRenamedPersistentMethodLogsWarningAndContinues",
+                    "bridge/Unitas.Bridge.Tests/EventsTests.cs::TestUnityEventCallStateAndRemoveAllListenersPreservesPersistent",
+                    "bridge/Unitas.Bridge.Tests/UnityEventArityTests.cs::TestFourArityUnityEventDynamicAndPersistentListeners",
+                ],
+                missing: None,
+            },
+            OwnedCapabilityPart {
+                behavior: "SendMessage, BroadcastMessage, and SendMessageUpwards reach the components Unity's rules include, and a message with no receiver logs Unity's error naming the method and the target",
+                location: "bridge/UnityEngine/GameObject.Messaging.cs",
+                evidence: &[
+                    "bridge/Unitas.Bridge.Tests/EventsTests.cs::TestSendMessageAndBroadcastMessageAndSendMessageUpwards",
+                    "bridge/Unitas.Bridge.Tests/UnityEventArityTests.cs::TestSendMessageRequireReceiverVsDontRequireReceiver",
+                ],
+                missing: None,
+            },
+            OwnedCapabilityPart {
+                behavior: "Invoke and InvokeRepeating run in scaled time, CancelInvoke cancels the pending invocations, IsInvoking reports them, and a destroyed owner stops the invocation for good",
+                location: "bridge/UnityEngine/MonoBehaviour.Invoke.cs",
+                evidence: &[
+                    "bridge/Unitas.Bridge.Tests/EventsTests.cs::TestInvokeAndInvokeRepeatingScaledTimeAndPause",
+                    "bridge/Unitas.Bridge.Tests/EventsTests.cs::TestInvokeStopsPermanentlyWhenOwnerOrGameObjectDestroyed",
+                    "bridge/Unitas.Bridge.Tests/EventsTests.cs::TestCancelInvokeAndIsInvokingQueries",
+                ],
+                missing: None,
+            },
+            OwnedCapabilityPart {
+                behavior: "disabling the behaviour or deactivating its object cancels the pending invocations as Unity does",
+                location: "bridge/UnityEngine/InvokeScheduler.cs",
+                evidence: &[],
+                missing: Some("the invoke scheduler cancels a pending invocation only when its owner is destroyed and never reads Behaviour.enabled or GameObject.activeInHierarchy, so a disabled behaviour and a deactivated object keep firing"),
+            },
+        ],
+    },
+    OwnedFeatureCapability {
         feature_id: "RUN-009",
         owning_spec: "scripting-runtime.md",
         capability: "Web requests, file locations, JSON utilities, and randomness",
@@ -3062,6 +3260,113 @@ pub const OWNED_FEATURE_CAPABILITIES: &[OwnedFeatureCapability] = &[
                 location: "bridge/UnityEngine/Application.cs",
                 evidence: &[],
                 missing: Some("a file location that is not writable or not directly accessible on a target is not reported with the target and the path"),
+            },
+        ],
+    },
+    OwnedFeatureCapability {
+        feature_id: "RUN-010",
+        owning_spec: "scripting-runtime.md",
+        capability: "Editor-time scripts and content hooks",
+        parts: &[
+            OwnedCapabilityPart {
+                behavior: "a method marked [MenuItem] is discovered with its validation function, priority, and shortcut, appears in the editor command palette and as an automation tool, and is disabled with its reason when the validation function returns false",
+                location: "bridge/UnityEngine/UnityEditor/MenuItem.cs",
+                evidence: &[
+                    "bridge/Unitas.Bridge.Tests/EditorMenuTests.cs::TestStory27MenuItemAttributePropertiesAndShortcutParsing",
+                    "bridge/Unitas.Bridge.Tests/EditorMenuTests.cs::TestStory27CommandPaletteAndAutomationToolDiscoveryAndValidation",
+                ],
+                missing: None,
+            },
+            OwnedCapabilityPart {
+                behavior: "a modal dialog raised by an editor script never blocks, returns the answer supplied for it or the default button, and is recorded as a structured event",
+                location: "bridge/UnityEngine/UnityEditor/EditorUtility.cs",
+                evidence: &[
+                    "bridge/Unitas.Bridge.Tests/EditorMenuTests.cs::TestStory44DisplayDialogNonBlockingDefaultAndOverrideInAgentSession",
+                    "bridge/Unitas.Bridge.Tests/EditorMenuTests.cs::TestStory44DisplayDialogComplexFromMenuCommandInAgentSession",
+                ],
+                missing: None,
+            },
+            OwnedCapabilityPart {
+                behavior: "an editor method a project assembly contributes is discovered from the compiled assembly and registered as a tool with the execute-project-code scope",
+                location: "editor/Unitas.Editor/Registry/ExecuteMethodTools.cs",
+                evidence: &[
+                    "editor/Unitas.Editor.Tests/Registry/ExecuteMethodToolsTests.cs::DiscoversEditorCallableMethodsAndEmitsGlueRegistration",
+                ],
+                missing: None,
+            },
+            OwnedCapabilityPart {
+                behavior: "the content hooks run in a trusted project: AssetPostprocessor and ScriptedImporter during import, OnValidate and Reset after an edit, InitializeOnLoad after each domain reload, and the EditorApplication callbacks",
+                location: "editor/Unitas.Editor/Registry/ExecuteMethodTools.cs",
+                evidence: &[],
+                missing: Some("the editor invokes a project editor method only on demand through editor.execute_method and defines no AssetPostprocessor, ScriptedImporter, OnValidate, Reset, InitializeOnLoad, or EditorApplication callback, so no content hook runs during import or after a domain reload"),
+            },
+            OwnedCapabilityPart {
+                behavior: "a method marked [ContextMenu] or [ContextMenuItem] appears as a named command beside the menu commands",
+                location: "bridge/UnityEngine/UnityEditor/MenuItem.cs",
+                evidence: &[],
+                missing: Some("the editor reads only the MenuItem attribute, so a context menu method and a context menu item never appear in the command palette or as an automation tool"),
+            },
+            OwnedCapabilityPart {
+                behavior: "the public UnityEditor API of Unity 2022.3 LTS is provided with Unity's meaning, including AssetDatabase, SerializedObject, EditorPrefs, Selection, PrefabUtility, CompilationPipeline, EditorSceneManager, and the drawing and gizmo APIs",
+                location: "bridge/UnityEngine/UnityEditor/EditorUtility.cs",
+                evidence: &[],
+                missing: Some("the UnityEditor assembly of the bridge defines only EditorUtility and MenuItem, so no AssetDatabase, SerializedObject, EditorPrefs, SessionState, EditorApplication, Selection, EditorGUIUtility, DragAndDrop, GenericMenu, TypeCache, EditorSceneManager, PrefabUtility, CompilationPipeline, custom editor drawing, or BuildPipeline member exists and an editor script that calls one does not compile"),
+            },
+        ],
+    },
+    OwnedFeatureCapability {
+        feature_id: "RUN-011",
+        owning_spec: "scripting-runtime.md",
+        capability: "Jobs, Burst-compiled code, and native collections",
+        parts: &[
+            OwnedCapabilityPart {
+                behavior: "a job runs exactly once, a dependent job starts only after its dependency completes, a parallel-for job covers its range exactly once, and a handle completes, reports its state, and combines its dependencies",
+                location: "crates/unitas-jobs/src/lib.rs",
+                evidence: &[
+                    "crates/unitas-jobs/tests/job_system_tests.rs::every_scheduled_job_runs_exactly_once",
+                    "crates/unitas-jobs/tests/job_system_tests.rs::dependent_job_observes_its_dependency_completed",
+                    "crates/unitas-jobs/tests/job_system_tests.rs::parallel_for_covers_the_range_exactly_once",
+                    "crates/unitas-jobs/tests/job_system_tests.rs::complete_waits_for_the_job_and_is_complete_reports_the_state",
+                ],
+                missing: None,
+            },
+            OwnedCapabilityPart {
+                behavior: "a managed job schedules through the job API, waits for its dependency, and completes only after a combined dependency completes",
+                location: "bridge/UnityEngine/Jobs/Job.cs",
+                evidence: &[
+                    "bridge/Unitas.Bridge.Tests/JobSystemTests.cs::ParallelForMatchesSequentialResult",
+                    "bridge/Unitas.Bridge.Tests/JobSystemTests.cs::DependentJobWaitsForItsDependency",
+                    "bridge/Unitas.Bridge.Tests/JobSystemTests.cs::CombinedHandleCompletesAfterBoth",
+                ],
+                missing: None,
+            },
+            OwnedCapabilityPart {
+                behavior: "a native container allocates with the Temp and Persistent allocators, refuses a second disposal, rejects an access while a job holds it, and reports an undisposed allocation as a leak",
+                location: "bridge/UnityEngine/Collections/NativeArray.cs",
+                evidence: &[
+                    "bridge/Unitas.Bridge.Tests/JobSystemTests.cs::SafetyRejectsAccessWhileTheJobRuns",
+                    "bridge/Unitas.Bridge.Tests/JobSystemTests.cs::DoubleDisposeThrows",
+                    "bridge/Unitas.Bridge.Tests/JobSystemTests.cs::UndisposedArrayIsReported",
+                ],
+                missing: None,
+            },
+            OwnedCapabilityPart {
+                behavior: "code marked [BurstCompile] produces results equivalent to its managed execution within the floating-point mode the attribute declares",
+                location: "bridge/Unitas.Scripting/ScriptCompilation.cs",
+                evidence: &[],
+                missing: Some("the UnityEngine assembly defines no BurstCompile attribute and the compiler performs no Burst compilation, so code marked [BurstCompile] does not compile and no Burst-compiled result is produced"),
+            },
+            OwnedCapabilityPart {
+                behavior: "the Unity.Mathematics types and functions have the same semantics in managed and Burst-compiled code",
+                location: "bridge/UnityEngine/UnityEngine.csproj",
+                evidence: &[],
+                missing: Some("the UnityEngine assembly defines no Unity.Mathematics type, so a project that uses Unity.Mathematics does not compile"),
+            },
+            OwnedCapabilityPart {
+                behavior: "the Entities package's worlds, entities, systems, baking, and subscenes behave as the package defines",
+                location: "bridge/UnityEngine/UnityEngine.csproj",
+                evidence: &[],
+                missing: Some("the UnityEngine assembly defines no Unity.Entities type, so no world, entity, system, baker, or subscene exists and the com.unity.entities package stays unsupported"),
             },
         ],
     },

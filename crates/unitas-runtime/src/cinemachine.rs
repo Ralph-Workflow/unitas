@@ -1,4 +1,17 @@
-use std::collections::HashMap;
+macro_rules! ffi_export {
+    (pub extern "C" fn $name:ident($($arg:ident : $arg_ty:ty),* $(,)?) $(-> $ret:ty)? $body:block) => {
+        #[unsafe(export_name = stringify!($name))]
+        pub extern "C" fn $name($($arg : $arg_ty),*) $(-> $ret)? {
+            #[used]
+            static KEEP: extern "C" fn($($arg_ty),*) $(-> $ret)? = $name;
+            $body
+        }
+    };
+}
+
+use std::collections::{BTreeMap, HashMap};
+use std::sync::Mutex;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use unitas_core::EntityId;
 
@@ -205,6 +218,10 @@ impl CinemachineWorld {
 
     pub fn camera(&self, index: usize) -> Option<&VirtualCamera> {
         self.cameras.get(index)
+    }
+
+    pub fn camera_mut(&mut self, index: usize) -> Option<&mut VirtualCamera> {
+        self.cameras.get_mut(index)
     }
 
     pub fn camera_by_name(&self, name: &str) -> Option<&VirtualCamera> {
@@ -653,4 +670,418 @@ fn normalize_vector(vector: [f64; 3]) -> Option<[f64; 3]> {
         return None;
     }
     Some([vector[0] / length, vector[1] / length, vector[2] / length])
+}
+
+const CINEMACHINE_STATE_SIZE: usize = 264;
+const CINEMACHINE_LIVE_NAME: usize = 0;
+const CINEMACHINE_LIVE_POSE: usize = 64;
+const CINEMACHINE_BLEND_FROM: usize = 120;
+const CINEMACHINE_BLEND_TO: usize = 184;
+const CINEMACHINE_BLEND_WEIGHT: usize = 248;
+const CINEMACHINE_LIVE_FLAG: usize = 256;
+const CINEMACHINE_BLEND_FLAG: usize = 260;
+
+struct CinemachineState {
+    world: CinemachineWorld,
+    buffer: Vec<u8>,
+}
+
+impl CinemachineState {
+    fn new() -> Self {
+        Self {
+            world: CinemachineWorld::new(),
+            buffer: Vec::new(),
+        }
+    }
+}
+
+static CINEMACHINE_STATES: Mutex<BTreeMap<u64, CinemachineState>> = Mutex::new(BTreeMap::new());
+static NEXT_CINEMACHINE_WORLD: AtomicU64 = AtomicU64::new(1);
+
+fn with_cinemachine_state<T>(
+    world: u64,
+    action: impl FnOnce(&mut CinemachineState) -> T,
+) -> Option<T> {
+    let mut states = match CINEMACHINE_STATES.lock() {
+        Ok(guard) => guard,
+        Err(_) => return None,
+    };
+    let state = states.get_mut(&world)?;
+    Some(action(state))
+}
+
+fn cinemachine_camera_index(handle: u64) -> Option<usize> {
+    if handle == 0 {
+        return None;
+    }
+    usize::try_from(handle - 1).ok()
+}
+
+fn cinemachine_read_name(state: &CinemachineState, address: u64, length: usize) -> Option<String> {
+    let base = state.buffer.as_ptr() as usize as u64;
+    if address < base {
+        return None;
+    }
+    let offset = usize::try_from(address - base).ok()?;
+    let end = offset.checked_add(length)?;
+    let bytes = state.buffer.get(offset..end)?;
+    let text = std::str::from_utf8(bytes).ok()?;
+    Some(text.trim_end_matches('\0').to_string())
+}
+
+fn cinemachine_blend_style(value: i32) -> BlendStyle {
+    match value {
+        0 => BlendStyle::Cut,
+        1 => BlendStyle::Linear,
+        2 => BlendStyle::EaseIn,
+        3 => BlendStyle::EaseOut,
+        _ => BlendStyle::EaseInOut,
+    }
+}
+
+fn cinemachine_write_name(slot: &mut [u8], name: &str) {
+    let bytes = name.as_bytes();
+    let count = bytes.len().min(slot.len().saturating_sub(1));
+    slot[..count].copy_from_slice(&bytes[..count]);
+}
+
+fn cinemachine_write_f64(slot: &mut [u8], value: f64) {
+    slot.copy_from_slice(&value.to_le_bytes());
+}
+
+ffi_export! {
+pub extern "C" fn unitas_cinemachine_world_create() -> u64 {
+    let mut states = match CINEMACHINE_STATES.lock() {
+        Ok(guard) => guard,
+        Err(_) => return 0,
+    };
+    let handle = NEXT_CINEMACHINE_WORLD.fetch_add(1, Ordering::Relaxed);
+    states.insert(handle, CinemachineState::new());
+    handle
+}
+}
+
+ffi_export! {
+pub extern "C" fn unitas_cinemachine_world_destroy(world: u64) -> i32 {
+    let mut states = match CINEMACHINE_STATES.lock() {
+        Ok(guard) => guard,
+        Err(_) => return -1,
+    };
+    if states.remove(&world).is_some() {
+        0
+    } else {
+        -1
+    }
+}
+}
+
+ffi_export! {
+pub extern "C" fn unitas_cinemachine_world_buffer(world: u64, capacity: u64) -> u64 {
+    let cap = match usize::try_from(capacity) {
+        Ok(value) => value,
+        Err(_) => return 0,
+    };
+    if cap == 0 {
+        return 0;
+    }
+    with_cinemachine_state(world, |state| {
+        if state.buffer.len() < cap {
+            state.buffer.resize(cap, 0);
+        }
+        state.buffer.as_ptr() as usize as u64
+    })
+    .unwrap_or_default()
+}
+}
+
+ffi_export! {
+pub extern "C" fn unitas_cinemachine_world_add_camera(
+    world: u64,
+    name_address: u64,
+    name_length: u64,
+    priority: i32,
+) -> u64 {
+    let length = match usize::try_from(name_length) {
+        Ok(value) => value,
+        Err(_) => return 0,
+    };
+    with_cinemachine_state(world, |state| {
+        let Some(name) = cinemachine_read_name(state, name_address, length) else {
+            return 0;
+        };
+        let index = state.world.add_camera(VirtualCamera::new(name, priority));
+        match u64::try_from(index) {
+            Ok(value) => value + 1,
+            Err(_) => 0,
+        }
+    })
+    .unwrap_or_default()
+}
+}
+
+ffi_export! {
+pub extern "C" fn unitas_cinemachine_world_set_priority(
+    world: u64,
+    camera: u64,
+    priority: i32,
+) -> i32 {
+    with_cinemachine_state(world, |state| {
+        let Some(index) = cinemachine_camera_index(camera) else {
+            return -1;
+        };
+        if state.world.set_priority(index, priority) {
+            0
+        } else {
+            -1
+        }
+    })
+    .unwrap_or(-1)
+}
+}
+
+ffi_export! {
+pub extern "C" fn unitas_cinemachine_world_set_active(world: u64, camera: u64, active: u8) -> i32 {
+    with_cinemachine_state(world, |state| {
+        let Some(index) = cinemachine_camera_index(camera) else {
+            return -1;
+        };
+        if state.world.set_active(index, active != 0) {
+            0
+        } else {
+            -1
+        }
+    })
+    .unwrap_or(-1)
+}
+}
+
+ffi_export! {
+pub extern "C" fn unitas_cinemachine_world_set_follow(
+    world: u64,
+    camera: u64,
+    has_follow: u8,
+    entity: u64,
+    offset_x: f64,
+    offset_y: f64,
+    offset_z: f64,
+    damping: f64,
+) -> i32 {
+    with_cinemachine_state(world, |state| {
+        let Some(index) = cinemachine_camera_index(camera) else {
+            return -1;
+        };
+        let Some(camera) = state.world.camera_mut(index) else {
+            return -1;
+        };
+        camera.follow = if has_follow != 0 {
+            Some(EntityId::new(entity))
+        } else {
+            None
+        };
+        camera.follow_offset = [offset_x, offset_y, offset_z];
+        camera.follow_damping = damping;
+        0
+    })
+    .unwrap_or(-1)
+}
+}
+
+ffi_export! {
+pub extern "C" fn unitas_cinemachine_world_set_look_at(
+    world: u64,
+    camera: u64,
+    has_look_at: u8,
+    entity: u64,
+    damping: f64,
+) -> i32 {
+    with_cinemachine_state(world, |state| {
+        let Some(index) = cinemachine_camera_index(camera) else {
+            return -1;
+        };
+        let Some(camera) = state.world.camera_mut(index) else {
+            return -1;
+        };
+        camera.look_at = if has_look_at != 0 {
+            Some(EntityId::new(entity))
+        } else {
+            None
+        };
+        camera.look_at_damping = damping;
+        0
+    })
+    .unwrap_or(-1)
+}
+}
+
+ffi_export! {
+pub extern "C" fn unitas_cinemachine_world_set_target_position(
+    world: u64,
+    entity: u64,
+    x: f64,
+    y: f64,
+    z: f64,
+) -> i32 {
+    with_cinemachine_state(world, |state| {
+        state
+            .world
+            .set_target_position(EntityId::new(entity), [x, y, z]);
+        0
+    })
+    .unwrap_or(-1)
+}
+}
+
+ffi_export! {
+pub extern "C" fn unitas_cinemachine_world_set_default_blend(
+    world: u64,
+    style: i32,
+    duration: f64,
+) -> i32 {
+    with_cinemachine_state(world, |state| {
+        state.world.set_default_blend(CameraBlend {
+            style: cinemachine_blend_style(style),
+            duration,
+        });
+        0
+    })
+    .unwrap_or(-1)
+}
+}
+
+ffi_export! {
+pub extern "C" fn unitas_cinemachine_world_set_custom_blend(
+    world: u64,
+    from_address: u64,
+    from_length: u64,
+    to_address: u64,
+    to_length: u64,
+    style: i32,
+    duration: f64,
+) -> i32 {
+    let from_size = match usize::try_from(from_length) {
+        Ok(value) => value,
+        Err(_) => return -1,
+    };
+    let to_size = match usize::try_from(to_length) {
+        Ok(value) => value,
+        Err(_) => return -1,
+    };
+    with_cinemachine_state(world, |state| {
+        let Some(from) = cinemachine_read_name(state, from_address, from_size) else {
+            return -1;
+        };
+        let Some(to) = cinemachine_read_name(state, to_address, to_size) else {
+            return -1;
+        };
+        state.world.set_custom_blend(
+            &from,
+            &to,
+            CameraBlend {
+                style: cinemachine_blend_style(style),
+                duration,
+            },
+        );
+        0
+    })
+    .unwrap_or(-1)
+}
+}
+
+ffi_export! {
+pub extern "C" fn unitas_cinemachine_world_update(world: u64, delta: f64) -> i32 {
+    with_cinemachine_state(world, |state| {
+        state.world.update(delta);
+        0
+    })
+    .unwrap_or(-1)
+}
+}
+
+ffi_export! {
+pub extern "C" fn unitas_cinemachine_world_state(
+    world: u64,
+    address: u64,
+    capacity: u64,
+) -> i32 {
+    let cap = match usize::try_from(capacity) {
+        Ok(value) => value,
+        Err(_) => return -1,
+    };
+    if cap < CINEMACHINE_STATE_SIZE {
+        return -1;
+    }
+    with_cinemachine_state(world, |state| {
+        let base = state.buffer.as_ptr() as usize as u64;
+        if address < base {
+            return -1;
+        }
+        let offset = match usize::try_from(address - base) {
+            Ok(value) => value,
+            Err(_) => return -1,
+        };
+        let end = match offset.checked_add(CINEMACHINE_STATE_SIZE) {
+            Some(value) => value,
+            None => return -1,
+        };
+        if end > state.buffer.len() {
+            return -1;
+        }
+        let mut record = [0u8; CINEMACHINE_STATE_SIZE];
+        if let Some(camera) = state.world.live_camera() {
+            cinemachine_write_name(
+                &mut record[CINEMACHINE_LIVE_NAME..CINEMACHINE_LIVE_POSE],
+                &camera.name,
+            );
+            cinemachine_write_f64(
+                &mut record[CINEMACHINE_LIVE_POSE..CINEMACHINE_LIVE_POSE + 8],
+                camera.position[0],
+            );
+            cinemachine_write_f64(
+                &mut record[CINEMACHINE_LIVE_POSE + 8..CINEMACHINE_LIVE_POSE + 16],
+                camera.position[1],
+            );
+            cinemachine_write_f64(
+                &mut record[CINEMACHINE_LIVE_POSE + 16..CINEMACHINE_LIVE_POSE + 24],
+                camera.position[2],
+            );
+            cinemachine_write_f64(
+                &mut record[CINEMACHINE_LIVE_POSE + 24..CINEMACHINE_LIVE_POSE + 32],
+                camera.rotation[0],
+            );
+            cinemachine_write_f64(
+                &mut record[CINEMACHINE_LIVE_POSE + 32..CINEMACHINE_LIVE_POSE + 40],
+                camera.rotation[1],
+            );
+            cinemachine_write_f64(
+                &mut record[CINEMACHINE_LIVE_POSE + 40..CINEMACHINE_LIVE_POSE + 48],
+                camera.rotation[2],
+            );
+            cinemachine_write_f64(
+                &mut record[CINEMACHINE_LIVE_POSE + 48..CINEMACHINE_LIVE_POSE + 56],
+                camera.rotation[3],
+            );
+            record[CINEMACHINE_LIVE_FLAG..CINEMACHINE_LIVE_FLAG + 4]
+                .copy_from_slice(&1i32.to_le_bytes());
+        }
+        if let Some(blend) = state.world.active_blend() {
+            cinemachine_write_name(
+                &mut record[CINEMACHINE_BLEND_FROM..CINEMACHINE_BLEND_TO],
+                &blend.from,
+            );
+            cinemachine_write_name(
+                &mut record[CINEMACHINE_BLEND_TO..CINEMACHINE_BLEND_WEIGHT],
+                &blend.to,
+            );
+            cinemachine_write_f64(
+                &mut record[CINEMACHINE_BLEND_WEIGHT..CINEMACHINE_BLEND_WEIGHT + 8],
+                blend.weight(),
+            );
+            record[CINEMACHINE_BLEND_FLAG..CINEMACHINE_BLEND_FLAG + 4]
+                .copy_from_slice(&1i32.to_le_bytes());
+        }
+        state.buffer[offset..end].copy_from_slice(&record);
+        0
+    })
+    .unwrap_or(-1)
+}
 }

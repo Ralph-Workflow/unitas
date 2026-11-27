@@ -406,11 +406,7 @@ impl CanvasState {
             return step_focus(
                 focusables,
                 Some(current_id),
-                if direction[0] > 0.0 || direction[1] > 0.0 {
-                    1
-                } else {
-                    -1
-                },
+                2 * i32::from(direction[0] > 0.0 || direction[1] > 0.0) - 1,
             );
         };
         let current_center = [
@@ -445,11 +441,7 @@ impl CanvasState {
         if let Some((winner, _)) = best {
             return winner;
         }
-        let fallback_step = if direction[0] > 0.0 || direction[1] > 0.0 {
-            1
-        } else {
-            -1
-        };
+        let fallback_step = 2 * i32::from(direction[0] > 0.0 || direction[1] > 0.0) - 1;
         step_focus(focusables, Some(current_id), fallback_step)
     }
 

@@ -2078,7 +2078,7 @@ fn cmp_002_story_19_report_findings_carry_the_compatibility_tier_of_their_owning
     }
 }
 
-const OWNED_FEATURE_IDS: [&str; 65] = [
+const OWNED_FEATURE_IDS: [&str; 71] = [
     "PRJ-001", "PRJ-002", "PRJ-003", "PRJ-004", "PRJ-005", "PRJ-006", "PRJ-007", "PRJ-008",
     "SER-001", "SER-002", "SER-003", "SER-004", "SER-005", "PHY-001", "PHY-002", "PHY-003",
     "PHY-004", "NAV-001", "ENV-001", "ANI-001", "ANI-002", "CIN-001", "REN-001", "REN-002",
@@ -2086,8 +2086,8 @@ const OWNED_FEATURE_IDS: [&str; 65] = [
     "INP-001", "INP-002", "AUD-001", "MED-001", "BLD-001", "BLD-004", "BLD-005", "PLT-001",
     "LIC-001", "PRD-001", "XR-001", "NET-001", "DIA-003", "EDT-004", "EDT-005", "EDT-006",
     "EDT-007", "EDT-008", "AUT-001", "AUT-002", "AUT-007", "AUT-008", "CMP-002", "CMP-004",
-    "RUN-001", "RUN-003", "RUN-004", "RUN-005", "RUN-009", "DIA-001", "PRF-001", "ACC-001",
-    "SAV-001",
+    "RUN-001", "RUN-002", "RUN-003", "RUN-004", "RUN-005", "RUN-006", "RUN-007", "RUN-008",
+    "RUN-009", "RUN-010", "RUN-011", "DIA-001", "PRF-001", "ACC-001", "SAV-001",
 ];
 
 fn workspace_file(relative: &str) -> std::path::PathBuf {

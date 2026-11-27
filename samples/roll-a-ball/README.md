@@ -356,9 +356,14 @@ collider of its own.
   source keeps playing.
 - What is **not** demonstrated: the device lane still pushes only its
   synthetic tone, so the gameplay chime has not been proven audible through
-  the device in a windowed run on this machine; and the scene's own
-  `m_audioClip` reference is not bound to the managed `AudioSource`, so the
-  managed side loads the clip by path instead of through the scene reference.
+  the device in a windowed run on this machine. The scene's own
+  `m_audioClip` reference **is** bound to the managed `AudioSource`: the
+  runtime resolves the serialized clip guid to the imported
+  `Assets/Audio/CollectChime.wav` and the managed source carries that
+  native clip id, proven by `Scenarios/scene_audio_clip_binding.json` and
+  `crates/unitas-runtime/tests/scene_audio_clip_binding.rs`. The managed
+  materialiser still identifies the native source by a positional entity-id
+  guess, so a miss would fall back to loading the clip by path.
   Streaming music and 3D spatialization are out of scope for this phase.
 
 ## Non-default lane

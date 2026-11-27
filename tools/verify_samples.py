@@ -69,6 +69,12 @@ SCENARIOS: tuple[tuple[str, str, tuple[str, ...], bool], ...] = (
     ),
     ("collect_all", "collect_all.json", ("--repeat", "2"), False),
     ("collect_chime", "collect_chime.json", ("--repeat", "2"), False),
+    (
+        "scene_audio_clip_binding",
+        "scene_audio_clip_binding.json",
+        ("--repeat", "2"),
+        False,
+    ),
     ("pause_holds_simulation", "pause_holds_simulation.json", ("--repeat", "2"), False),
     ("slowmo_finish", "slowmo_finish.json", ("--repeat", "2"), False),
     ("destroy_semantics", "destroy_semantics.json", ("--repeat", "2"), False),

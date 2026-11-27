@@ -131,6 +131,8 @@ namespace Unitas.Bridge.Tests
                 () => SceneIsolationTests.Run(),
                 () => SceneReloadMaterializationTests.Run(),
                 () => UiPointerClickTests.Run(),
+                () => ScriptableObjectTests.Run(),
+                () => CinemachineTests.Run(),
             };
 
             int shard = 1;
