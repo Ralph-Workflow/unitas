@@ -32,11 +32,12 @@ code.
   exceeds 50 lines, and no function exceeds a cyclomatic complexity of 10.
   Tests are first-party source. The project's linter enforces each limit
   (Ruff `C901` and `PLR0915` for Python, `clippy::too_many_lines` for Rust,
-  and the repository size gate in `tools/verify.py` for the line counts no
-  language linter offers); the thresholds in force and the outstanding work
-  that brings them down to these ceilings are recorded in `linting-policy.md`
-  "Size limits". These limits are maximums: a project may lower them, never
-  raise them.
+  and the Roslyn analyzers for C#, with the repository size gate in
+  `tools/verify.py` enforcing every line-count limit no language linter
+  offers); the thresholds in force and the outstanding work that brings them
+  down to these ceilings are recorded in `linting-policy.md` "Size limits",
+  and no limit is raised to fit the tree. These limits are maximums: a
+  project may lower them, never raise them.
 * Error handling MUST surface actionable context. Bare `except: pass` is
   forbidden. Handle or propagate errors according to project convention;
   log once at the owning handling boundary and redact sensitive context.
@@ -360,7 +361,7 @@ on them when enforcing this policy and MUST keep them current as the
 project evolves.
 
 RALPH-FACT: naming_convention: snake_case for modules, functions, and variables; CapWords for classes; UPPER_CASE for module constants
-RALPH-FACT: module_boundary_rule: the gate logic lives in tools/verify.py, the CLA check in tools/cla.py, the non-default lane runners in tools/verify_benchmark.py, tools/verify_device.py, tools/verify_perf.py and tools/verify_samples.py, and the gate tests in tools/test_verify.py, tools/test_verify_device.py and tools/test_cla.py; a new module needs a named owner
+RALPH-FACT: module_boundary_rule: the gate logic lives in tools/verify.py, the CLA check in tools/cla.py, the non-default lane runners in tools/verify_benchmark.py, tools/verify_device.py, tools/verify_perf.py, and tools/verify_samples.py, and the gate tests in tools/test_verify.py, tools/test_cla.py, and tools/test_verify_device.py; a new module needs a named owner
 RALPH-FACT: error_handling_convention: a gate prints one finding per line and exits non-zero; an unexpected condition raises instead of returning a partial result
 RALPH-FACT: logging_convention: a gate writes findings to standard output and writes no log file
 RALPH-FACT: generated_code_marker: none — the repository generates no source
