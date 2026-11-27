@@ -67,10 +67,7 @@ fn loaded_scene() -> Result<Runtime, Box<dyn Error>> {
 fn scene_loads_with_project_settings_applied() -> TestResult {
     let mut runtime = Runtime::new()?;
     let script_count = runtime.load_scene(&scene_path())?;
-    // Every MonoBehaviour in the scene counts, including the legacy uGUI
-    // components (Text, Image, Button, CanvasScaler) that carry no project
-    // script of their own.
-    assert_eq!(script_count, 29);
+    assert_eq!(script_count, 34);
     assert_eq!(runtime.scene_count(), 1);
     assert_eq!(runtime.scene_name(0), Some("RollABall"));
     assert_eq!(runtime.fixed_timestep(), 0.02);
@@ -157,7 +154,11 @@ fn scene_hierarchy_matches_the_expected_tree() -> TestResult {
             "ResultsTime",
             "ResultsScore",
             "RetryButton",
-            "ArenaSelectButton"
+            "ArenaSelectButton",
+            "PausePanel",
+            "PauseTitle",
+            "PauseStatus",
+            "ResumeButton"
         ]
     );
 

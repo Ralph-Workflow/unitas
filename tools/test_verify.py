@@ -1612,6 +1612,8 @@ def test_samples_lane_lists_s8_visual_scenarios() -> None:
     s8 = (
         "s8_title_checkpoint.scenario.json",
         "s8_arena_countdown.scenario.json",
+        "s8_arena2_countdown.scenario.json",
+        "s8_arena3_countdown.scenario.json",
         "s8_arena_x5_checkpoint.scenario.json",
         "s8_results_gold_checkpoint.scenario.json",
     )

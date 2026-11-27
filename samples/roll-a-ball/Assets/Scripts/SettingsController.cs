@@ -6,12 +6,6 @@ using UnityEngine.UI;
 
 namespace Unitas.Samples.RollABall
 {
-    /// <summary>
-    /// Owns the settings panel of the title screen. Every setting the game
-    /// documents persists through PlayerPrefs and takes effect as soon as the
-    /// player changes it. The reduced-motion setting shares its key with
-    /// <see cref="ReducedMotion"/>, so both sides read the same int.
-    /// </summary>
     public class SettingsController : MonoBehaviour
     {
         private const string MasterVolumeKey = "settings.master_volume";
@@ -41,11 +35,11 @@ namespace Unitas.Samples.RollABall
         private Vector3 _cameraHome;
         private float _shakeTime;
 
-        /// <summary>Whether the game shows the ghost of the best run.</summary>
         public static bool GhostEnabled => PlayerPrefs.GetInt(GhostKey, 1) != 0;
 
-        /// <summary>Whether the camera shakes when the marble bumps a bumper.</summary>
         public static bool CameraShakeEnabled => PlayerPrefs.GetInt(CameraShakeKey, 1) != 0;
+
+        public static bool IsCameraShakeActive => CameraShakeEnabled && !ReducedMotion.IsEnabled;
 
         private new void Awake()
         {
@@ -99,7 +93,7 @@ namespace Unitas.Samples.RollABall
                 return;
             }
 
-            float offset = CameraShakeEnabled ? ShakeMetres : 0f;
+            float offset = IsCameraShakeActive ? ShakeMetres : 0f;
             camera.position = _cameraHome + new Vector3(offset, offset * 0.5f, 0f);
             if (_shakeTime <= 0f)
             {
@@ -107,8 +101,6 @@ namespace Unitas.Samples.RollABall
             }
         }
 
-        // The title screen's quick row turns reduced motion on; the panel row
-        // carries the full on and off control.
         private void OnReducedMotionQuick()
         {
             SetReducedMotion(1);
@@ -283,7 +275,6 @@ namespace Unitas.Samples.RollABall
             Debug.Log("Settings camera_shake " + value.ToString(CultureInfo.InvariantCulture));
         }
 
-        /// <summary>Applies every stored setting to the running game.</summary>
         private void ApplySettings()
         {
             float master = PlayerPrefs.GetFloat(MasterVolumeKey, FullVolume);
@@ -344,15 +335,13 @@ namespace Unitas.Samples.RollABall
 
         private string Describe()
         {
-            int fullScreen = PlayerPrefs.GetInt(FullScreenKey, 0);
-            int resolution = PlayerPrefs.GetInt(ResolutionKey, 0);
-            return "master_volume " + FormatVolume(PlayerPrefs.GetFloat(MasterVolumeKey, FullVolume))
+            return "master_volume " + FormatVolume(AudioListener.volume)
                 + " music_volume " + FormatVolume(PlayerPrefs.GetFloat(MusicVolumeKey, FullVolume))
                 + " effects_volume " + FormatVolume(PlayerPrefs.GetFloat(EffectsVolumeKey, FullVolume))
-                + " fullscreen " + fullScreen.ToString(CultureInfo.InvariantCulture)
-                + " resolution " + ResolutionName(resolution)
-                + " vsync " + PlayerPrefs.GetInt(VerticalSyncKey, 1).ToString(CultureInfo.InvariantCulture)
-                + " quality " + QualityName(QualityIndex())
+                + " fullscreen " + (Screen.fullScreen ? "1" : "0")
+                + " resolution " + Screen.width.ToString(CultureInfo.InvariantCulture) + "x" + Screen.height.ToString(CultureInfo.InvariantCulture)
+                + " vsync " + QualitySettings.vSyncCount.ToString(CultureInfo.InvariantCulture)
+                + " quality " + QualityName(QualitySettings.GetQualityLevel())
                 + " ghost " + (GhostEnabled ? "1" : "0")
                 + " camera_shake " + (CameraShakeEnabled ? "1" : "0")
                 + " reduced_motion " + (ReducedMotion.IsEnabled ? "1" : "0");

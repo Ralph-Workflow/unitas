@@ -7,13 +7,15 @@ use crate::render_graph::{RenderGraph, RenderPassKind};
 
 use super::{
     align_up, background_color, capture_draw_items, opaque_order, transparent_order, DrawItem,
-    PreparedDraw, RenderError, Renderer, COPY_ROW_ALIGNMENT, ID_FORMAT, OFFSCREEN_FORMAT,
+    PreparedDraw, PreparedSprite, RenderError, Renderer, COPY_ROW_ALIGNMENT, ID_FORMAT,
+    OFFSCREEN_FORMAT,
 };
 
 struct CaptureTargets<'a> {
     graph: RenderGraph,
     items: Vec<DrawItem<'a>>,
     prepared: Vec<PreparedDraw>,
+    prepared_sprites: Vec<PreparedSprite>,
     color_texture: wgpu::Texture,
     id_texture: wgpu::Texture,
     color_view: wgpu::TextureView,
@@ -47,7 +49,8 @@ impl Renderer {
             });
         }
         let shadows_enabled = self.prepare_shadow_map(width.max(height));
-        let graph = RenderGraph::capture(shadows_enabled);
+        let sprites = self.sprites();
+        let graph = RenderGraph::capture(shadows_enabled).with_sprites(!sprites.is_empty());
         let color_texture =
             self.create_capture_texture("capture-color", width, height, OFFSCREEN_FORMAT);
         let id_texture = self.create_capture_texture("capture-ids", width, height, ID_FORMAT);
@@ -56,7 +59,8 @@ impl Renderer {
         let id_view = id_texture.create_view(&wgpu::TextureViewDescriptor::default());
         let depth_view = depth_texture.create_view(&wgpu::TextureViewDescriptor::default());
         let items = capture_draw_items(instances);
-        let prepared = self.prepare_draw_items(&items, camera, view, light)?;
+        let (prepared, prepared_sprites) =
+            self.prepare_draw_items(&items, &sprites, camera, view, light)?;
         let bytes_per_row = align_up(u64::from(width) * 4, COPY_ROW_ALIGNMENT);
         let color_readback = create_readback_buffer(
             &self.device,
@@ -70,6 +74,7 @@ impl Renderer {
             graph,
             items,
             prepared,
+            prepared_sprites,
             color_texture,
             id_texture,
             color_view,
@@ -140,6 +145,16 @@ impl Renderer {
                 }
                 RenderPassKind::Transparent => {
                     self.encode_capture_transparent(encoder, targets);
+                }
+                RenderPassKind::Sprites => {
+                    self.encode_sprite_pass(
+                        encoder,
+                        &[&targets.color_view, &targets.id_view],
+                        &targets.depth_view,
+                        &targets.prepared_sprites,
+                        &self.capture_pipelines.sprite,
+                        targets.items.len(),
+                    );
                 }
                 RenderPassKind::CaptureIds => {
                     self.encode_capture_readback(encoder, targets);

@@ -577,4 +577,48 @@ mod tests {
             }
         }
     }
+
+    #[test]
+    fn capture_records_gameplay_and_menu_audio_separation_across_pause() {
+        let mut world = AudioWorld::new();
+        let clip_id = world.register_clip(crate::AudioClip::new(1, 8, vec![0.5, 0.5, 0.5, 0.5]));
+        let gameplay = unitas_core::EntityId::new(1);
+        let menu = unitas_core::EntityId::new(2);
+        for entity in [gameplay, menu] {
+            world.ensure_source(entity);
+            world.set_source_clip(entity, Some(clip_id));
+        }
+        world.set_source_group(gameplay, crate::AudioMixerGroup::Sfx);
+        world.set_source_group(menu, crate::AudioMixerGroup::Menu);
+
+        let handoff = FrameHandoff::new(32);
+        let capture = DeviceCapture {
+            state: Arc::new(Mutex::new(CaptureState {
+                seconds: 2,
+                ..CaptureState::default()
+            })),
+        };
+        handoff.enable_capture(capture.clone(), 8);
+
+        let lead_in = world.mix(2);
+        handoff.push(&lead_in);
+
+        world.play(gameplay, true);
+        let gameplay_active = world.mix(2);
+        handoff.push(&gameplay_active);
+
+        world.set_gameplay_paused(true);
+        world.play(gameplay, true);
+        let gameplay_paused = world.mix(2);
+        handoff.push(&gameplay_paused);
+
+        world.play(menu, true);
+        let menu_paused = world.mix(2);
+        handoff.push(&menu_paused);
+
+        assert_eq!(
+            capture.mono_samples(),
+            vec![0.0, 0.0, 0.5, 0.5, 0.0, 0.0, 0.5, 0.5]
+        );
+    }
 }

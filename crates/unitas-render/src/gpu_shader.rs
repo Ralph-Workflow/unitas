@@ -138,6 +138,12 @@ fn fs_unlit(vs_out: VertexOut) -> @location(0) vec4<f32> {
     return vec4<f32>(vs_out.color, vs_out.alpha);
 }
 
+@fragment
+fn fs_sprite(vs_out: VertexOut) -> @location(0) vec4<f32> {
+    let texel = textureSample(albedo_tex, material_sampler, vs_out.uv);
+    return vec4<f32>(texel.rgb * vs_out.color, texel.a * vs_out.alpha);
+}
+
 struct CaptureOut {
     @location(0) color: vec4<f32>,
     @location(1) id: u32,
@@ -156,6 +162,15 @@ fn fs_capture_unlit(vs_out: VertexOut) -> CaptureOut {
     var out: CaptureOut;
     out.color = vec4<f32>(vs_out.color, 1.0);
     out.id = u32(round(inst.flags.x));
+    return out;
+}
+
+@fragment
+fn fs_capture_sprite(vs_out: VertexOut) -> CaptureOut {
+    var out: CaptureOut;
+    let texel = textureSample(albedo_tex, material_sampler, vs_out.uv);
+    out.color = vec4<f32>(texel.rgb * vs_out.color, texel.a * vs_out.alpha);
+    out.id = 0u;
     return out;
 }
 ";

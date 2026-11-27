@@ -46,6 +46,7 @@ namespace UnityEngine
         private const int DefaultPixelHeight = 256;
 
         private ulong _nativeCameraHandle;
+        private ulong _nativeEntityId;
         private bool _orthographic;
         private float _orthographicSize = DefaultOrthographicSize;
         private float _fieldOfView = DefaultFieldOfView;
@@ -266,7 +267,9 @@ namespace UnityEngine
 
         private ulong EnsureNativeCamera()
         {
-            if (_nativeCameraHandle != 0UL)
+            GameObject? owner = gameObject;
+            ulong entityId = owner != null && !owner.IsDestroyed ? owner.NativeEntityId : 0UL;
+            if (_nativeCameraHandle != 0UL && _nativeEntityId == entityId)
             {
                 return _nativeCameraHandle;
             }
@@ -277,8 +280,7 @@ namespace UnityEngine
                 return 0UL;
             }
 
-            GameObject? owner = gameObject;
-            ulong entityId = owner != null && !owner.IsDestroyed ? owner.NativeEntityId : 0UL;
+            _nativeEntityId = entityId;
             _nativeCameraHandle = provider.CreateCamera(entityId);
             if (_nativeCameraHandle != 0UL)
             {

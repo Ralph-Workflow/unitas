@@ -33,6 +33,7 @@ pub const MESH_RENDERER_CLASS: u32 = 23;
 pub const MESH_FILTER_CLASS: u32 = 33;
 pub const MESH_COLLIDER_CLASS: u32 = 64;
 pub const LIGHT_CLASS: u32 = 108;
+pub const SPRITE_RENDERER_CLASS: u32 = 212;
 pub const CANVAS_CLASS: u32 = 223;
 pub const RECT_TRANSFORM_CLASS: u32 = 224;
 pub const IMAGE_SCRIPT_GUID: &str = "fe87c0e1cc204ed48ad3b37840f39efc";
@@ -90,6 +91,7 @@ const DEFAULT_RENDERER_ENABLED: bool = true;
 const DEFAULT_MATERIAL_COLOR: [f32; 3] = [0.5, 0.5, 0.5];
 const DEFAULT_LIGHT_INTENSITY: f32 = 1.0;
 const DEFAULT_LIGHT_COLOR: [f32; 3] = [1.0, 1.0, 1.0];
+const DEFAULT_SPRITE_COLOR: [f32; 4] = [1.0, 1.0, 1.0, 1.0];
 const DEFAULT_LIGHT_DIRECTION: [f32; 3] = [0.0, -1.0, 0.0];
 const DIRECTIONAL_LIGHT_TYPE: i64 = 1;
 const DEFAULT_UI_COLOR: [f32; 4] = [1.0, 1.0, 1.0, 1.0];
@@ -474,11 +476,36 @@ pub struct LightComponent {
     pub unsupported_diagnostic: Option<String>,
 }
 
+/// The way a SpriteRenderer draws its sprite.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SpriteDrawMode {
+    Simple,
+    Sliced,
+    Tiled,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct SpriteRendererComponent {
+    pub entity: EntityId,
+    pub sprite_guid: Option<AssetGuid>,
+    pub sprite_file_id: Option<i64>,
+    pub sprite_path: Option<PathBuf>,
+    pub color: [f32; 4],
+    pub sorting_layer: i32,
+    pub sorting_order: i32,
+    pub draw_mode: SpriteDrawMode,
+    pub flip_x: bool,
+    pub flip_y: bool,
+    pub enabled: bool,
+    pub diagnostic: Option<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct RenderBinding {
     pub cameras: Vec<CameraComponent>,
     pub renderers: Vec<MeshRendererComponent>,
     pub lights: Vec<LightComponent>,
+    pub sprites: Vec<SpriteRendererComponent>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -887,6 +914,11 @@ fn has_render_references(stream: &Stream) -> bool {
                 .root
                 .get("MeshRenderer")
                 .and_then(|node| node.get("m_Materials"))
+                .is_some(),
+            SPRITE_RENDERER_CLASS => document
+                .root
+                .get("SpriteRenderer")
+                .and_then(|node| node.get("m_Sprite"))
                 .is_some(),
             _ => false,
         }
@@ -1608,6 +1640,7 @@ fn collect_render(
             MESH_FILTER_CLASS => document.root.get("MeshFilter"),
             MESH_RENDERER_CLASS => document.root.get("MeshRenderer"),
             LIGHT_CLASS => document.root.get("Light"),
+            SPRITE_RENDERER_CLASS => document.root.get("SpriteRenderer"),
             _ => None,
         };
         let body = match body {
@@ -1655,6 +1688,11 @@ fn collect_render(
                 ));
             }
             LIGHT_CLASS => binding.lights.push(light_component(entity, body)),
+            SPRITE_RENDERER_CLASS => {
+                binding
+                    .sprites
+                    .push(sprite_renderer_component(entity, body, index));
+            }
             _ => {}
         }
     }
@@ -2018,6 +2056,7 @@ fn handled_component_class(class_id: u32) -> bool {
             | PREFAB_INSTANCE_CLASS
             | CANVAS_CLASS
             | RECT_TRANSFORM_CLASS
+            | SPRITE_RENDERER_CLASS
     )
 }
 
@@ -2293,6 +2332,59 @@ fn light_component(entity: EntityId, body: &Node) -> LightComponent {
         }),
         direction: DEFAULT_LIGHT_DIRECTION,
         unsupported_diagnostic,
+    }
+}
+
+fn sprite_renderer_component(
+    entity: EntityId,
+    body: &Node,
+    index: Option<&GuidIndex>,
+) -> SpriteRendererComponent {
+    let sprite = body.get("m_Sprite");
+    let sprite_file_id = sprite
+        .and_then(|node| node.get("fileID"))
+        .and_then(Node::as_i64);
+    let sprite_guid = sprite
+        .and_then(|node| node.get("guid"))
+        .and_then(Node::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string);
+    let sprite_path = sprite_guid
+        .as_ref()
+        .and_then(|guid| index.and_then(|guids| guids.get(guid)))
+        .map(Path::to_path_buf);
+    let draw_mode = match body.get("m_DrawMode").and_then(Node::as_i64).unwrap_or(0) {
+        1 => SpriteDrawMode::Sliced,
+        2 => SpriteDrawMode::Tiled,
+        _ => SpriteDrawMode::Simple,
+    };
+    let diagnostic = match draw_mode {
+        SpriteDrawMode::Simple => None,
+        mode => Some(format!(
+            "SpriteRenderer on entity {} draws in the {mode:?} mode, which the renderer does not draw yet",
+            entity.as_u64()
+        )),
+    };
+    SpriteRendererComponent {
+        entity,
+        sprite_guid,
+        sprite_file_id,
+        sprite_path,
+        color: color4_or(body.get("m_Color"), DEFAULT_SPRITE_COLOR),
+        sorting_layer: body
+            .get("m_SortingLayerID")
+            .and_then(Node::as_i64)
+            .unwrap_or(0) as i32,
+        sorting_order: body
+            .get("m_SortingOrder")
+            .and_then(Node::as_i64)
+            .unwrap_or(0) as i32,
+        draw_mode,
+        flip_x: yaml_bool(body.get("m_FlipX"), false),
+        flip_y: yaml_bool(body.get("m_FlipY"), false),
+        enabled: yaml_bool(body.get("m_Enabled"), DEFAULT_RENDERER_ENABLED),
+        diagnostic,
     }
 }
 

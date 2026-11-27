@@ -1,3 +1,4 @@
+using System;
 using UnityEngine;
 
 namespace Unitas.Samples.RollABall
@@ -12,6 +13,8 @@ namespace Unitas.Samples.RollABall
         private const float CameraYawPerPixel = 0.005f;
         private const float MinimumCameraDistance = 1f;
         private const float TrailEmissionSpeed = 10f;
+        private const float CameraShakeSeconds = 0.25f;
+        private const float CameraShakeMetres = 0.15f;
         private static readonly Vector3 StartPosition = new Vector3(0f, 0.5f, 0f);
         private static readonly Vector3 CameraOffset = new Vector3(0f, 9.5f, -11.5f);
 
@@ -28,6 +31,8 @@ namespace Unitas.Samples.RollABall
         private float _lastDashTime = float.NegativeInfinity;
         private int _dashCount;
         private bool _reducedMotionTrailOff;
+        private float _shakeTime;
+        private int _shakeCount;
 
         private new void Awake()
         {
@@ -42,6 +47,11 @@ namespace Unitas.Samples.RollABall
 
         private new void Update()
         {
+            if (Time.timeScale <= 0f)
+            {
+                return;
+            }
+
             float moveX = ReadAxis(KeyCode.D, KeyCode.RightArrow, KeyCode.A, KeyCode.LeftArrow);
             float moveZ = ReadAxis(KeyCode.W, KeyCode.UpArrow, KeyCode.S, KeyCode.DownArrow);
 
@@ -72,25 +82,30 @@ namespace Unitas.Samples.RollABall
                 body.velocity = new Vector3(directionX * speed, body.velocity.y, directionZ * speed);
             }
             TryDash(body, directionX, directionZ);
+            UpdateTrail(body);
+        }
 
+        private void UpdateTrail(Rigidbody body)
+        {
             TrailRenderer? trail = _trail;
-            if (trail != null)
+            if (trail == null)
             {
-                if (ReducedMotion.IsEnabled)
-                {
-                    // The speed trail is the fast, sweeping motion the setting removes.
-                    if (!_reducedMotionTrailOff)
-                    {
-                        _reducedMotionTrailOff = true;
-                        Debug.Log("Reduced motion active trail off");
-                    }
+                return;
+            }
 
-                    trail.emitting = false;
-                }
-                else
+            if (ReducedMotion.IsEnabled)
+            {
+                if (!_reducedMotionTrailOff)
                 {
-                    trail.emitting = body.velocity.magnitude >= TrailEmissionSpeed;
+                    _reducedMotionTrailOff = true;
+                    Debug.Log("Reduced motion active trail off");
                 }
+
+                trail.emitting = false;
+            }
+            else
+            {
+                trail.emitting = body.velocity.magnitude >= TrailEmissionSpeed;
             }
         }
 
@@ -122,6 +137,34 @@ namespace Unitas.Samples.RollABall
             _dashCount++;
             body.AddForce(dashDirection.normalized * DashImpulse, ForceMode.Impulse);
             Debug.Log($"Dash fired {_dashCount}");
+            RequestCameraShake("dash");
+        }
+
+        private new void OnCollisionEnter(Collision collision)
+        {
+            string otherName = collision.gameObject.name;
+            if (otherName.StartsWith("Bumper", StringComparison.Ordinal)
+                || otherName.StartsWith("Wall", StringComparison.Ordinal)
+                || otherName.StartsWith("Sweeper", StringComparison.Ordinal)
+                || otherName.StartsWith("MovingBlock", StringComparison.Ordinal))
+            {
+                RequestCameraShake("impact");
+            }
+        }
+
+        private void RequestCameraShake(string source)
+        {
+            if (SettingsController.IsCameraShakeActive)
+            {
+                _shakeTime = CameraShakeSeconds;
+                _shakeCount++;
+                Debug.Log($"Camera shake active {source} {_shakeCount}");
+                return;
+            }
+
+            _shakeTime = 0f;
+            string reason = ReducedMotion.IsEnabled ? "reduced_motion" : "camera_shake_off";
+            Debug.Log($"Camera shake suppressed {source} {reason}");
         }
 
         private new void LateUpdate()
@@ -139,6 +182,22 @@ namespace Unitas.Samples.RollABall
                 target.x - (Mathf.Sin(_cameraYaw) * distance),
                 target.y + CameraOffset.y,
                 target.z - (Mathf.Cos(_cameraYaw) * distance));
+            if (_shakeTime > 0f)
+            {
+                if (!SettingsController.IsCameraShakeActive)
+                {
+                    _shakeTime = 0f;
+                }
+                else
+                {
+                    _shakeTime = Mathf.Max(0f, _shakeTime - Time.deltaTime);
+                    if (_shakeTime > 0f)
+                    {
+                        eye += new Vector3(CameraShakeMetres, CameraShakeMetres * 0.5f, 0f);
+                    }
+                }
+            }
+
             camera.transform.position = eye;
             camera.transform.LookAt(target);
         }
@@ -148,6 +207,8 @@ namespace Unitas.Samples.RollABall
             _cameraYaw = 0f;
             _lastDashTime = float.NegativeInfinity;
             _dashCount = 0;
+            _shakeTime = 0f;
+            _shakeCount = 0;
             transform.position = StartPosition;
             Rigidbody? body = _body;
             if (body != null)

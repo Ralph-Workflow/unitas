@@ -50,6 +50,8 @@ CHIME_FREQUENCY_HZ = 875.0
 CHIME_WINDOW_SECONDS = 0.05
 CHIME_LEAD_IN_SECONDS = 0.5
 CHIME_SILENCE_SECONDS = 0.25
+PAUSE_SILENCE_LEAD_IN_SECONDS = 0.75
+MENU_CHIME_LEAD_IN_SECONDS = 1.0
 CHIME_FLOOR_AMPLITUDE = 0.005
 PLAYER_BINARY = REPO_ROOT / "target" / "debug" / "unitas-player"
 POLICY_CITATION = "docs/ralph-workflow-policy/verification-policy.md § Gate lanes"
@@ -407,6 +409,28 @@ def chime_window_finding(samples: Sequence[float], sample_rate: int) -> tuple[st
             f"pickup: {silence_amplitude:.5f} against the silence floor "
             f"{CHIME_FLOOR_AMPLITUDE:.5f}",
             "",
+        )
+    pause_offset = round(PAUSE_SILENCE_LEAD_IN_SECONDS * sample_rate)
+    menu_offset = round(MENU_CHIME_LEAD_IN_SECONDS * sample_rate)
+    if menu_offset + window <= len(samples):
+        paused_amplitude = window_energy(samples[pause_offset : pause_offset + window])
+        menu_amplitude = window_energy(samples[menu_offset : menu_offset + window])
+        if paused_amplitude > CHIME_FLOOR_AMPLITUDE:
+            return (
+                f"the captured device stream carries gameplay audio while paused: "
+                f"{paused_amplitude:.5f} against the silence floor "
+                f"{CHIME_FLOOR_AMPLITUDE:.5f}",
+                "",
+            )
+        if menu_amplitude <= CHIME_FLOOR_AMPLITUDE:
+            return (
+                f"the captured device stream carries no menu audio while paused: "
+                f"{menu_amplitude:.5f} against the silence floor "
+                f"{CHIME_FLOOR_AMPLITUDE:.5f}",
+                "",
+            )
+        summary = (
+            f"{summary}; paused gameplay={paused_amplitude:.5f}, paused menu={menu_amplitude:.5f}"
         )
     return (None, summary)
 

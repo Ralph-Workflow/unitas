@@ -216,8 +216,11 @@ impl Renderer {
             .depth
             .create_view(&wgpu::TextureViewDescriptor::default());
         let shadows_enabled = self.prepare_shadow_map(size.0.max(size.1));
-        let prepared = self.prepare_draw_items(&items, &camera, view, light)?;
-        let graph = RenderGraph::surface(!overlay.is_empty(), shadows_enabled);
+        let sprites = self.sprites();
+        let (prepared, prepared_sprites) =
+            self.prepare_draw_items(&items, &sprites, &camera, view, light)?;
+        let graph = RenderGraph::surface(!overlay.is_empty(), shadows_enabled)
+            .with_sprites(!sprites.is_empty());
         let mut encoder = self
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
@@ -296,6 +299,16 @@ impl Renderer {
                             &indices,
                         );
                     }
+                }
+                RenderPassKind::Sprites => {
+                    self.encode_sprite_pass(
+                        &mut encoder,
+                        &[&color_view],
+                        &depth_view,
+                        &prepared_sprites,
+                        &surface_state.pipelines.sprite,
+                        items.len(),
+                    );
                 }
                 RenderPassKind::UiOverlay => {
                     let scale = size.0 as f32 / surface_state.config_size.0 as f32;

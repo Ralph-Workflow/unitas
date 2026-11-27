@@ -8,6 +8,7 @@ pub mod mesh;
 pub mod model;
 pub mod render_graph;
 pub mod shadow;
+pub mod sprite;
 pub mod ui_pass;
 
 pub use camera::{look_at, Camera};
@@ -27,6 +28,7 @@ pub use model::{
 };
 pub use render_graph::{RenderGraph, RenderGraphPass, RenderPassKind, RenderTargetKind};
 pub use shadow::{light_view_projection, next_power_of_two, shadow_map_size, ShadowSettings};
+pub use sprite::{sort_sprites, sprite_quad, Sprite};
 pub use ui_pass::{
     composite_ui, composite_ui_onto_capture, GlyphTextPainter, SpriteRef, UiCoverage, UiElement,
     UiTarget, UiText, UiTextPainter,

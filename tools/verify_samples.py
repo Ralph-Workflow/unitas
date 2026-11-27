@@ -76,6 +76,7 @@ SCENARIOS: tuple[tuple[str, str, tuple[str, ...], bool], ...] = (
         False,
     ),
     ("pause_holds_simulation", "pause_holds_simulation.json", ("--repeat", "2"), False),
+    ("pause_resume", "pause_resume.json", ("--repeat", "2"), False),
     ("slowmo_finish", "slowmo_finish.json", ("--repeat", "2"), False),
     ("destroy_semantics", "destroy_semantics.json", ("--repeat", "2"), False),
     ("retry_clean", "retry_clean.json", ("--repeat", "2"), False),
@@ -98,10 +99,14 @@ SCENARIOS: tuple[tuple[str, str, tuple[str, ...], bool], ...] = (
     ("persist_state_write", "persist_state_write.json", (), True),
     ("persist_state_read", "persist_state_read.json", (), True),
     ("reduced_motion", "reduced_motion.json", ("--repeat", "2"), True),
+    ("settings_rows", "settings_rows.json", ("--repeat", "2"), True),
+    ("camera_shake", "camera_shake.json", ("--repeat", "2"), True),
     ("ghost_replay", "ghost_replay.scenario.json", ("--repeat", "2"), True),
     ("s1_open_and_inspect", "s1_open_and_inspect.scenario.json", ("--repeat", "2"), False),
     ("s8_title_checkpoint", "s8_title_checkpoint.scenario.json", (), False),
     ("s8_arena_countdown", "s8_arena_countdown.scenario.json", (), False),
+    ("s8_arena2_countdown", "s8_arena2_countdown.scenario.json", (), False),
+    ("s8_arena3_countdown", "s8_arena3_countdown.scenario.json", (), False),
     ("s8_arena_x5_checkpoint", "s8_arena_x5_checkpoint.scenario.json", (), False),
     ("s8_results_gold_checkpoint", "s8_results_gold_checkpoint.scenario.json", (), False),
     ("s8_quality_sweep", "s8_quality_sweep.scenario.json", (), False),
@@ -709,7 +714,7 @@ def run_lane() -> int:
     persist_dir = Path(tempfile.mkdtemp(prefix="prefs-", dir=REPO_ROOT / "target" / "samples-lane"))
     persist_env = dict(env)
     persist_env["UNITAS_PERSISTENT_DATA_PATH"] = str(persist_dir)
-    own_persist_scenarios = frozenset({"ghost_replay"})
+    own_persist_scenarios = frozenset({"ghost_replay", "settings_rows", "camera_shake"})
 
     results: list[tuple[str, int]] = []
     for name, scenario_file, extra_args, needs_persist in SCENARIOS:

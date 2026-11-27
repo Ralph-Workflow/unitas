@@ -10,8 +10,13 @@ difference exceeds the tolerance.
 |---|---|---|---|
 | `s8_title_checkpoint.bmp` | `s8_title_checkpoint.scenario.json` | `title-screen` | 0.005 |
 | `s8_arena_countdown.bmp` | `s8_arena_countdown.scenario.json` | `arena-at-countdown` | 0.005 |
+| `s8_arena2_countdown.bmp` | `s8_arena2_countdown.scenario.json` | `arena2-at-countdown` | 0.005 |
+| `s8_arena3_countdown.bmp` | `s8_arena3_countdown.scenario.json` | `arena3-at-countdown` | 0.005 |
 | `s8_arena_x5_checkpoint.bmp` | `s8_arena_x5_checkpoint.scenario.json` | `arena-at-x5` | 0.005 |
 | `s8_results_gold_checkpoint.bmp` | `s8_results_gold_checkpoint.scenario.json` | `results-gold-medal` | 0.005 |
+| `s8_quality_low.bmp` | `s8_quality_sweep.scenario.json` | `quality-low` | 0.005 |
+| `s8_quality_medium.bmp` | `s8_quality_sweep.scenario.json` | `quality-medium` | 0.005 |
+| `s8_quality_high.bmp` | `s8_quality_sweep.scenario.json` | `quality-high` | 0.005 |
 
 ## How the references were produced
 
@@ -206,3 +211,21 @@ the deterministic capture the lane produces now (`439/65536` (`0.67 %`) in the
 trail region behind the marble against the prior capture, sha256 `c80169dd…`
 across three consecutive runs), and the other six references are unchanged.
 The tolerance `0.005` is unchanged.
+
+Approved on 2026-11-27 by the development session that added the Arena 2
+(`Assets/Scenes/Arena2.unity`) and Arena 3 (`Assets/Scenes/Arena3.unity`)
+countdown visual checkpoints (`s8_arena2_countdown.scenario.json` and
+`s8_arena3_countdown.scenario.json`), against the presentation requirements of
+`docs/product-specification/sample-games/01-roll-a-ball.md` (S8, TST-002):
+`s8_arena2_countdown.bmp` (sha256 `b8415fd3…`, 33612/65536 non-background
+pixels against background `(43, 26, 10)`) and `s8_arena3_countdown.bmp`
+(sha256 `7f233a73…`, 33550/65536 non-background pixels against background
+`(10, 33, 28)`) are the `wgpu` render-graph captures taken at the countdown
+checkpoint with `expected_non_background_pixels: 1000` and tolerance `0.005`,
+visually inspected to confirm Arena 2's clockwork ring and Arena 3's sky
+garden path and moving blocks render distinctly from Arena 1 (`62677/65536`
+(`95.64 %`) and `62366/65536` (`95.16 %`) differing pixels against
+`s8_arena_countdown.bmp`, and `58310/65536` (`88.97 %`) differing pixels
+between Arena 2 and Arena 3) and are byte-identical across repeated runs.
+
+Re-approved `s8_results_gold_checkpoint.bmp` on 2026-11-27 alongside the pause overlay addition in `Assets/Scenes/RollABall.unity`, which shifted the post-PausePanel entity numbering on `s8_results_gold_checkpoint.scenario.json` (`0/65536` differing pixels across repeated runs at `tolerance: 0.005`).

@@ -585,6 +585,7 @@ namespace Unitas.Bridge
             {
                 created = new GameObject(name);
             }
+            created.scene = default;
             created.AssignNativeEntityId(entity);
             ApplySceneTransform(entity, created);
             _entityGameObjects[entity] = created;
@@ -776,12 +777,6 @@ namespace Unitas.Bridge
         {
             if (!_alignSceneEntityBase)
             {
-                return;
-            }
-
-            if (_sceneObjectNames.ContainsKey(nativeEntity))
-            {
-                _alignSceneEntityBase = false;
                 return;
             }
 

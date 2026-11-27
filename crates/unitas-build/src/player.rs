@@ -49,12 +49,9 @@ pub const DEFAULT_DEVICE_VERIFY_WIDTH: u32 = 320;
 pub const DEFAULT_DEVICE_VERIFY_HEIGHT: u32 = 240;
 pub const STARTUP_FAILURE_EXIT_CODE: u8 = 1;
 pub const STARTUP_MEASUREMENT_TIMEOUT_SECONDS: u64 = 20;
-/// The separator the player's one-line report joins the canvas texts with.
 pub const CANVAS_TEXT_SEPARATOR: &str = " | ";
-/// The device handoff must hold the whole capture the lane injects: half a
-/// second of silence and a quarter second of chime.
 #[cfg(feature = "device")]
-const DEVICE_CAPTURE_CAPACITY_FRAMES: usize = 48_000;
+const DEVICE_CAPTURE_CAPACITY_FRAMES: usize = 96_000;
 
 /// The code-execution capabilities the trust store grants this project.
 pub fn project_capabilities(bundle_dir: &Path) -> Option<ProjectCapabilities> {
@@ -1009,6 +1006,26 @@ fn capture_device_chime(
         .ok_or_else(|| PlayerStartupError::VerificationFailed {
             message: String::from("the staged scene carries no CollectChime audio source"),
         })?;
+    let menu_entity = audio_runtime
+        .find_entity_by_name("HudCanvas")
+        .ok_or_else(|| PlayerStartupError::VerificationFailed {
+            message: String::from("the staged scene carries no HudCanvas menu audio host"),
+        })?;
+    let chime_clip = audio_runtime
+        .audio()
+        .source(chime_entity)
+        .and_then(|source| source.clip)
+        .ok_or_else(|| PlayerStartupError::VerificationFailed {
+            message: String::from("the CollectChime audio source carries no clip"),
+        })?;
+    audio_runtime.audio_mut().ensure_source(menu_entity);
+    audio_runtime
+        .audio_mut()
+        .set_source_clip(menu_entity, Some(chime_clip));
+    audio_runtime
+        .audio_mut()
+        .set_source_group(menu_entity, unitas_audio::AudioMixerGroup::Menu);
+    audio_runtime.audio_mut().set_volume(menu_entity, 0.8);
 
     let audio_capture = unitas_audio::output::arm_capture(8);
     let audio_output =
@@ -1017,12 +1034,15 @@ fn capture_device_chime(
                 message: error.to_string(),
             })?;
     let sample_rate = f64::from(audio_output.sample_rate());
-    // the lane injects the collect chime after 0.5 s of silence and lets it ring
-    // for 0.25 s; tools/verify_device.py measures the window after that point.
     let lead_in_frames = (sample_rate * 0.5).round() as usize;
     let chime_frames = (sample_rate * 0.25).round() as usize;
     audio_output.pump_world(audio_runtime.audio_mut(), lead_in_frames);
     audio_runtime.audio_mut().play(chime_entity, true);
+    audio_output.pump_world(audio_runtime.audio_mut(), chime_frames);
+    audio_runtime.audio_mut().set_gameplay_paused(true);
+    audio_runtime.audio_mut().play(chime_entity, true);
+    audio_output.pump_world(audio_runtime.audio_mut(), chime_frames);
+    audio_runtime.audio_mut().play(menu_entity, true);
     audio_output.pump_world(audio_runtime.audio_mut(), chime_frames);
     drop(audio_output);
 

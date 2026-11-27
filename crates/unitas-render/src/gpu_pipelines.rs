@@ -37,6 +37,12 @@ fn id_target(format: wgpu::TextureFormat) -> wgpu::ColorTargetState {
     }
 }
 
+struct PipelineEntryPoints<'a> {
+    lit: &'a str,
+    unlit: &'a str,
+    sprite: &'a str,
+}
+
 pub(super) fn create_pipelines(
     device: &wgpu::Device,
     layout: &wgpu::PipelineLayout,
@@ -49,8 +55,11 @@ pub(super) fn create_pipelines(
         device,
         layout,
         shader,
-        "fs_lit",
-        "fs_unlit",
+        PipelineEntryPoints {
+            lit: "fs_lit",
+            unlit: "fs_unlit",
+            sprite: "fs_sprite",
+        },
         &targets,
         &blend_targets,
     )
@@ -72,8 +81,11 @@ pub(super) fn create_capture_pipelines(
         device,
         layout,
         shader,
-        "fs_capture_lit",
-        "fs_capture_unlit",
+        PipelineEntryPoints {
+            lit: "fs_capture_lit",
+            unlit: "fs_capture_unlit",
+            sprite: "fs_capture_sprite",
+        },
         &targets,
         &blend_targets,
     )
@@ -83,8 +95,7 @@ fn build_pipelines(
     device: &wgpu::Device,
     layout: &wgpu::PipelineLayout,
     shader: &wgpu::ShaderModule,
-    lit_entry_point: &str,
-    unlit_entry_point: &str,
+    entry_points: PipelineEntryPoints<'_>,
     targets: &[Option<wgpu::ColorTargetState>],
     blend_targets: &[Option<wgpu::ColorTargetState>],
 ) -> Pipelines {
@@ -92,7 +103,7 @@ fn build_pipelines(
         device,
         layout,
         shader,
-        lit_entry_point,
+        entry_points.lit,
         targets,
         "lit",
         true,
@@ -101,7 +112,7 @@ fn build_pipelines(
         device,
         layout,
         shader,
-        unlit_entry_point,
+        entry_points.unlit,
         targets,
         "unlit",
         true,
@@ -110,7 +121,7 @@ fn build_pipelines(
         device,
         layout,
         shader,
-        lit_entry_point,
+        entry_points.lit,
         blend_targets,
         "lit-blend",
         false,
@@ -119,9 +130,18 @@ fn build_pipelines(
         device,
         layout,
         shader,
-        unlit_entry_point,
+        entry_points.unlit,
         blend_targets,
         "unlit-blend",
+        false,
+    );
+    let sprite = build_pipeline(
+        device,
+        layout,
+        shader,
+        entry_points.sprite,
+        blend_targets,
+        "sprite",
         false,
     );
     Pipelines {
@@ -129,6 +149,7 @@ fn build_pipelines(
         unlit,
         lit_blend,
         unlit_blend,
+        sprite,
     }
 }
 

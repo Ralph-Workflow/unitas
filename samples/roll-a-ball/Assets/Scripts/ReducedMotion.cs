@@ -2,10 +2,6 @@ using UnityEngine;
 
 namespace Unitas.Samples.RollABall
 {
-    /// <summary>
-    /// Owns the reduced-motion setting. The PlayerPrefs key is shared with the
-    /// settings panel, which flips the same key; both sides read it as an int.
-    /// </summary>
     public static class ReducedMotion
     {
         private const string PrefsKey = "reduced_motion";

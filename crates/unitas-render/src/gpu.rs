@@ -16,6 +16,7 @@ use crate::model::{
 };
 use crate::render_graph::{RenderGraph, RenderPassKind};
 use crate::shadow::{light_view_projection, shadow_map_size, ShadowSettings};
+use crate::sprite::{sprite_quad, Sprite};
 
 use gpu_pipelines::{
     build_shadow_pipeline, create_capture_pipelines, create_default_material_bind,
@@ -173,6 +174,7 @@ struct Pipelines {
     unlit: wgpu::RenderPipeline,
     lit_blend: wgpu::RenderPipeline,
     unlit_blend: wgpu::RenderPipeline,
+    sprite: wgpu::RenderPipeline,
 }
 
 struct UniformState {
@@ -241,6 +243,8 @@ pub struct Renderer {
     material_bind: wgpu::BindGroup,
     surface: Mutex<Option<SurfaceState>>,
     text: Mutex<TextState>,
+    sprites: Mutex<Vec<Sprite>>,
+    sprite_quad: (Mesh, MeshAttributes),
     v_sync_count: AtomicU32,
 }
 
@@ -444,6 +448,8 @@ impl Renderer {
             material_bind,
             surface: Mutex::new(None),
             text: Mutex::new(text),
+            sprites: Mutex::new(Vec::new()),
+            sprite_quad: sprite_quad(),
             v_sync_count: AtomicU32::new(1),
         })
     }
@@ -483,6 +489,18 @@ impl Renderer {
         let mut cache = lock(&self.cache);
         cache.meshes.clear();
         cache.materials.clear();
+        cache.sprite_textures.clear();
+    }
+
+    /// The sprites the next frame draws, in the order the sprite pass draws
+    /// them: the sorting layer first, the order in the layer second.
+    pub fn set_sprites(&self, sprites: Vec<Sprite>) {
+        let mut state = lock(&self.sprites);
+        *state = sprites;
+    }
+
+    pub fn sprites(&self) -> Vec<Sprite> {
+        lock(&self.sprites).clone()
     }
 
     /// The mesh buffers uploaded into the cache since the renderer was created.
@@ -672,7 +690,9 @@ impl Renderer {
             background,
         } = scene;
         let shadows_enabled = self.prepare_shadow_map(width.max(height));
-        let graph = RenderGraph::offscreen(!overlay.is_empty(), shadows_enabled);
+        let sprites = self.sprites();
+        let graph = RenderGraph::offscreen(!overlay.is_empty(), shadows_enabled)
+            .with_sprites(!sprites.is_empty());
         let color_texture = self.device.create_texture(&wgpu::TextureDescriptor {
             label: Some("offscreen-color"),
             size: wgpu::Extent3d {
@@ -691,7 +711,8 @@ impl Renderer {
         let color_view = color_texture.create_view(&wgpu::TextureViewDescriptor::default());
         let depth_view = depth_texture.create_view(&wgpu::TextureViewDescriptor::default());
 
-        let prepared = self.prepare_draw_items(&items, camera, view, light)?;
+        let (prepared, prepared_sprites) =
+            self.prepare_draw_items(&items, &sprites, camera, view, light)?;
         let mut encoder = self
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
@@ -770,6 +791,16 @@ impl Renderer {
                             &indices,
                         );
                     }
+                }
+                RenderPassKind::Sprites => {
+                    self.encode_sprite_pass(
+                        &mut encoder,
+                        &[&color_view],
+                        &depth_view,
+                        &prepared_sprites,
+                        &self.offscreen_pipelines.sprite,
+                        items.len(),
+                    );
                 }
                 RenderPassKind::UiOverlay => {
                     self.draw_text_overlay(
@@ -1082,7 +1113,6 @@ impl Renderer {
             ),
             None => solid_texture(&self.device, &self.queue, [255, 255, 255, 255]),
         };
-        // Normal maps stay linear; sRGB-correct albedo sampling is deferred.
         let normal = match &material.normal {
             Some(image) => image_texture(
                 &self.device,
@@ -1103,20 +1133,54 @@ impl Renderer {
             ),
             None => solid_texture(&self.device, &self.queue, [0, 0, 0, 255]),
         };
-        let params = self.device.create_buffer(&wgpu::BufferDescriptor {
+        let metallic = material.metallic.clamp(0.0, 1.0);
+        let smoothness = material.smoothness.clamp(0.0, 1.0);
+        let alpha = effective_alpha(material);
+        self.create_texture_bind_group(albedo, normal, emissive, [metallic, smoothness, alpha, 0.0])
+    }
+
+    fn cached_sprite_bind_group(&self, image: &Image) -> wgpu::BindGroup {
+        let key = image_key(image);
+        let mut cache = lock(&self.cache);
+        if let Some(cached) = cache.sprite_textures.get(&key) {
+            return cached.clone();
+        }
+        if cache.sprite_textures.len() >= MAX_CACHED_RESOURCES {
+            cache.sprite_textures.clear();
+        }
+        let bind_group = self.create_sprite_bind_group(image);
+        cache.sprite_textures.insert(key, bind_group.clone());
+        bind_group
+    }
+
+    fn create_sprite_bind_group(&self, image: &Image) -> wgpu::BindGroup {
+        let albedo = image_texture(
+            &self.device,
+            &self.queue,
+            image,
+            [255, 255, 255, 255],
+            wgpu::TextureFormat::Rgba8Unorm,
+        );
+        let normal = solid_texture(&self.device, &self.queue, [128, 128, 255, 255]);
+        let emissive = solid_texture(&self.device, &self.queue, [0, 0, 0, 255]);
+        self.create_texture_bind_group(albedo, normal, emissive, [0.0, 0.0, 1.0, 0.0])
+    }
+
+    fn create_texture_bind_group(
+        &self,
+        albedo: wgpu::TextureView,
+        normal: wgpu::TextureView,
+        emissive: wgpu::TextureView,
+        params: [f32; 4],
+    ) -> wgpu::BindGroup {
+        let params_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("material-params"),
             size: 16,
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
-        let metallic = material.metallic.clamp(0.0, 1.0);
-        let smoothness = material.smoothness.clamp(0.0, 1.0);
-        let alpha = effective_alpha(material);
-        self.queue.write_buffer(
-            &params,
-            0,
-            bytemuck::cast_slice::<f32, u8>(&[metallic, smoothness, alpha, 0.0]),
-        );
+        self.queue
+            .write_buffer(&params_buffer, 0, bytemuck::cast_slice::<f32, u8>(&params));
         self.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("material"),
             layout: &self.material_layout,
@@ -1139,7 +1203,7 @@ impl Renderer {
                 },
                 wgpu::BindGroupEntry {
                     binding: 4,
-                    resource: params.as_entire_binding(),
+                    resource: params_buffer.as_entire_binding(),
                 },
             ],
         })
@@ -1148,10 +1212,11 @@ impl Renderer {
     fn prepare_draw_items(
         &self,
         items: &[DrawItem<'_>],
+        sprites: &[Sprite],
         camera: &Camera,
         view: Mat4,
         light: &DirectionalLight,
-    ) -> Result<Vec<PreparedDraw>, RenderError> {
+    ) -> Result<(Vec<PreparedDraw>, Vec<PreparedSprite>), RenderError> {
         let view_proj = camera.projection_matrix() * view;
         let mut prepared = Vec::with_capacity(items.len());
         for item in items {
@@ -1164,10 +1229,18 @@ impl Renderer {
                 material_bind,
             });
         }
+        let mut prepared_sprites = Vec::with_capacity(sprites.len());
+        let (quad, quad_attributes) = &self.sprite_quad;
+        for sprite in sprites {
+            let mesh = self.cached_mesh(quad, Some(quad_attributes))?;
+            let bind = self.cached_sprite_bind_group(&sprite.texture);
+            prepared_sprites.push(PreparedSprite { mesh, bind });
+        }
 
+        let total = items.len() + sprites.len();
         let mut state = lock(&self.uniforms);
-        if state.capacity < items.len() {
-            let capacity = items.len().max(state.capacity * 2).max(1);
+        if state.capacity < total {
+            let capacity = total.max(state.capacity * 2).max(1);
             *state = create_uniforms(
                 &self.device,
                 &self.global_layout,
@@ -1209,7 +1282,7 @@ impl Renderer {
         self.queue
             .write_buffer(&state.buffer, 0, bytemuck::cast_slice::<f32, u8>(&globals));
 
-        let mut instance_data: Vec<f32> = vec![0.0; SLOT_FLOATS * items.len()];
+        let mut instance_data: Vec<f32> = vec![0.0; SLOT_FLOATS * total];
         for (index, item) in items.iter().enumerate() {
             let start = index * SLOT_FLOATS;
             instance_data[start..start + 16].copy_from_slice(item.instance.model.as_array());
@@ -1221,6 +1294,12 @@ impl Renderer {
             ]);
             instance_data[start + 20] = item.object_id as f32;
         }
+        for (index, sprite) in sprites.iter().enumerate() {
+            let start = (items.len() + index) * SLOT_FLOATS;
+            instance_data[start..start + 16].copy_from_slice(sprite.model.as_array());
+            instance_data[start + 16..start + 20].copy_from_slice(&sprite.color);
+            instance_data[start + 20] = 0.0;
+        }
         if !instance_data.is_empty() {
             self.queue.write_buffer(
                 &state.buffer,
@@ -1228,7 +1307,7 @@ impl Renderer {
                 bytemuck::cast_slice::<f32, u8>(&instance_data),
             );
         }
-        Ok(prepared)
+        Ok((prepared, prepared_sprites))
     }
 
     fn encode_shadow_pass(
@@ -1313,6 +1392,66 @@ impl Renderer {
         }
     }
 
+    fn encode_sprite_pass(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        color_views: &[&wgpu::TextureView],
+        depth_view: &wgpu::TextureView,
+        prepared: &[PreparedSprite],
+        pipeline: &wgpu::RenderPipeline,
+        instance_base: usize,
+    ) {
+        if prepared.is_empty() {
+            return;
+        }
+        let state = lock(&self.uniforms);
+        let shadow = lock(&self.shadow);
+        let attachments: Vec<Option<wgpu::RenderPassColorAttachment>> = color_views
+            .iter()
+            .map(|view| {
+                Some(wgpu::RenderPassColorAttachment {
+                    view,
+                    depth_slice: None,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Load,
+                        store: wgpu::StoreOp::Store,
+                    },
+                })
+            })
+            .collect();
+        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("sprites"),
+            color_attachments: &attachments,
+            depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                view: depth_view,
+                depth_ops: Some(wgpu::Operations {
+                    load: wgpu::LoadOp::Load,
+                    store: wgpu::StoreOp::Store,
+                }),
+                stencil_ops: None,
+            }),
+            timestamp_writes: None,
+            occlusion_query_set: None,
+            multiview_mask: None,
+        });
+        pass.set_pipeline(pipeline);
+        pass.set_bind_group(0, &state.global_bind_group, &[]);
+        pass.set_bind_group(3, &shadow.bind_group, &[]);
+        for (index, sprite) in prepared.iter().enumerate() {
+            let mesh = match &sprite.mesh {
+                Some(mesh) => mesh,
+                None => continue,
+            };
+            let slot = UNIFORM_SLOT * (instance_base + index + 1) as u64;
+            pass.set_bind_group(1, &state.instance_bind_group, &[slot as u32]);
+            pass.set_bind_group(2, &sprite.bind, &[]);
+            pass.set_vertex_buffer(0, mesh.vertices.slice(..));
+            pass.set_index_buffer(mesh.indices.slice(..), wgpu::IndexFormat::Uint32);
+            pass.draw_indexed(0..mesh.index_count, 0, 0..1);
+        }
+    }
+
     fn read_buffer(&self, buffer: &wgpu::Buffer) -> Result<Vec<u8>, RenderError> {
         let slice = buffer.slice(..);
         let (sender, receiver) = std::sync::mpsc::channel();
@@ -1380,11 +1519,17 @@ struct PreparedDraw {
     material_bind: Option<wgpu::BindGroup>,
 }
 
+struct PreparedSprite {
+    mesh: Option<MeshBuffers>,
+    bind: wgpu::BindGroup,
+}
+
 /// The mesh buffers and material bind groups a scene reuses across frames.
 #[derive(Default)]
 struct ResourceCache {
     meshes: HashMap<MeshKey, MeshBuffers>,
     materials: HashMap<MaterialKey, wgpu::BindGroup>,
+    sprite_textures: HashMap<ImageKey, wgpu::BindGroup>,
     mesh_uploads: u32,
     material_uploads: u32,
 }

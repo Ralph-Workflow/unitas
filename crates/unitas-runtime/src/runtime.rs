@@ -784,6 +784,9 @@ impl Runtime {
         let scenes = std::mem::take(&mut self.scenes);
         self.active_scene = None;
         for scene in &scenes {
+            self.remove_scene_render_handles(scene);
+        }
+        for scene in &scenes {
             self.teardown_scene(scene, hook);
         }
         for scene in &scenes {
@@ -816,6 +819,9 @@ impl Runtime {
                     self.animation.remove_animator(*entity);
                 }
             }
+        }
+        if self.persistent_entities.is_empty() {
+            self.dynamic_entity_floor = 1;
         }
     }
 

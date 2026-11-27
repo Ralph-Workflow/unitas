@@ -1,12 +1,13 @@
 use std::ops::{Add, Sub};
 use std::path::PathBuf;
-use std::sync::{Mutex, MutexGuard, OnceLock};
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 use unitas_render::camera::{look_at, Camera};
 use unitas_render::gpu::{GpuMaterialInstance, RenderScene, Renderer};
 use unitas_render::image::Image;
 use unitas_render::math::{Mat4, Vec3, Vec4};
 use unitas_render::mesh::{cube, uv_sphere, Mesh, MeshAttributes};
 use unitas_render::model::{DirectionalLight, Material, MeshInstance};
+use unitas_render::sprite::{sort_sprites, Sprite};
 
 pub(crate) fn shared_renderer() -> Result<MutexGuard<'static, Renderer>, String> {
     static RENDERER: OnceLock<Result<Mutex<Renderer>, String>> = OnceLock::new();
@@ -637,5 +638,68 @@ fn material_instances_upload_one_mesh_and_one_bind_group_per_material(
     )?;
     assert_eq!(renderer.mesh_upload_count(), meshes_before + 1);
     assert_eq!(renderer.material_bind_group_count(), materials_before + 2);
+    Ok(())
+}
+
+#[test]
+fn overlapping_sprites_render_sorted_and_textured_offscreen(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let renderer = shared_renderer()?;
+    let camera = Camera::orthographic(2.0, 1.0, 0.1, 100.0);
+    let view = look_at(
+        Vec3::new(0.0, 0.0, -5.0),
+        Vec3::new(0.0, 0.0, 0.0),
+        Vec3::new(0.0, 1.0, 0.0),
+    );
+    let light = DirectionalLight {
+        direction: Vec3::new(0.0, 0.0, -1.0),
+        color: [1.0, 1.0, 1.0],
+        intensity: 0.0,
+    };
+
+    let mut back_tex = Image::new(2, 2);
+    for pixel in &mut back_tex.pixels {
+        *pixel = [0, 0, 255];
+    }
+    let mut front_tex = Image::new(2, 1);
+    front_tex.set_pixel(0, 0, [255, 0, 0]);
+    front_tex.set_pixel(1, 0, [0, 255, 0]);
+
+    let mut sprites = vec![
+        Sprite {
+            texture: Arc::new(front_tex),
+            model: scaled_translated_model(2.0, Vec3::new(0.0, 0.0, 0.0)),
+            color: [1.0, 1.0, 1.0, 1.0],
+            sorting_layer: 1,
+            sorting_order: 5,
+        },
+        Sprite {
+            texture: Arc::new(back_tex),
+            model: scaled_translated_model(3.5, Vec3::new(0.0, 0.0, 0.0)),
+            color: [1.0, 1.0, 1.0, 1.0],
+            sorting_layer: 0,
+            sorting_order: 10,
+        },
+    ];
+    sort_sprites(&mut sprites);
+    renderer.set_sprites(sprites);
+    let image = renderer.render_offscreen(&[], &camera, view, &light, [0.0, 0.0, 0.0], (64, 64))?;
+    renderer.set_sprites(Vec::new());
+
+    let left_front = image.get_pixel(20, 32);
+    let right_front = image.get_pixel(44, 32);
+    let outer_back = image.get_pixel(10, 32);
+    let corner_bg = image.get_pixel(0, 0);
+
+    assert!(
+        left_front[0] > 200 && left_front[1] < 40 && left_front[2] < 40,
+        "expected red on left half of front sprite, got {left_front:?}"
+    );
+    assert!(
+        right_front[1] > 200 && right_front[0] < 40 && right_front[2] < 40,
+        "expected green on right half of front sprite, got {right_front:?}"
+    );
+    assert_eq!(outer_back, [0, 0, 255]);
+    assert_eq!(corner_bg, [0, 0, 0]);
     Ok(())
 }

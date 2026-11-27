@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use unitas_asset::scene::{MeshRendererComponent, RenderBinding};
-use unitas_core::{EntityId, IDENTITY_ROTATION, SceneGraph, rotate_vector};
+use unitas_core::{EntityId, IDENTITY_ROTATION, SceneGraph, Transform, rotate_vector};
 use unitas_render::image::{Image, Rgba8};
 use unitas_render::ui_pass::{GlyphTextPainter, UiTarget, composite_ui};
 use unitas_render::{
@@ -16,6 +16,7 @@ use crate::error::RenderError;
 use crate::presenter::{GpuCameraBinding, scene_gpu_meshes};
 
 pub const DEFAULT_MATERIAL_COLOR: [f32; 4] = [0.5, 0.5, 0.5, 1.0];
+const SPRITE_PIXELS_PER_UNIT: f32 = 100.0;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct RenderCameraParams {
@@ -115,6 +116,21 @@ pub struct RenderLight {
     pub intensity: f32,
 }
 
+/// A sprite a loaded scene draws: the texture it samples, the tint it
+/// multiplies the texture with and the keys that order it in the sprite pass.
+#[derive(Clone, Debug)]
+pub struct RenderSprite {
+    pub entity: EntityId,
+    pub texture: Option<Arc<Image>>,
+    pub color: [f32; 4],
+    pub sorting_layer: i32,
+    pub sorting_order: i32,
+    pub size: [f32; 2],
+    pub flip_x: bool,
+    pub flip_y: bool,
+    pub enabled: bool,
+}
+
 #[derive(Clone, Copy, Debug)]
 struct CameraBasis {
     eye: Vec3,
@@ -132,6 +148,7 @@ pub struct RenderWorld {
     cameras: HashMap<u64, RenderCamera>,
     renderers: HashMap<u64, RenderRenderer>,
     lights: HashMap<u64, RenderLight>,
+    sprites: Vec<RenderSprite>,
     camera_defaults: HashMap<EntityId, RenderCameraParams>,
     light_defaults: HashMap<EntityId, RenderLight>,
     effect_mesh: Mesh,
@@ -147,6 +164,7 @@ impl Default for RenderWorld {
             cameras: HashMap::new(),
             renderers: HashMap::new(),
             lights: HashMap::new(),
+            sprites: Vec::new(),
             camera_defaults: HashMap::new(),
             light_defaults: HashMap::new(),
             effect_mesh: cube(1.0),
@@ -389,6 +407,41 @@ impl Runtime {
                 ));
             }
         }
+        for sprite in &binding.sprites {
+            let entity = EntityId::new(entity_base + sprite.entity.as_u64());
+            let texture = load_texture_image(sprite.sprite_path.as_deref()).map(Arc::new);
+            if let Some(diagnostic) = &sprite.diagnostic {
+                diagnostics.push((entity, diagnostic.clone()));
+            }
+            if texture.is_none() {
+                diagnostics.push((
+                    entity,
+                    format!(
+                        "SpriteRenderer on entity {} references sprite guid {} that could not be imported",
+                        entity.as_u64(),
+                        sprite.sprite_guid.as_deref().unwrap_or("none")
+                    ),
+                ));
+            }
+            let size = match texture.as_ref() {
+                Some(image) => [
+                    image.width as f32 / SPRITE_PIXELS_PER_UNIT,
+                    image.height as f32 / SPRITE_PIXELS_PER_UNIT,
+                ],
+                None => [0.0, 0.0],
+            };
+            self.render.sprites.push(RenderSprite {
+                entity,
+                texture,
+                color: sprite.color,
+                sorting_layer: sprite.sorting_layer,
+                sorting_order: sprite.sorting_order,
+                size,
+                flip_x: sprite.flip_x,
+                flip_y: sprite.flip_y,
+                enabled: sprite.enabled,
+            });
+        }
         for light in &binding.lights {
             let entity = EntityId::new(entity_base + light.entity.as_u64());
             if !light.directional {
@@ -477,6 +530,9 @@ impl Runtime {
         self.render
             .lights
             .retain(|_, light| !in_scene(light.entity));
+        self.render
+            .sprites
+            .retain(|sprite| !in_scene(Some(sprite.entity)));
         self.render
             .camera_defaults
             .retain(|entity, _| !in_scene(Some(*entity)));
@@ -597,6 +653,30 @@ impl Runtime {
         })
     }
 
+    /// The scene's enabled sprites, in the order the sprite pass draws them:
+    /// the sorting layer first, the order in the layer second.
+    pub fn sprite_instances(&self) -> Vec<unitas_render::Sprite> {
+        let mut sprites: Vec<unitas_render::Sprite> = self
+            .render
+            .sprites
+            .iter()
+            .filter(|sprite| sprite.enabled)
+            .filter_map(|sprite| {
+                let texture = sprite.texture.clone()?;
+                let transform = self.entity_transform(sprite.entity)?;
+                Some(unitas_render::Sprite {
+                    texture,
+                    model: sprite_model(&transform, sprite),
+                    color: sprite.color,
+                    sorting_layer: sprite.sorting_layer,
+                    sorting_order: sprite.sorting_order,
+                })
+            })
+            .collect();
+        unitas_render::sort_sprites(&mut sprites);
+        sprites
+    }
+
     pub(crate) fn render_frame(
         &mut self,
         camera: u64,
@@ -620,6 +700,7 @@ impl Runtime {
             ));
         }
         let renderer = self.gpu_renderer()?;
+        renderer.set_sprites(self.sprite_instances());
         let mut presenter = crate::presenter::GpuFramePresenter::new(renderer);
         presenter.set_meshes(scene_gpu_meshes(self));
         let default = GpuCameraBinding::default();
@@ -665,6 +746,7 @@ impl Runtime {
             ));
         }
         let renderer = self.gpu_renderer()?;
+        renderer.set_sprites(self.sprite_instances());
         let mut presenter = crate::presenter::GpuFramePresenter::new(renderer);
         presenter.set_meshes(scene_gpu_meshes(self));
         let default = GpuCameraBinding::default();
@@ -699,6 +781,7 @@ impl Runtime {
             ));
         }
         let renderer = self.gpu_renderer()?;
+        renderer.set_sprites(self.sprite_instances());
         let mut presenter = crate::presenter::GpuFramePresenter::new(renderer);
         presenter.bind_scene(self);
         crate::capture::capture_offscreen(&mut presenter, self, width, height)
@@ -882,6 +965,32 @@ fn render_material_for(renderer: &MeshRendererComponent) -> RenderMaterial {
     }
 }
 
+/// The model matrix a sprite draws with: the transform of its entity with
+/// the sprite's own size and flips applied to it.
+fn sprite_model(transform: &Transform, sprite: &RenderSprite) -> Mat4 {
+    let flip_x = if sprite.flip_x { -1.0 } else { 1.0 };
+    let flip_y = if sprite.flip_y { -1.0 } else { 1.0 };
+    let scale = Mat4::from_cols_array([
+        sprite.size[0] * flip_x,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        sprite.size[1] * flip_y,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+    ]);
+    crate::presenter::transform_to_mat4(transform) * scale
+}
+
 /// The texture at a path as the shader reads it, decoded with the asset
 /// import path and linearised when the importer says it holds colour.
 fn load_texture_image(path: Option<&Path>) -> Option<Image> {
@@ -928,5 +1037,137 @@ fn linearize_image(image: &mut Image) {
             let linear = unitas_asset::texture::import::srgb_to_linear(*channel);
             *channel = (linear * 255.0).round() as u8;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn write_test_tga(path: &Path, width: u16, height: u16, rgb: [u8; 3]) -> std::io::Result<()> {
+        let mut bytes = vec![0u8; 18 + (width as usize) * (height as usize) * 3];
+        bytes[2] = 2;
+        bytes[12..14].copy_from_slice(&width.to_le_bytes());
+        bytes[14..16].copy_from_slice(&height.to_le_bytes());
+        bytes[16] = 24;
+        bytes[17] = 0x20;
+        for chunk in bytes[18..].chunks_exact_mut(3) {
+            chunk[0] = rgb[2];
+            chunk[1] = rgb[1];
+            chunk[2] = rgb[0];
+        }
+        std::fs::write(path, bytes)
+    }
+
+    #[test]
+    fn sprite_renderer_scene_extracts_sorted_sprite_instances()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let dir = std::env::temp_dir().join(format!(
+            "unitas_runtime_sprite_extract_{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir)?;
+
+        let tex_path = dir.join("sprite.tga");
+        write_test_tga(&tex_path, 100, 50, [255, 0, 0])?;
+        let tex_meta_path = dir.join("sprite.tga.meta");
+        std::fs::write(
+            &tex_meta_path,
+            "fileFormatVersion: 2\nguid: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n",
+        )?;
+
+        let scene_path = dir.join("SpriteScene.unity");
+        let scene_yaml = "%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!1 &1
+GameObject:
+  m_Name: FrontSprite
+  m_Layer: 0
+--- !u!4 &2
+Transform:
+  m_GameObject: {fileID: 1}
+  m_LocalPosition: {x: 1, y: 2, z: 0}
+  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
+  m_LocalScale: {x: 2, y: 3, z: 1}
+  m_Children: []
+  m_Father: {fileID: 0}
+--- !u!212 &3
+SpriteRenderer:
+  m_GameObject: {fileID: 1}
+  m_Enabled: 1
+  m_Sprite: {fileID: 21300000, guid: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa, type: 3}
+  m_Color: {r: 0.25, g: 0.5, b: 0.75, a: 1}
+  m_FlipX: 1
+  m_FlipY: 0
+  m_DrawMode: 0
+  m_SortingLayerID: 2
+  m_SortingOrder: 1
+--- !u!1 &4
+GameObject:
+  m_Name: BackSprite
+  m_Layer: 0
+--- !u!4 &5
+Transform:
+  m_GameObject: {fileID: 4}
+  m_LocalPosition: {x: -1, y: 0, z: 0}
+  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_Children: []
+  m_Father: {fileID: 0}
+--- !u!212 &6
+SpriteRenderer:
+  m_GameObject: {fileID: 4}
+  m_Enabled: 1
+  m_Sprite: {fileID: 21300000, guid: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa, type: 3}
+  m_Color: {r: 1, g: 1, b: 1, a: 0.5}
+  m_FlipX: 0
+  m_FlipY: 1
+  m_DrawMode: 0
+  m_SortingLayerID: 1
+  m_SortingOrder: 5
+--- !u!1 &7
+GameObject:
+  m_Name: DisabledSprite
+  m_Layer: 0
+--- !u!4 &8
+Transform:
+  m_GameObject: {fileID: 7}
+  m_LocalPosition: {x: 0, y: 0, z: 0}
+  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_Children: []
+  m_Father: {fileID: 0}
+--- !u!212 &9
+SpriteRenderer:
+  m_GameObject: {fileID: 7}
+  m_Enabled: 0
+  m_Sprite: {fileID: 21300000, guid: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa, type: 3}
+  m_Color: {r: 1, g: 0, b: 0, a: 1}
+  m_SortingLayerID: 0
+  m_SortingOrder: 0
+";
+        std::fs::write(&scene_path, scene_yaml)?;
+
+        let mut runtime = Runtime::new()?;
+        runtime.load_scene(&scene_path)?;
+        let _ = std::fs::remove_dir_all(&dir);
+
+        let sprites = runtime.sprite_instances();
+        assert_eq!(sprites.len(), 2);
+        assert_eq!(sprites[0].sorting_layer, 1);
+        assert_eq!(sprites[0].sorting_order, 5);
+        assert_eq!(sprites[0].color, [1.0, 1.0, 1.0, 0.5]);
+        assert_eq!(sprites[0].texture.width, 100);
+        assert_eq!(sprites[0].texture.height, 50);
+        assert!((sprites[0].model.get(0, 0) - 1.0).abs() < 1e-6);
+        assert!((sprites[0].model.get(1, 1) - (-0.5)).abs() < 1e-6);
+
+        assert_eq!(sprites[1].sorting_layer, 2);
+        assert_eq!(sprites[1].sorting_order, 1);
+        assert_eq!(sprites[1].color, [0.25, 0.5, 0.75, 1.0]);
+        assert!((sprites[1].model.get(0, 0) - (-2.0)).abs() < 1e-6);
+        assert!((sprites[1].model.get(1, 1) - 1.5).abs() < 1e-6);
+        Ok(())
     }
 }

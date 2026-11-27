@@ -3,6 +3,7 @@ pub enum RenderPassKind {
     Shadow,
     Opaque,
     Transparent,
+    Sprites,
     UiOverlay,
     CaptureIds,
 }
@@ -102,6 +103,37 @@ impl RenderGraph {
 
     pub fn passes(&self) -> &[RenderGraphPass] {
         &self.passes
+    }
+
+    pub fn with_sprites(self, has_sprites: bool) -> Self {
+        if !has_sprites || self.has_sprite_pass() {
+            return self;
+        }
+        let target = self
+            .passes
+            .iter()
+            .find(|pass| pass.kind == RenderPassKind::Transparent)
+            .map_or(RenderTargetKind::OffscreenColorDepth, |pass| pass.target);
+        let index = self
+            .passes
+            .iter()
+            .position(|pass| pass.kind == RenderPassKind::UiOverlay)
+            .unwrap_or(self.passes.len());
+        let mut passes = self.passes;
+        passes.insert(
+            index,
+            RenderGraphPass {
+                kind: RenderPassKind::Sprites,
+                target,
+            },
+        );
+        Self { passes }
+    }
+
+    pub fn has_sprite_pass(&self) -> bool {
+        self.passes
+            .iter()
+            .any(|pass| pass.kind == RenderPassKind::Sprites)
     }
 
     pub fn pass_order(&self) -> Vec<RenderPassKind> {
@@ -268,5 +300,33 @@ mod tests {
                 .collect::<Vec<_>>(),
             with_shadows.pass_order()
         );
+    }
+
+    #[test]
+    fn with_sprites_inserts_sprite_pass_after_transparent_and_before_overlay() {
+        let without = RenderGraph::offscreen(true, false).with_sprites(false);
+        assert!(!without.has_sprite_pass());
+        assert_eq!(
+            without.pass_order(),
+            vec![
+                RenderPassKind::Opaque,
+                RenderPassKind::Transparent,
+                RenderPassKind::UiOverlay,
+            ]
+        );
+
+        let with = RenderGraph::offscreen(true, false).with_sprites(true);
+        assert!(with.has_sprite_pass());
+        assert_eq!(
+            with.pass_order(),
+            vec![
+                RenderPassKind::Opaque,
+                RenderPassKind::Transparent,
+                RenderPassKind::Sprites,
+                RenderPassKind::UiOverlay,
+            ]
+        );
+        let idempotent = with.clone().with_sprites(true);
+        assert_eq!(idempotent, with);
     }
 }
