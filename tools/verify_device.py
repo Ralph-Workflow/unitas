@@ -5,6 +5,7 @@ import json
 import math
 import queue
 import re
+import shutil
 import struct
 import subprocess
 import sys
@@ -23,6 +24,7 @@ DEFAULT_TOLERANCE = 4.0
 TOLERANCE_EPSILON = 1e-6
 DEFAULT_BUDGET_SECONDS = 120.0
 BUILD_BUDGET_SECONDS = 600.0
+TARGET_LIST_TIMEOUT_SECONDS = 30.0
 PCM_SAMPLE_WIDTH_BYTES = 2
 BMP_HEADER_SIZE = 54
 BMP_MIN_DIB_HEADER_SIZE = 40
@@ -54,6 +56,8 @@ PAUSE_SILENCE_LEAD_IN_SECONDS = 0.75
 MENU_CHIME_LEAD_IN_SECONDS = 1.0
 CHIME_FLOOR_AMPLITUDE = 0.005
 PLAYER_BINARY = REPO_ROOT / "target" / "debug" / "unitas-player"
+WEB_TARGET = "wasm32-unknown-unknown"
+WEB_CHECK_PACKAGE = "unitas-render"
 POLICY_CITATION = "docs/ralph-workflow-policy/verification-policy.md § Gate lanes"
 TIMEOUT_CITATION = "docs/ralph-workflow-policy/verification-policy.md § Default requirements"
 DEVICE_PACKAGES: tuple[str, ...] = (
@@ -684,11 +688,37 @@ def device_lane_failure(
     return stage, reason, chime_summary
 
 
-def run_device_lane(
-    actual_capture: Path | None = None,
-    budget_seconds: float = DEFAULT_BUDGET_SECONDS,
-) -> int:
-    sys.stdout.write(metadata_text() + "\n")
+def web_target_installed(rustup: str) -> bool:
+    try:
+        installed = subprocess.run(
+            (rustup, "target", "list", "--installed"),
+            cwd=REPO_ROOT,
+            check=False,
+            capture_output=True,
+            text=True,
+            errors="replace",
+            timeout=TARGET_LIST_TIMEOUT_SECONDS,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    return installed.returncode == 0 and WEB_TARGET in installed.stdout.split()
+
+
+def ensure_web_target() -> int:
+    rustup = shutil.which("rustup")
+    if rustup is None:
+        return 0
+    if web_target_installed(rustup):
+        return 0
+    rc, _ = run_step(
+        "web-target-install",
+        (rustup, "target", "add", WEB_TARGET),
+        BUILD_BUDGET_SECONDS,
+    )
+    return rc
+
+
+def run_build_gates() -> int:
     rc, _ = run_step(
         "build-player",
         (
@@ -703,6 +733,28 @@ def run_device_lane(
         ),
         BUILD_BUDGET_SECONDS,
     )
+    if rc != 0:
+        return rc
+    rc = ensure_web_target()
+    if rc != 0:
+        return rc
+    rc, _ = run_step(
+        "web-target",
+        ("cargo", "check", "-p", WEB_CHECK_PACKAGE, "--target", WEB_TARGET),
+        BUILD_BUDGET_SECONDS,
+    )
+    if rc != 0:
+        return rc
+    sys.stdout.write(f"OK verify-device web-target: the renderer compiles for {WEB_TARGET}\n")
+    return 0
+
+
+def run_device_lane(
+    actual_capture: Path | None = None,
+    budget_seconds: float = DEFAULT_BUDGET_SECONDS,
+) -> int:
+    sys.stdout.write(metadata_text() + "\n")
+    rc = run_build_gates()
     if rc != 0:
         return rc
 

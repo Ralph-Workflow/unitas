@@ -74,6 +74,7 @@ namespace Unitas.Bridge
         private readonly RuntimeRenderProvider _renderProvider;
         private readonly RuntimeUiProvider _uiProvider;
         private readonly RuntimeTrailProvider _trailProvider;
+        private readonly RuntimeSpriteProvider _spriteProvider;
         private readonly ScriptableObjectProvider _scriptableObjectProvider;
         private readonly RuntimeCinemachineProvider _cinemachineProvider;
         private ISceneProvider _sceneProvider;
@@ -133,6 +134,7 @@ namespace Unitas.Bridge
             _renderProvider = new RuntimeRenderProvider(runtimeHandle);
             _uiProvider = new RuntimeUiProvider(runtimeHandle);
             _trailProvider = new RuntimeTrailProvider(runtimeHandle);
+            _spriteProvider = new RuntimeSpriteProvider(runtimeHandle, () => DataPath);
             _scriptableObjectProvider = new ScriptableObjectProvider(runtimeHandle);
             _cinemachineProvider = new RuntimeCinemachineProvider();
             _sceneProvider = _defaultSceneProvider;
@@ -200,6 +202,7 @@ namespace Unitas.Bridge
             Light.Provider = _renderProvider;
             UnityEngine.UI.Ui.Provider = _uiProvider;
             TrailRenderer.Provider = _trailProvider;
+            SpriteRenderer.Provider = _spriteProvider;
             ScriptGlueRegistry.RegisterBuiltInUiComponents();
             Unitas.Bridge.Messaging.MessageDispatcher.EnsureInstalled();
             UnitySynchronizationContext.Install();
@@ -528,6 +531,10 @@ namespace Unitas.Bridge
                 if (ReferenceEquals(TrailRenderer.Provider, _trailProvider))
                 {
                     TrailRenderer.Provider = null;
+                }
+                if (ReferenceEquals(SpriteRenderer.Provider, _spriteProvider))
+                {
+                    SpriteRenderer.Provider = null;
                 }
                 if (result != 0)
                 {

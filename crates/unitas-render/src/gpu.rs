@@ -34,7 +34,7 @@ mod gpu_shader;
 #[path = "gpu_surface.rs"]
 mod gpu_surface;
 
-pub use gpu_surface::present_mode_for_v_sync_count;
+pub use gpu_surface::{present_mode_for_v_sync_count, SurfaceFrame};
 
 const VERTEX_FLOATS: usize = 11;
 const VERTEX_STRIDE: u64 = 44;
@@ -155,6 +155,13 @@ pub struct TextOverlayItem {
     pub color: [f32; 4],
 }
 
+/// One filled element of the interface of the windowed player.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct CanvasRect {
+    pub rect: [f32; 4],
+    pub color: [f32; 4],
+}
+
 impl<'a, 'b> From<&'a MeshInstance<'b>> for GpuInstance<'b>
 where
     'b: 'a,
@@ -169,6 +176,7 @@ where
     }
 }
 
+#[derive(Clone)]
 struct Pipelines {
     lit: wgpu::RenderPipeline,
     unlit: wgpu::RenderPipeline,
@@ -204,6 +212,7 @@ struct TextState {
     atlas: GlyphAtlas,
     targets: HashMap<wgpu::TextureFormat, TextTarget>,
     image_targets: HashMap<wgpu::TextureFormat, ImageTarget>,
+    solid_targets: HashMap<wgpu::TextureFormat, ImageTarget>,
 }
 
 /// The textured quad that draws a composed frame over a render target.
@@ -418,6 +427,7 @@ impl Renderer {
             create_default_material_bind(&device, &queue, &material_layout, &material_sampler);
         let uniforms = create_uniforms(&device, &global_layout, &instance_layout, 0);
         let mut fonts = FontLibrary::new();
+        fonts.load_bundled_font();
         fonts.load_system_fonts();
         let text = TextState {
             fonts,
@@ -425,6 +435,7 @@ impl Renderer {
             atlas: GlyphAtlas::new(1024, 1024),
             targets: HashMap::new(),
             image_targets: HashMap::new(),
+            solid_targets: HashMap::new(),
         };
         Ok(Renderer {
             instance,
@@ -857,6 +868,25 @@ impl Renderer {
         size: (u32, u32),
         image: &Rgba8,
     ) -> Result<(), RenderError> {
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("image"),
+            });
+        self.draw_rgba_overlay(&mut encoder, view, format, size, image)?;
+        self.queue.submit(Some(encoder.finish()));
+        Ok(())
+    }
+
+    /// Draws a composed frame over a render target inside an open encoder.
+    fn draw_rgba_overlay(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        view: &wgpu::TextureView,
+        format: wgpu::TextureFormat,
+        size: (u32, u32),
+        image: &Rgba8,
+    ) -> Result<(), RenderError> {
         if size.0 == 0 || size.1 == 0 || image.width == 0 || image.height == 0 {
             return Ok(());
         }
@@ -896,13 +926,8 @@ impl Renderer {
             width: size.0 as f32,
             height: size.1 as f32,
         };
-        let mut encoder = self
-            .device
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("image"),
-            });
         let mut target_frame = TextFrame {
-            encoder: &mut encoder,
+            encoder,
             view,
             frame,
             clip: frame,
@@ -914,7 +939,6 @@ impl Renderer {
             &mut target_frame,
             &quads,
         );
-        self.queue.submit(Some(encoder.finish()));
         Ok(())
     }
 
@@ -989,6 +1013,74 @@ impl Renderer {
             &self.device,
             &self.queue,
             &target.resources,
+            &mut target_frame,
+            &quads,
+        );
+    }
+
+    /// Draws the filled elements of the interface over a render target, with
+    /// the same blending the interface is composed with on the host.
+    fn draw_ui_rects(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        view: &wgpu::TextureView,
+        format: wgpu::TextureFormat,
+        size: (u32, u32),
+        rects: &[CanvasRect],
+    ) {
+        if rects.is_empty() || size.0 == 0 || size.1 == 0 {
+            return;
+        }
+        let mut text = lock(&self.text);
+        let target = text.solid_targets.entry(format).or_insert_with(|| {
+            let pipeline = TextPipeline::new(&self.device, format);
+            let white = Rgba8 {
+                width: 1,
+                height: 1,
+                pixels: vec![255, 255, 255, 255],
+            };
+            let resources = pipeline.upload_image(&self.device, &self.queue, &white);
+            ImageTarget {
+                pipeline,
+                resources: Some(resources),
+                size: (1, 1),
+            }
+        });
+        let Some(resources) = &target.resources else {
+            return;
+        };
+        let quads: Vec<TexturedQuad> = rects
+            .iter()
+            .filter_map(|rect| {
+                ui_rect_bounds(rect.rect, size.0, size.1).map(|bounds| TexturedQuad {
+                    x: bounds.0 as f32,
+                    y: bounds.1 as f32,
+                    width: (bounds.2 - bounds.0) as f32,
+                    height: (bounds.3 - bounds.1) as f32,
+                    uv: [0.0, 0.0, 1.0, 1.0],
+                    color: rect.color,
+                })
+            })
+            .collect();
+        if quads.is_empty() {
+            return;
+        }
+        let frame = Rect {
+            x: 0.0,
+            y: 0.0,
+            width: size.0 as f32,
+            height: size.1 as f32,
+        };
+        let mut target_frame = TextFrame {
+            encoder,
+            view,
+            frame,
+            clip: frame,
+        };
+        target.pipeline.draw(
+            &self.device,
+            &self.queue,
+            resources,
             &mut target_frame,
             &quads,
         );
@@ -1729,6 +1821,19 @@ fn background_color(background: [f32; 3]) -> wgpu::Color {
         b: f64::from(background[2]),
         a: 1.0,
     }
+}
+
+/// The pixel bounds a filled element of the interface covers, the same bounds
+/// the interface is composed with on the host.
+fn ui_rect_bounds(rect: [f32; 4], width: u32, height: u32) -> Option<(u32, u32, u32, u32)> {
+    let x0 = rect[0].floor().max(0.0);
+    let y0 = rect[1].floor().max(0.0);
+    let x1 = (rect[0] + rect[2]).ceil().max(0.0).min(width as f32);
+    let y1 = (rect[1] + rect[3]).ceil().max(0.0).min(height as f32);
+    if x1 <= x0 || y1 <= y0 {
+        return None;
+    }
+    Some((x0 as u32, y0 as u32, x1 as u32, y1 as u32))
 }
 
 fn rgba_from_readback(data: &[u8], width: u32, height: u32, bytes_per_row: u64) -> Rgba8 {

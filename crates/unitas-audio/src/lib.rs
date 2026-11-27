@@ -1,15 +1,17 @@
-use lewton::inside_ogg::OggStreamReader;
+use std::collections::btree_map::Entry;
 use std::collections::BTreeMap;
-use std::io::Cursor;
 use std::path::Path;
 use unitas_asset::audio_import::{decode_aiff, decode_mp3, decode_ogg_vorbis, decode_wav};
 use unitas_core::EntityId;
 
 #[cfg(feature = "device")]
 pub mod output;
+pub mod ring;
 
 pub type AudioClipId = u64;
 pub type MusicStreamId = u64;
+
+pub const OUTPUT_CHANNELS: usize = 2;
 
 const DEFAULT_DOPPLER_FACTOR: f32 = 1.0;
 const DEFAULT_SPEED_OF_SOUND: f32 = 343.0;
@@ -17,6 +19,7 @@ const MAX_DOPPLER_FACTOR: f32 = 5.0;
 const MIN_SPEED_OF_SOUND: f32 = 1.0;
 const MAX_EFFECTIVE_PITCH: f32 = 4.0;
 const MIN_AXIS_DISTANCE: f32 = 1e-6;
+const DEFAULT_SAMPLE_RATE: u32 = 44100;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum AudioMixerGroup {
@@ -37,21 +40,18 @@ impl AudioMixerGroup {
 }
 
 pub struct MusicStream {
-    data: Vec<u8>,
-    reader: OggStreamReader<Cursor<Vec<u8>>>,
+    samples: Vec<f32>,
     channels: u16,
     sample_rate: u32,
-    packet: Vec<f32>,
-    packet_pos: usize,
+    position: usize,
 }
 
 impl MusicStream {
     fn new(bytes: &[u8]) -> Result<Self, AudioError> {
-        let data = bytes.to_vec();
-        let reader = OggStreamReader::new(Cursor::new(data.clone()))
+        let decoded = decode_ogg_vorbis(bytes)
             .map_err(|err| AudioError::UnsupportedFormat(err.to_string()))?;
-        let channels = u16::from(reader.ident_hdr.audio_channels);
-        let sample_rate = reader.ident_hdr.audio_sample_rate;
+        let channels = decoded.channels;
+        let sample_rate = decoded.sample_rate;
         if channels == 0 || channels > 2 {
             return Err(AudioError::UnsupportedFormat(format!(
                 "{channels} channels (only mono or stereo supported)"
@@ -62,13 +62,16 @@ impl MusicStream {
                 "zero sample rate".to_string(),
             ));
         }
+        let samples = decoded
+            .samples
+            .iter()
+            .map(|sample| (f32::from(*sample) / 32768.0).clamp(-1.0, 1.0))
+            .collect();
         Ok(Self {
-            data,
-            reader,
+            samples,
             channels,
             sample_rate,
-            packet: Vec::new(),
-            packet_pos: 0,
+            position: 0,
         })
     }
 
@@ -80,56 +83,65 @@ impl MusicStream {
         self.sample_rate
     }
 
-    fn restart(&mut self) -> Result<(), AudioError> {
-        self.reader = OggStreamReader::new(Cursor::new(self.data.clone()))
-            .map_err(|err| AudioError::UnsupportedFormat(err.to_string()))?;
-        self.packet.clear();
-        self.packet_pos = 0;
-        Ok(())
+    fn restart(&mut self) {
+        self.position = 0;
     }
 
-    fn pull_packet(&mut self) -> Result<bool, AudioError> {
-        match self.reader.read_dec_packet_itl() {
-            Ok(Some(samples)) => {
-                self.packet = samples
-                    .iter()
-                    .map(|sample| (f32::from(*sample) / 32768.0).clamp(-1.0, 1.0))
-                    .collect();
-                self.packet_pos = 0;
-                Ok(true)
-            }
-            Ok(None) => Ok(false),
-            Err(err) => Err(AudioError::UnsupportedFormat(err.to_string())),
+    fn resample(&mut self, target_rate: u32) {
+        if target_rate == 0 || target_rate == self.sample_rate {
+            return;
         }
+        let channels = usize::from(self.channels.max(1));
+        let frames = self.samples.len() / channels;
+        if frames == 0 {
+            return;
+        }
+        let ratio = f64::from(target_rate) / f64::from(self.sample_rate);
+        let target_frames = ((frames as f64) * ratio).round().max(0.0) as usize;
+        let mut samples = Vec::with_capacity(target_frames * channels);
+        for index in 0..target_frames {
+            let position = index as f64 / ratio;
+            let base = position.floor() as usize;
+            let fraction = (position - base as f64) as f32;
+            for channel in 0..channels {
+                let current = self
+                    .samples
+                    .get(base * channels + channel)
+                    .copied()
+                    .unwrap_or(0.0);
+                let next = self
+                    .samples
+                    .get((base + 1) * channels + channel)
+                    .copied()
+                    .unwrap_or(current);
+                samples.push(current + (next - current) * fraction);
+            }
+        }
+        self.samples = samples;
+        self.sample_rate = target_rate;
+        self.position = 0;
     }
 
     pub fn next_frame(&mut self, looping: bool) -> Option<(f32, f32)> {
-        loop {
-            let channel_count = usize::from(self.channels);
-            if self.packet_pos + channel_count <= self.packet.len() {
-                if channel_count == 1 {
-                    let sample = self.packet[self.packet_pos];
-                    self.packet_pos += 1;
-                    return Some((sample, sample));
-                }
-                let left = self.packet[self.packet_pos];
-                let right = self.packet[self.packet_pos + 1];
-                self.packet_pos += 2;
-                return Some((left, right));
-            }
-            match self.pull_packet() {
-                Ok(true) => {}
-                Ok(false) => {
-                    if !looping {
-                        return None;
-                    }
-                    if self.restart().is_err() {
-                        return None;
-                    }
-                }
-                Err(_) => return None,
-            }
+        let channel_count = usize::from(self.channels);
+        if self.samples.len() < channel_count {
+            return None;
         }
+        if self.position + channel_count > self.samples.len() {
+            if !looping {
+                return None;
+            }
+            self.position = 0;
+        }
+        if channel_count == 1 {
+            let sample = self.samples[self.position];
+            self.position += 1;
+            return Some((sample, sample));
+        }
+        let left = self.samples[self.position];
+        let right = self.samples[self.position + 1];
+        self.position += 2;
+        Some((left, right))
     }
 }
 
@@ -229,6 +241,36 @@ impl AudioClip {
     pub fn parse_wav(bytes: &[u8]) -> Result<Self, AudioError> {
         parse_wav(bytes)
     }
+}
+
+fn resample_clip(clip: &AudioClip, target_rate: u32) -> AudioClip {
+    let channels = usize::from(clip.channels.max(1));
+    let frames = clip.frame_count();
+    if frames == 0 || clip.sample_rate == 0 || target_rate == 0 || clip.sample_rate == target_rate {
+        return clip.clone();
+    }
+    let ratio = f64::from(target_rate) / f64::from(clip.sample_rate);
+    let target_frames = ((frames as f64) * ratio).round().max(0.0) as usize;
+    let mut samples = Vec::with_capacity(target_frames * channels);
+    for index in 0..target_frames {
+        let position = index as f64 / ratio;
+        let base = position.floor() as usize;
+        let fraction = (position - base as f64) as f32;
+        for channel in 0..channels {
+            let current = clip
+                .samples
+                .get(base * channels + channel)
+                .copied()
+                .unwrap_or(0.0);
+            let next = clip
+                .samples
+                .get((base + 1) * channels + channel)
+                .copied()
+                .unwrap_or(current);
+            samples.push(current + (next - current) * fraction);
+        }
+    }
+    AudioClip::new(clip.channels, target_rate, samples)
 }
 
 fn read_u16_le(bytes: &[u8], offset: usize) -> Option<u16> {
@@ -487,6 +529,7 @@ pub struct AudioWorld {
     failed_clips: BTreeMap<AudioClipId, String>,
     next_clip_id: AudioClipId,
     sources: BTreeMap<EntityId, AudioSource>,
+    source_order: Vec<EntityId>,
     listener: Option<ListenerPose>,
     max_real_voices: usize,
     application_paused: bool,
@@ -496,6 +539,7 @@ pub struct AudioWorld {
     music_streams: BTreeMap<MusicStreamId, MusicStream>,
     next_music_stream_id: MusicStreamId,
     mixer_sample: u64,
+    device_sample_rate: Option<u32>,
     doppler_factor: f32,
     speed_of_sound: f32,
 }
@@ -513,6 +557,7 @@ impl AudioWorld {
             failed_clips: BTreeMap::new(),
             next_clip_id: 1,
             sources: BTreeMap::new(),
+            source_order: Vec::new(),
             listener: Some(ListenerPose {
                 position: [0.0, 0.0, 0.0],
                 forward: [0.0, 0.0, 1.0],
@@ -526,6 +571,7 @@ impl AudioWorld {
             music_streams: BTreeMap::new(),
             next_music_stream_id: 1,
             mixer_sample: 0,
+            device_sample_rate: None,
             doppler_factor: DEFAULT_DOPPLER_FACTOR,
             speed_of_sound: DEFAULT_SPEED_OF_SOUND,
         }
@@ -534,6 +580,10 @@ impl AudioWorld {
     pub fn register_clip(&mut self, clip: AudioClip) -> AudioClipId {
         let id = self.next_clip_id;
         self.next_clip_id += 1;
+        let clip = match self.device_sample_rate {
+            Some(rate) if rate != clip.sample_rate => resample_clip(&clip, rate),
+            _ => clip,
+        };
         self.clips.insert(id, clip);
         id
     }
@@ -560,12 +610,19 @@ impl AudioWorld {
     }
 
     pub fn ensure_source(&mut self, entity: EntityId) -> &mut AudioSource {
-        self.sources.entry(entity).or_default()
+        match self.sources.entry(entity) {
+            Entry::Occupied(entry) => entry.into_mut(),
+            Entry::Vacant(entry) => {
+                self.source_order.push(entity);
+                entry.insert(AudioSource::default())
+            }
+        }
     }
 
     pub fn remove_source(&mut self, entity: EntityId) -> bool {
         let removed = self.sources.remove(&entity).is_some();
         if removed {
+            self.source_order.retain(|candidate| *candidate != entity);
             self.recompute_virtualization();
         }
         removed
@@ -712,7 +769,10 @@ impl AudioWorld {
     }
 
     pub fn load_music_bytes(&mut self, bytes: &[u8]) -> Result<MusicStreamId, AudioError> {
-        let stream = MusicStream::new(bytes)?;
+        let mut stream = MusicStream::new(bytes)?;
+        if let Some(rate) = self.device_sample_rate {
+            stream.resample(rate);
+        }
         let id = self.next_music_stream_id;
         self.next_music_stream_id += 1;
         self.music_streams.insert(id, stream);
@@ -752,12 +812,59 @@ impl AudioWorld {
         self.mixer_sample
     }
 
+    pub fn device_sample_rate(&self) -> Option<u32> {
+        self.device_sample_rate
+    }
+
+    pub fn set_device_sample_rate(&mut self, sample_rate: u32) {
+        if sample_rate == 0 {
+            return;
+        }
+        self.device_sample_rate = Some(sample_rate);
+        let clip_ids: Vec<AudioClipId> = self.clips.keys().copied().collect();
+        for clip_id in clip_ids {
+            let Some(clip) = self.clips.get(&clip_id) else {
+                continue;
+            };
+            if clip.sample_rate == sample_rate {
+                continue;
+            }
+            let resampled = resample_clip(clip, sample_rate);
+            self.clips.insert(clip_id, resampled);
+        }
+        let stream_ids: Vec<MusicStreamId> = self.music_streams.keys().copied().collect();
+        for stream_id in stream_ids {
+            if let Some(stream) = self.music_streams.get_mut(&stream_id) {
+                stream.resample(sample_rate);
+            }
+        }
+    }
+
+    fn effective_sample_rate(&self) -> u32 {
+        self.device_sample_rate.unwrap_or(DEFAULT_SAMPLE_RATE)
+    }
+
+    pub fn dsp_time(&self) -> f64 {
+        self.mixer_sample as f64 / f64::from(self.effective_sample_rate())
+    }
+
     pub fn play(&mut self, entity: EntityId, one_shot: bool) {
         self.start_playback(entity, one_shot, None);
     }
 
     pub fn play_scheduled(&mut self, entity: EntityId, one_shot: bool, start_sample: u64) {
         self.start_playback(entity, one_shot, Some(start_sample));
+    }
+
+    pub fn play_delayed(&mut self, entity: EntityId, one_shot: bool, delay_seconds: f64) {
+        let delay = if delay_seconds.is_finite() {
+            delay_seconds.max(0.0)
+        } else {
+            0.0
+        };
+        let frames = (delay * f64::from(self.effective_sample_rate())).round() as u64;
+        let start_sample = self.mixer_sample.saturating_add(frames);
+        self.play_scheduled(entity, one_shot, start_sample);
     }
 
     fn start_playback(&mut self, entity: EntityId, one_shot: bool, scheduled_sample: Option<u64>) {
@@ -798,11 +905,10 @@ impl AudioWorld {
         let restart_music = if was_finished { source.music } else { None };
         if let Some(stream_id) = restart_music {
             if let Some(stream) = self.music_streams.get_mut(&stream_id) {
-                if stream.restart().is_ok() {
-                    let source = self.ensure_source(entity);
-                    source.time = 0.0;
-                    source.sample_cursor = 0.0;
-                }
+                stream.restart();
+                let source = self.ensure_source(entity);
+                source.time = 0.0;
+                source.sample_cursor = 0.0;
             }
         }
         self.recompute_virtualization();
@@ -1211,8 +1317,17 @@ impl AudioWorld {
     }
 
     pub fn mix(&mut self, n_frames: usize) -> Vec<f32> {
-        let mut output = vec![0.0f32; n_frames * 2];
-        let entities: Vec<EntityId> = self.sources.keys().copied().collect();
+        let mut output = vec![0.0f32; n_frames * OUTPUT_CHANNELS];
+        self.mix_into(&mut output);
+        output
+    }
+
+    pub fn mix_into(&mut self, output: &mut [f32]) {
+        let n_frames = output.len() / OUTPUT_CHANNELS;
+        output.fill(0.0);
+        if n_frames == 0 {
+            return;
+        }
         let mut any_completed = false;
         let start_sample = self.mixer_sample;
         let end_sample = start_sample + n_frames as u64;
@@ -1221,110 +1336,10 @@ impl AudioWorld {
             self.recompute_virtualization();
         }
 
-        for entity in &entities {
-            let Some(source_summary) = self.sources.get(entity) else {
-                continue;
-            };
-            let render_offset = match source_summary.scheduled_sample {
-                Some(scheduled) if scheduled > start_sample => (scheduled - start_sample) as usize,
-                _ => 0,
-            };
-            if render_offset >= n_frames {
-                continue;
-            }
-            if self.inaudible_reason(*entity).is_some() {
-                continue;
-            }
-            let Some((gain_l, gain_r)) = self.source_gains(*entity) else {
-                continue;
-            };
-            let bus = self.bus_gain(source_summary.group);
-            if bus <= 0.0 {
-                continue;
-            }
-            let (gain_l, gain_r) = (gain_l * bus, gain_r * bus);
-            if let Some(stream_id) = source_summary.music {
-                let Some(stream) = self.music_streams.get_mut(&stream_id) else {
-                    continue;
-                };
-                let Some(source) = self.sources.get_mut(entity) else {
-                    continue;
-                };
-                let looping = source.looping && !source.one_shot_active;
-                for frame_out in render_offset..n_frames {
-                    let Some((sample_l, sample_r)) = stream.next_frame(looping) else {
-                        source.wants_play = false;
-                        source.one_shot_active = false;
-                        source.state = AudioSourceState::Completed;
-                        any_completed = true;
-                        break;
-                    };
-                    output[frame_out * 2] += sample_l * gain_l;
-                    output[frame_out * 2 + 1] += sample_r * gain_r;
-                    source.sample_cursor += 1.0;
-                    source.time = source.sample_cursor / f64::from(stream.sample_rate());
-                }
-                continue;
-            }
-            let Some(clip_id) = source_summary.clip else {
-                continue;
-            };
-            let Some(clip) = self.clips.get(&clip_id).cloned() else {
-                continue;
-            };
-            let total_frames = clip.frame_count();
-            if total_frames == 0 || clip.sample_rate == 0 {
-                continue;
-            }
-            let step = f64::from(self.effective_pitch(*entity)).max(0.0);
-            let Some(source) = self.sources.get_mut(entity) else {
-                continue;
-            };
-
-            for frame_out in render_offset..n_frames {
-                let mut frame_idx = source.sample_cursor.floor() as usize;
-                if frame_idx >= total_frames {
-                    if source.looping && !source.one_shot_active {
-                        frame_idx %= total_frames;
-                        source.sample_cursor %= total_frames as f64;
-                    } else {
-                        source.time = clip.duration;
-                        source.sample_cursor = total_frames as f64;
-                        source.wants_play = false;
-                        source.one_shot_active = false;
-                        source.state = AudioSourceState::Completed;
-                        any_completed = true;
-                        break;
-                    }
-                }
-
-                let (sample_l, sample_r) = if clip.channels == 1 {
-                    let s = clip.samples.get(frame_idx).copied().unwrap_or(0.0);
-                    (s, s)
-                } else {
-                    let l = clip.samples.get(frame_idx * 2).copied().unwrap_or(0.0);
-                    let r = clip.samples.get(frame_idx * 2 + 1).copied().unwrap_or(0.0);
-                    (l, r)
-                };
-
-                output[frame_out * 2] += sample_l * gain_l;
-                output[frame_out * 2 + 1] += sample_r * gain_r;
-
-                source.sample_cursor += step;
-                if source.sample_cursor >= total_frames as f64 {
-                    if source.looping && !source.one_shot_active {
-                        source.sample_cursor %= total_frames as f64;
-                    } else if frame_out + 1 == n_frames {
-                        source.time = clip.duration;
-                        source.sample_cursor = total_frames as f64;
-                        source.wants_play = false;
-                        source.one_shot_active = false;
-                        source.state = AudioSourceState::Completed;
-                        any_completed = true;
-                        break;
-                    }
-                }
-                source.time = source.sample_cursor / f64::from(clip.sample_rate);
+        for index in 0..self.source_order.len() {
+            let entity = self.source_order[index];
+            if self.render_source(entity, output, start_sample, n_frames) {
+                any_completed = true;
             }
         }
 
@@ -1332,7 +1347,123 @@ impl AudioWorld {
         if any_completed {
             self.recompute_virtualization();
         }
-        output
+    }
+
+    fn render_source(
+        &mut self,
+        entity: EntityId,
+        output: &mut [f32],
+        start_sample: u64,
+        n_frames: usize,
+    ) -> bool {
+        let Some(source_summary) = self.sources.get(&entity) else {
+            return false;
+        };
+        let scheduled_sample = source_summary.scheduled_sample;
+        let group = source_summary.group;
+        let music = source_summary.music;
+        let clip_id = source_summary.clip;
+        let render_offset = match scheduled_sample {
+            Some(scheduled) if scheduled > start_sample => (scheduled - start_sample) as usize,
+            _ => 0,
+        };
+        if render_offset >= n_frames {
+            return false;
+        }
+        if self.inaudible_reason(entity).is_some() {
+            return false;
+        }
+        let Some((gain_l, gain_r)) = self.source_gains(entity) else {
+            return false;
+        };
+        let bus = self.bus_gain(group);
+        if bus <= 0.0 {
+            return false;
+        }
+        let (gain_l, gain_r) = (gain_l * bus, gain_r * bus);
+        if let Some(stream_id) = music {
+            let Some(stream) = self.music_streams.get_mut(&stream_id) else {
+                return false;
+            };
+            let Some(source) = self.sources.get_mut(&entity) else {
+                return false;
+            };
+            let looping = source.looping && !source.one_shot_active;
+            for frame_out in render_offset..n_frames {
+                let Some((sample_l, sample_r)) = stream.next_frame(looping) else {
+                    source.wants_play = false;
+                    source.one_shot_active = false;
+                    source.state = AudioSourceState::Completed;
+                    return true;
+                };
+                output[frame_out * OUTPUT_CHANNELS] += sample_l * gain_l;
+                output[frame_out * OUTPUT_CHANNELS + 1] += sample_r * gain_r;
+                source.sample_cursor += 1.0;
+                source.time = source.sample_cursor / f64::from(stream.sample_rate());
+            }
+            return false;
+        }
+        let Some(clip_id) = clip_id else {
+            return false;
+        };
+        let step = f64::from(self.effective_pitch(entity)).max(0.0);
+        let Some(clip) = self.clips.get(&clip_id) else {
+            return false;
+        };
+        let total_frames = clip.frame_count();
+        if total_frames == 0 || clip.sample_rate == 0 {
+            return false;
+        }
+        let clip_duration = clip.duration;
+        let clip_channels = clip.channels;
+        let Some(source) = self.sources.get_mut(&entity) else {
+            return false;
+        };
+
+        for frame_out in render_offset..n_frames {
+            let mut frame_idx = source.sample_cursor.floor() as usize;
+            if frame_idx >= total_frames {
+                if source.looping && !source.one_shot_active {
+                    frame_idx %= total_frames;
+                    source.sample_cursor %= total_frames as f64;
+                } else {
+                    source.time = clip_duration;
+                    source.sample_cursor = total_frames as f64;
+                    source.wants_play = false;
+                    source.one_shot_active = false;
+                    source.state = AudioSourceState::Completed;
+                    return true;
+                }
+            }
+
+            let (sample_l, sample_r) = if clip_channels == 1 {
+                let sample = clip.samples.get(frame_idx).copied().unwrap_or(0.0);
+                (sample, sample)
+            } else {
+                let left = clip.samples.get(frame_idx * 2).copied().unwrap_or(0.0);
+                let right = clip.samples.get(frame_idx * 2 + 1).copied().unwrap_or(0.0);
+                (left, right)
+            };
+
+            output[frame_out * OUTPUT_CHANNELS] += sample_l * gain_l;
+            output[frame_out * OUTPUT_CHANNELS + 1] += sample_r * gain_r;
+
+            source.sample_cursor += step;
+            if source.sample_cursor >= total_frames as f64 {
+                if source.looping && !source.one_shot_active {
+                    source.sample_cursor %= total_frames as f64;
+                } else if frame_out + 1 == n_frames {
+                    source.time = clip_duration;
+                    source.sample_cursor = total_frames as f64;
+                    source.wants_play = false;
+                    source.one_shot_active = false;
+                    source.state = AudioSourceState::Completed;
+                    return true;
+                }
+            }
+            source.time = source.sample_cursor / f64::from(clip.sample_rate);
+        }
+        false
     }
 
     fn advance_scheduled_sources(&mut self, start_sample: u64, end_sample: u64) -> bool {

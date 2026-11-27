@@ -18,9 +18,9 @@ use unitas_asset::project_settings::QualityLevel;
 use unitas_audio::output::DeviceOutput;
 use unitas_core::{EntityId, Transform, rotate_vector};
 use unitas_render::{
-    BlendMode, Camera, DEFAULT_MATERIAL, DirectionalLight, GpuMaterialInstance, Image, Mat4,
-    Material, Mesh, MeshAttributes, RenderError, RenderScene, Renderer, Rgba8, ShadowSettings,
-    TextOverlayItem, Vec3, look_at,
+    BlendMode, Camera, CanvasRect, DEFAULT_MATERIAL, DirectionalLight, GpuMaterialInstance, Image,
+    Mat4, Material, Mesh, MeshAttributes, RenderError, RenderScene, Renderer, ShadowSettings,
+    SurfaceFrame, TextOverlayItem, Vec3, look_at,
 };
 #[cfg(feature = "device")]
 use winit::window::Window;
@@ -555,8 +555,9 @@ impl Default for GpuCameraBinding {
 pub type FrameUpdateCallback<'a> =
     Box<dyn FnMut(&mut Runtime, &FrameInfo) -> Result<(), WindowError> + 'a>;
 
-/// Presents a composed frame on the window surface.
-pub type SurfaceBlit = Box<dyn FnMut(&Renderer, &Rgba8) -> Result<(), RenderError>>;
+/// Renders the frame of the windowed player into the window surface.
+pub type SurfaceRender =
+    Box<dyn for<'a> FnMut(&Renderer, &SurfaceFrame<'a>) -> Result<(), RenderError>>;
 
 pub fn resolve_camera_and_view(
     binding: &GpuCameraBinding,
@@ -732,7 +733,7 @@ pub struct GpuFramePresenter<'a> {
     last_mixed_samples: Vec<f32>,
     total_audio_frames_pushed: u64,
     frames_presented: u64,
-    surface_blit: Option<SurfaceBlit>,
+    surface_render: Option<SurfaceRender>,
     overlay: Vec<TextOverlayItem>,
     overlay_source: Option<Arc<Mutex<Vec<TextOverlayItem>>>>,
     overlay_drawn: bool,
@@ -759,7 +760,7 @@ impl<'a> GpuFramePresenter<'a> {
             last_mixed_samples: Vec::new(),
             total_audio_frames_pushed: 0,
             frames_presented: 0,
-            surface_blit: None,
+            surface_render: None,
             overlay: Vec::new(),
             overlay_source: None,
             overlay_drawn: false,
@@ -1032,20 +1033,20 @@ impl<'a> GpuFramePresenter<'a> {
     pub(crate) fn attach_window_surface(&mut self, window: &Arc<Window>) {
         match self.renderer.instance().create_surface(Arc::clone(window)) {
             Ok(surface) => {
-                let mut configured: Option<(u32, u32, u32)> = None;
-                self.surface_blit = Some(Box::new(
-                    move |renderer: &Renderer, image: &Rgba8| -> Result<(), RenderError> {
+                let mut configured: Option<((u32, u32), u32)> = None;
+                self.surface_render = Some(Box::new(
+                    move |renderer, frame: &SurfaceFrame<'_>| -> Result<(), RenderError> {
                         let v_sync_count = renderer.v_sync_count();
-                        if configured != Some((image.width, image.height, v_sync_count)) {
+                        if configured != Some((frame.size, v_sync_count)) {
                             renderer.configure_surface_with_v_sync(
                                 &surface,
-                                image.width,
-                                image.height,
+                                frame.size.0,
+                                frame.size.1,
                                 v_sync_count,
                             )?;
-                            configured = Some((image.width, image.height, v_sync_count));
+                            configured = Some((frame.size, v_sync_count));
                         }
-                        renderer.present_rgba_to_surface(&surface, image)
+                        renderer.render_surface_frame(&surface, frame)
                     },
                 ));
             }
@@ -1079,57 +1080,70 @@ impl<'a> GpuFramePresenter<'a> {
         Ok(())
     }
 
-    /// The frame the windowed player presents: the scene with the interface
-    /// drawn on it by the composition the capture path uses as well.
-    pub fn render_window_frame(
+    /// The elements of the interface of the loaded scenes, as the surface pass
+    /// draws them over the frame: the filled elements and the texts.
+    fn canvas_elements(
         &self,
         runtime: &Runtime,
         width: u32,
         height: u32,
-        overlay: &[TextOverlayItem],
-    ) -> Result<Rgba8, WindowError> {
-        let (camera, view, background) = self.resolved_camera_and_view(runtime, width, height);
-        let instances = self.collect_gpu_material_instances(runtime);
-        let scene = RenderScene {
-            camera: &camera,
-            view,
-            light: &self.light,
-            background,
-        };
-        let image = self.renderer.render_offscreen_materials_rgba_with_overlay(
-            &instances,
-            scene,
-            (width, height),
-            overlay,
-        )?;
-        Ok(runtime.composite_canvas_rgba(image, width, height))
+    ) -> (Vec<CanvasRect>, Vec<TextOverlayItem>) {
+        let mut rects = Vec::new();
+        let mut texts = Vec::new();
+        for item in runtime.ui_draw_items_for([width as f32, height as f32]) {
+            match item.text {
+                Some(text) => texts.push(TextOverlayItem {
+                    text: text.text,
+                    x: text.x,
+                    y: text.y,
+                    size_px: text.size_px,
+                    color: text.color,
+                }),
+                None => rects.push(CanvasRect {
+                    rect: item.rect_px,
+                    color: item.color,
+                }),
+            }
+        }
+        (rects, texts)
     }
 
     /// Presents the frame of the windowed player on the window surface.
     pub fn present_window_frame(&mut self, runtime: &Runtime, frame: &FrameInfo) {
         let width = frame.width.max(1);
         let height = frame.height.max(1);
-        if self.surface_blit.is_none() {
+        if self.surface_render.is_none() {
             self.last_error = Some(WindowError::Render(String::from(
                 "window surface is not attached",
             )));
             return;
         }
         let overlay_items = self.current_overlay();
-        let image = match self.render_window_frame(runtime, width, height, &overlay_items) {
-            Ok(image) => image,
-            Err(error) => {
-                self.last_error = Some(error);
-                return;
-            }
+        let (camera, view, background) = self.resolved_camera_and_view(runtime, width, height);
+        let instances = collect_gpu_material_instances_from(&self.meshes, runtime);
+        let light = self.light;
+        let (canvas_rects, canvas_texts) = self.canvas_elements(runtime, width, height);
+        let scene = RenderScene {
+            camera: &camera,
+            view,
+            light: &light,
+            background,
         };
-        let Some(blit) = self.surface_blit.as_mut() else {
+        let surface_frame = SurfaceFrame {
+            instances: &instances,
+            scene,
+            size: (width, height),
+            overlay: &overlay_items,
+            canvas_rects: &canvas_rects,
+            canvas_texts: &canvas_texts,
+        };
+        let Some(render) = self.surface_render.as_mut() else {
             self.last_error = Some(WindowError::Render(String::from(
                 "window surface is not attached",
             )));
             return;
         };
-        if let Err(error) = blit(&self.renderer, &image)
+        if let Err(error) = render(&self.renderer, &surface_frame)
             && !is_transient_surface_error(&error)
         {
             self.overlay_drawn = false;
@@ -1141,17 +1155,21 @@ impl<'a> GpuFramePresenter<'a> {
             let (camera, view, background) =
                 resolve_camera_and_view(&self.camera_binding, runtime, width, height);
             let instances = collect_gpu_material_instances_from(&self.meshes, runtime);
-            match self.renderer.render_offscreen_materials(
+            match self.renderer.render_offscreen_materials_rgba_with_overlay(
                 &instances,
-                &camera,
-                view,
-                &self.light,
-                background,
+                RenderScene {
+                    camera: &camera,
+                    view,
+                    light: &self.light,
+                    background,
+                },
                 (width, height),
+                &[],
             ) {
-                Ok(image) => {
-                    self.last_captured_frame =
-                        Some(runtime.composite_canvas_image(image, width, height));
+                Ok(rgba) => {
+                    self.last_captured_frame = Some(Image::from_rgba8(
+                        runtime.composite_canvas_rgba(rgba, width, height),
+                    ));
                 }
                 Err(error) => {
                     self.last_error = Some(WindowError::Render(error.to_string()));
@@ -1287,7 +1305,7 @@ mod tests {
     use std::path::Path;
     use std::sync::{Arc, Mutex};
     use unitas_asset::project_settings::{QualityLevel, QualitySettings};
-    use unitas_render::{RenderScene, Renderer, Rgba8, ShadowSettings};
+    use unitas_render::{Renderer, ShadowSettings};
 
     use super::{
         DESKTOP_QUALITY_TARGET_GROUP, FrameInfo, GpuFramePresenter, WEB_QUALITY_TARGET_GROUP,
@@ -1316,8 +1334,15 @@ mod tests {
         }
     }
 
+    /// The canvas the windowed frame carried to the surface.
+    #[derive(Clone)]
+    struct PresentedCanvas {
+        texts: Vec<String>,
+        rects: usize,
+    }
+
     #[test]
-    fn windowed_present_shows_the_canvas_the_capture_path_composes() {
+    fn windowed_present_carries_the_canvas_the_capture_path_composes() {
         let Ok(mut runtime) = Runtime::new() else {
             return;
         };
@@ -1332,17 +1357,30 @@ mod tests {
             !items.is_empty(),
             "the scene has no canvas content to present"
         );
+        let expected_texts: Vec<String> = items
+            .iter()
+            .filter_map(|item| item.text.as_ref().map(|text| text.text.clone()))
+            .collect();
+        let expected_rects = items.iter().filter(|item| item.text.is_none()).count();
         let Ok(renderer) = Renderer::new() else {
             return;
         };
         let renderer = Arc::new(renderer);
         let mut presenter = GpuFramePresenter::new(Arc::clone(&renderer));
         presenter.bind_scene(&runtime);
-        let captured: Arc<Mutex<Option<Rgba8>>> = Arc::new(Mutex::new(None));
+        let captured: Arc<Mutex<Option<PresentedCanvas>>> = Arc::new(Mutex::new(None));
         let sink = Arc::clone(&captured);
-        presenter.surface_blit = Some(Box::new(move |_renderer: &Renderer, image: &Rgba8| {
+        presenter.surface_render = Some(Box::new(move |_renderer, frame| {
             let mut guard = sink.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-            *guard = Some(image.clone());
+            let texts = frame
+                .canvas_texts
+                .iter()
+                .map(|item| item.text.clone())
+                .collect();
+            *guard = Some(PresentedCanvas {
+                texts,
+                rects: frame.canvas_rects.len(),
+            });
             Ok(())
         }));
         presenter.present_window_frame(
@@ -1355,51 +1393,16 @@ mod tests {
             },
         );
         let presented = match captured.lock().ok().and_then(|guard| guard.clone()) {
-            Some(image) => image,
+            Some(presented) => presented,
             None => return,
         };
-        assert_eq!(presented.width, width);
-        assert_eq!(presented.height, height);
-        let (camera, view, background) =
-            presenter.resolved_camera_and_view(&runtime, width, height);
-        let instances = presenter.collect_gpu_material_instances(&runtime);
-        let scene = RenderScene {
-            camera: &camera,
-            view,
-            light: presenter.light(),
-            background,
-        };
-        let Ok(scene_frame) = renderer.render_offscreen_materials_with_overlay(
-            &instances,
-            scene,
-            (width, height),
-            &[],
-        ) else {
-            return;
-        };
-        let scene_rgba = scene_frame.to_rgba8();
-        let canvas_pixels = presented
-            .pixels
-            .chunks_exact(4)
-            .zip(scene_rgba.pixels.chunks_exact(4))
-            .filter(|pair| pair.0[..3] != pair.1[..3])
-            .count();
-        assert!(
-            canvas_pixels > 0,
-            "the presented frame has no canvas pixels"
-        );
-        let capture_frame = runtime
-            .composite_canvas_image(scene_frame, width, height)
-            .to_rgba8();
-        let different = presented
-            .pixels
-            .chunks_exact(4)
-            .zip(capture_frame.pixels.chunks_exact(4))
-            .filter(|pair| pair.0 != pair.1)
-            .count();
         assert_eq!(
-            different, 0,
-            "the presented frame differs from the capture composition"
+            presented.texts, expected_texts,
+            "the presented frame lost the texts of the canvas"
+        );
+        assert_eq!(
+            presented.rects, expected_rects,
+            "the presented frame lost the elements of the canvas"
         );
     }
 

@@ -16,8 +16,8 @@ pub use capture::{
     render_offscreen_with_ids, CaptureFrame, CaptureInstance, CaptureObject, ScreenBounds,
 };
 pub use gpu::{
-    GpuInstance, GpuMaterialInstance, GpuRenderer, RenderError, RenderScene, Renderer,
-    TextOverlayItem, GPU_CPU_MEAN_ERROR_TOLERANCE,
+    CanvasRect, GpuInstance, GpuMaterialInstance, GpuRenderer, RenderError, RenderScene, Renderer,
+    SurfaceFrame, TextOverlayItem, GPU_CPU_MEAN_ERROR_TOLERANCE,
 };
 pub use image::{Image, Rgba8};
 pub use math::{Mat4, Vec3, Vec4};

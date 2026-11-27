@@ -91,6 +91,12 @@ namespace UnityEngine
 
         void Play(ulong entityId, bool oneShot);
 
+        void PlayScheduled(ulong entityId, double dspTime);
+
+        void PlayDelayed(ulong entityId, float delaySeconds);
+
+        double GetDspTime();
+
         void Pause(ulong entityId);
 
         void UnPause(ulong entityId);
@@ -145,6 +151,15 @@ namespace UnityEngine
         private AudioSourceState _localState = AudioSourceState.Stopped;
 
         public static IAudioProvider? Provider { get; set; }
+
+        public static double dspTime
+        {
+            get
+            {
+                IAudioProvider? provider = Provider;
+                return provider != null ? provider.GetDspTime() : 0.0;
+            }
+        }
 
         public AudioClip? clip
         {
@@ -412,6 +427,62 @@ namespace UnityEngine
             }
 
             _localState = AudioSourceState.Playing;
+        }
+
+        public void PlayScheduled(double dspTime)
+        {
+            if (!isActiveAndEnabled)
+            {
+                return;
+            }
+
+            IAudioProvider? provider = Provider;
+            if (provider != null)
+            {
+                ulong entityId = EnsureNativeEntityId();
+                if (entityId != 0UL)
+                {
+                    if (gameObject != null && !gameObject.IsDestroyed)
+                    {
+                        provider.SetPosition(entityId, transform.position);
+                    }
+                    if (_clip != null)
+                    {
+                        provider.SetClip(entityId, _clip.NativeClipId, _clip.length);
+                    }
+                    provider.PlayScheduled(entityId, dspTime);
+                }
+            }
+
+            _localState = AudioSourceState.Scheduled;
+        }
+
+        public void PlayDelayed(float seconds)
+        {
+            if (!isActiveAndEnabled)
+            {
+                return;
+            }
+
+            IAudioProvider? provider = Provider;
+            if (provider != null)
+            {
+                ulong entityId = EnsureNativeEntityId();
+                if (entityId != 0UL)
+                {
+                    if (gameObject != null && !gameObject.IsDestroyed)
+                    {
+                        provider.SetPosition(entityId, transform.position);
+                    }
+                    if (_clip != null)
+                    {
+                        provider.SetClip(entityId, _clip.NativeClipId, _clip.length);
+                    }
+                    provider.PlayDelayed(entityId, seconds);
+                }
+            }
+
+            _localState = AudioSourceState.Scheduled;
         }
 
         public void Pause()

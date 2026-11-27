@@ -139,6 +139,79 @@ pub extern "C" fn unitas_runtime_audio_play(handle: u64, entity: u64, one_shot: 
 }
 
 ffi_export! {
+pub extern "C" fn unitas_runtime_audio_play_scheduled(
+    handle: u64,
+    entity: u64,
+    one_shot: u32,
+    start_sample: u64,
+) -> i32 {
+    if entity == 0 {
+        return -2;
+    }
+    match with_runtime_state(handle, |state| {
+        state
+            .runtime
+            .audio_mut()
+            .play_scheduled(EntityId::new(entity), one_shot != 0, start_sample);
+        state.clear_error();
+        0
+    }) {
+        Ok(code) => code,
+        Err(code) => code,
+    }
+}
+}
+ffi_export! {
+pub extern "C" fn unitas_runtime_audio_play_delayed(
+    handle: u64,
+    entity: u64,
+    one_shot: u32,
+    delay_seconds: f64,
+) -> i32 {
+    if entity == 0 || !delay_seconds.is_finite() {
+        return -2;
+    }
+    match with_runtime_state(handle, |state| {
+        state
+            .runtime
+            .audio_mut()
+            .play_delayed(EntityId::new(entity), one_shot != 0, delay_seconds);
+        state.clear_error();
+        0
+    }) {
+        Ok(code) => code,
+        Err(code) => code,
+    }
+}
+}
+ffi_export! {
+pub extern "C" fn unitas_runtime_audio_dsp_time(handle: u64) -> f64 {
+    with_runtime_state(handle, |state| {
+        state.clear_error();
+        state.runtime.audio().dsp_time()
+    })
+    .unwrap_or(0.0)
+}
+}
+ffi_export! {
+pub extern "C" fn unitas_runtime_audio_set_device_sample_rate(
+    handle: u64,
+    sample_rate: u32,
+) -> i32 {
+    if sample_rate == 0 {
+        return -2;
+    }
+    match with_runtime_state(handle, |state| {
+        state.runtime.audio_mut().set_device_sample_rate(sample_rate);
+        state.clear_error();
+        0
+    }) {
+        Ok(code) => code,
+        Err(code) => code,
+    }
+}
+}
+ffi_export! {
 pub extern "C" fn unitas_runtime_audio_pause(handle: u64, entity: u64) -> i32 {
     if entity == 0 {
         return -2;

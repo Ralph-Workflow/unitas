@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 
+pub use crate::glyphs::{HorizontalAlign, Rect, TextLayoutBox, VerticalAlign};
 use crate::image::Rgba8;
 
 pub const FOCUS_INDICATOR_COLOR: [f32; 4] = [1.0, 0.9, 0.0, 1.0];
@@ -27,6 +28,30 @@ pub struct UiText<'a> {
     pub y: f32,
     pub size_px: f32,
     pub color: [f32; 4],
+    pub horizontal_align: HorizontalAlign,
+    pub vertical_align: VerticalAlign,
+    pub wrap: bool,
+    pub max_width: Option<f32>,
+    pub line_spacing: f32,
+    pub clip_rect: Option<[f32; 4]>,
+}
+
+impl<'a> UiText<'a> {
+    pub const fn new(text: &'a str, x: f32, y: f32, size_px: f32, color: [f32; 4]) -> Self {
+        Self {
+            text,
+            x,
+            y,
+            size_px,
+            color,
+            horizontal_align: HorizontalAlign::Left,
+            vertical_align: VerticalAlign::Top,
+            wrap: false,
+            max_width: None,
+            line_spacing: 1.0,
+            clip_rect: None,
+        }
+    }
 }
 
 pub trait UiElement {
@@ -46,6 +71,11 @@ pub trait UiTextPainter {
         size_px: f32,
         color: [f32; 4],
     );
+
+    fn paint_text(&mut self, target: &mut UiTarget<'_>, rect: [f32; 4], text: UiText<'_>) {
+        let _ = rect;
+        self.paint(target, text.text, text.x, text.y, text.size_px, text.color);
+    }
 }
 
 pub struct UiTarget<'a> {
@@ -79,7 +109,7 @@ pub fn composite_ui<T: UiElement>(
         match item.text() {
             Some(text) => {
                 if let Some(painter) = painter.as_deref_mut() {
-                    painter.paint(target, text.text, text.x, text.y, text.size_px, text.color);
+                    painter.paint_text(target, item.rect(), text);
                 }
             }
             None => fill_rect(target, bounds, item.color()),
@@ -143,9 +173,6 @@ fn write_ids(target: &mut UiTarget<'_>, bounds: (u32, u32, u32, u32), id: u32) {
     }
 }
 
-/// Blends a colour onto one pixel. The colour is already scaled by its alpha
-/// and the share of the destination that survives is already known, so every
-/// pixel of the rectangle is blended with the same arithmetic.
 fn blend_pixel(pixel: &mut [u8], source: [f32; 3], alpha: f32, keep: f32) {
     for channel in 0..3 {
         let destination = f32::from(pixel[channel]) / 255.0;
@@ -164,24 +191,25 @@ pub struct GlyphTextPainter {
     shaped: HashMap<ShapedText, Vec<crate::glyphs::TexturedQuad>>,
 }
 
-/// The shaped glyphs of one text, kept so that a frame which draws the same
-/// text again does not shape it a second time.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct ShapedText {
     text: String,
     size_bits: u32,
     color_bits: [u32; 4],
+    rect_w_bits: u32,
+    rect_h_bits: u32,
+    horizontal_align: HorizontalAlign,
+    vertical_align: VerticalAlign,
+    wrap: bool,
+    max_width_bits: Option<u32>,
+    line_spacing_bits: u32,
 }
 
-/// How many texts are shaped before the shaped texts are dropped, so a text
-/// that changes every frame cannot fill the map for ever.
 const SHAPED_TEXT_LIMIT: usize = 256;
 
 impl GlyphTextPainter {
     pub fn new() -> Self {
         let mut fonts = crate::glyphs::FontLibrary::new();
-        // The bundled font comes first so it shapes the glyphs it has; the
-        // system fonts loaded after it stay the fallback for the rest.
         fonts.load_bundled_font();
         fonts.load_system_fonts();
         Self {
@@ -209,25 +237,38 @@ impl UiTextPainter for GlyphTextPainter {
         size_px: f32,
         color: [f32; 4],
     ) {
-        if text.is_empty() || size_px <= 0.0 {
+        self.paint_text(
+            target,
+            [x, y, 0.0, 0.0],
+            UiText::new(text, x, y, size_px, color),
+        );
+    }
+
+    fn paint_text(&mut self, target: &mut UiTarget<'_>, rect: [f32; 4], text: UiText<'_>) {
+        if text.text.is_empty() || text.size_px <= 0.0 {
             return;
         }
-        let key = ShapedText {
-            text: text.to_string(),
-            size_bits: size_px.to_bits(),
-            color_bits: [
-                color[0].to_bits(),
-                color[1].to_bits(),
-                color[2].to_bits(),
-                color[3].to_bits(),
-            ],
-        };
+        let key = shaped_text_key(rect, &text);
         if !self.shaped.contains_key(&key) {
             if self.shaped.len() >= SHAPED_TEXT_LIMIT {
                 self.shaped.clear();
             }
-            let style = crate::glyphs::TextStyle::new(size_px, size_px, color);
-            let layout = crate::glyphs::layout_text(&mut self.fonts, text, None, &style);
+            let style = crate::glyphs::TextStyle::new(text.size_px, text.size_px, text.color);
+            let layout_box = TextLayoutBox {
+                rect: Rect {
+                    x: 0.0,
+                    y: 0.0,
+                    width: rect[2],
+                    height: rect[3],
+                },
+                horizontal_align: text.horizontal_align,
+                vertical_align: text.vertical_align,
+                wrap: text.wrap,
+                max_width: text.max_width,
+                line_spacing: text.line_spacing,
+            };
+            let layout =
+                crate::glyphs::layout_text_in_box(&mut self.fonts, text.text, &layout_box, &style);
             let quads = crate::glyphs::shape_glyph_quads(
                 &mut self.fonts,
                 &mut self.cache,
@@ -238,16 +279,53 @@ impl UiTextPainter for GlyphTextPainter {
         }
         let mut quads = self.shaped.get(&key).cloned().unwrap_or_default();
         for quad in &mut quads {
-            quad.x += x;
-            quad.y += y;
+            quad.x += text.x;
+            quad.y += text.y;
         }
-        let clip = crate::glyphs::Rect {
-            x: 0.0,
-            y: 0.0,
-            width: target.image.width as f32,
-            height: target.image.height as f32,
-        };
+        let clip = resolve_clip_rect(target.image.width, target.image.height, text.clip_rect);
         crate::glyphs::draw_text(&mut *target.image, &self.atlas, &quads, clip);
+    }
+}
+
+fn shaped_text_key(rect: [f32; 4], text: &UiText<'_>) -> ShapedText {
+    ShapedText {
+        text: text.text.to_string(),
+        size_bits: text.size_px.to_bits(),
+        color_bits: [
+            text.color[0].to_bits(),
+            text.color[1].to_bits(),
+            text.color[2].to_bits(),
+            text.color[3].to_bits(),
+        ],
+        rect_w_bits: rect[2].to_bits(),
+        rect_h_bits: rect[3].to_bits(),
+        horizontal_align: text.horizontal_align,
+        vertical_align: text.vertical_align,
+        wrap: text.wrap,
+        max_width_bits: text.max_width.map(f32::to_bits),
+        line_spacing_bits: text.line_spacing.to_bits(),
+    }
+}
+
+fn resolve_clip_rect(width: u32, height: u32, clip_rect: Option<[f32; 4]>) -> Rect {
+    let screen = Rect {
+        x: 0.0,
+        y: 0.0,
+        width: width as f32,
+        height: height as f32,
+    };
+    let Some(clip) = clip_rect else {
+        return screen;
+    };
+    let x0 = clip[0].max(0.0);
+    let y0 = clip[1].max(0.0);
+    let x1 = (clip[0] + clip[2]).min(screen.width).max(x0);
+    let y1 = (clip[1] + clip[3]).min(screen.height).max(y0);
+    Rect {
+        x: x0,
+        y: y0,
+        width: x1 - x0,
+        height: y1 - y0,
     }
 }
 
@@ -349,5 +427,111 @@ mod tests {
             &image.pixels[interior_px..interior_px + 4],
             &[51, 128, 77, 255]
         );
+    }
+
+    struct TextTestItem<'a> {
+        rect: [f32; 4],
+        text: UiText<'a>,
+    }
+
+    impl UiElement for TextTestItem<'_> {
+        fn rect(&self) -> [f32; 4] {
+            self.rect
+        }
+
+        fn color(&self) -> [f32; 4] {
+            self.text.color
+        }
+
+        fn sprite(&self) -> Option<&SpriteRef> {
+            None
+        }
+
+        fn text(&self) -> Option<UiText<'_>> {
+            Some(self.text)
+        }
+    }
+
+    #[test]
+    fn default_ui_text_produces_pixel_identical_output_to_legacy_paint() {
+        let mut painter_a = GlyphTextPainter::new();
+        let mut image_a = Rgba8::new(160, 48);
+        let mut target_a = UiTarget {
+            image: &mut image_a,
+            ids: None,
+        };
+        painter_a.paint(&mut target_a, "Score 0", 16.0, 12.0, 18.0, [1.0, 1.0, 1.0, 1.0]);
+
+        let mut painter_b = GlyphTextPainter::new();
+        let mut image_b = Rgba8::new(160, 48);
+        let mut target_b = UiTarget {
+            image: &mut image_b,
+            ids: None,
+        };
+        let items = [TextTestItem {
+            rect: [16.0, 12.0, 320.0, 28.0],
+            text: UiText::new("Score 0", 16.0, 12.0, 18.0, [1.0, 1.0, 1.0, 1.0]),
+        }];
+        composite_ui(&mut target_b, &items, 1, Some(&mut painter_b));
+
+        assert_eq!(image_a.pixels, image_b.pixels);
+    }
+
+    #[test]
+    fn ui_text_clip_rect_truncates_overflowing_glyphs() {
+        let mut painter = GlyphTextPainter::new();
+        let mut unclipped = Rgba8::new(160, 80);
+        let mut target_unclipped = UiTarget {
+            image: &mut unclipped,
+            ids: None,
+        };
+        let base_text = UiText {
+            text: "Line 1\nLine 2\nLine 3",
+            x: 10.0,
+            y: 10.0,
+            size_px: 18.0,
+            color: [1.0, 1.0, 1.0, 1.0],
+            horizontal_align: HorizontalAlign::Left,
+            vertical_align: VerticalAlign::Top,
+            wrap: true,
+            max_width: Some(120.0),
+            line_spacing: 1.0,
+            clip_rect: None,
+        };
+        composite_ui(
+            &mut target_unclipped,
+            &[TextTestItem {
+                rect: [10.0, 10.0, 120.0, 60.0],
+                text: base_text,
+            }],
+            1,
+            Some(&mut painter),
+        );
+
+        let mut clipped = Rgba8::new(160, 80);
+        let mut target_clipped = UiTarget {
+            image: &mut clipped,
+            ids: None,
+        };
+        let mut clipped_text = base_text;
+        clipped_text.clip_rect = Some([10.0, 10.0, 120.0, 22.0]);
+        composite_ui(
+            &mut target_clipped,
+            &[TextTestItem {
+                rect: [10.0, 10.0, 120.0, 22.0],
+                text: clipped_text,
+            }],
+            1,
+            Some(&mut painter),
+        );
+
+        let has_ink_below_32_unclipped = (33..80).any(|y| {
+            (0..160).any(|x| unclipped.get_pixel(x, y)[3] > 0)
+        });
+        let has_ink_below_32_clipped = (33..80).any(|y| {
+            (0..160).any(|x| clipped.get_pixel(x, y)[3] > 0)
+        });
+        assert!(has_ink_below_32_unclipped);
+        assert!(!has_ink_below_32_clipped);
     }
 }

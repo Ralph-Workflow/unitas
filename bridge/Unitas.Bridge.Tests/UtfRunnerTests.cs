@@ -429,7 +429,7 @@ namespace Unitas.Bridge.Tests
             Check.Equal("Wildcard --test filter selects 2 parameterized cases", 2, wildcardFilter.SelectedTestCaseCount);
             Check.Equal("Wildcard --test filter passes all 2 cases", 2, wildcardFilter.PassedCount);
 
-            int cliFilterExit = Unitas.Testing.Program.Main(new[]
+            int cliFilterExit = RunTestingCliQuietly(new[]
             {
                 "run",
                 tempProject,
@@ -560,11 +560,26 @@ namespace Unitas.Bridge.Tests
             }
         }
 
+        private static int RunTestingCliQuietly(string[] args)
+        {
+            TextWriter previousOut = Console.Out;
+            using StringWriter sink = new StringWriter();
+            Console.SetOut(sink);
+            try
+            {
+                return Unitas.Testing.Program.Main(args);
+            }
+            finally
+            {
+                Console.SetOut(previousOut);
+            }
+        }
+
         private static void VerifyCliRunCommandExitCodes(string tempProject)
         {
             {
                 string xmlPath = Path.Combine(tempProject, "TestResults", "cli_smoke.xml");
-                int passExit = Unitas.Testing.Program.Main(new[]
+                int passExit = RunTestingCliQuietly(new[]
                 {
                     "run",
                     tempProject,
@@ -580,7 +595,7 @@ namespace Unitas.Bridge.Tests
                 Check.Equal("CLI run passing category exits 0", 0, passExit);
                 Check.Equal("CLI run writes results XML", true, File.Exists(xmlPath));
 
-                int failExit = Unitas.Testing.Program.Main(new[]
+                int failExit = RunTestingCliQuietly(new[]
                 {
                     "run",
                     tempProject,

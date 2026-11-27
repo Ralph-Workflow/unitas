@@ -1,12 +1,9 @@
 use unitas_core::EntityId;
 
 use super::{DEFAULT_UI_REFERENCE_RESOLUTION, Runtime};
-use crate::canvas::UiDrawItem;
+use crate::canvas::{TextLayoutConfig, UiDrawItem};
 
 impl Runtime {
-    /// The screen size the interface is laid out and hit-tested against: the
-    /// size the host sets for the live window, else the size of the last
-    /// rendered frame, else the reference resolution of the canvas scaler.
     pub fn ui_screen_size(&self) -> [f32; 2] {
         if let Some(size) = self.ui_screen_size {
             return size;
@@ -17,20 +14,16 @@ impl Runtime {
         self.ui_reference_resolution()
     }
 
-    /// Sets the size of the live screen the interface is laid out against.
     pub fn set_ui_screen_size(&mut self, width: f32, height: f32) {
         if width > 0.0 && height > 0.0 {
             self.ui_screen_size = Some([width, height]);
         }
     }
 
-    /// The draw items of the visible canvas content of the loaded scenes.
     pub fn ui_draw_items(&self) -> Vec<UiDrawItem> {
         self.ui_draw_items_for(self.ui_screen_size())
     }
 
-    /// The draw items of the visible canvas content, laid out against the
-    /// given screen size.
     pub(crate) fn ui_draw_items_for(&self, screen_size: [f32; 2]) -> Vec<UiDrawItem> {
         let mut items = Vec::new();
         for scene in &self.scenes {
@@ -39,7 +32,6 @@ impl Runtime {
         items
     }
 
-    /// Whether the pointer is over an element of the interface.
     pub fn ui_pointer_over(&self) -> bool {
         let screen_size = self.ui_screen_size();
         let (x, y) = self.input.pointer_frame().position;
@@ -49,7 +41,6 @@ impl Runtime {
             .any(|scene| scene.ui.pointer_over(screen_size, (x, y)))
     }
 
-    /// Replaces the content of the `Text` component of an object.
     pub fn set_ui_text(&mut self, object_id: u64, text: &str) -> bool {
         let entity = EntityId::new(object_id);
         self.scenes
@@ -57,7 +48,6 @@ impl Runtime {
             .any(|scene| scene.ui.set_text(entity, text))
     }
 
-    /// Replaces the font size and colour of the `Text` component of an object.
     pub fn set_ui_text_style(&mut self, object_id: u64, font_size: f32, color: [f32; 4]) -> bool {
         let entity = EntityId::new(object_id);
         self.scenes
@@ -65,7 +55,13 @@ impl Runtime {
             .any(|scene| scene.ui.set_style(entity, font_size, color))
     }
 
-    /// The objects whose buttons were clicked since the last call.
+    pub fn set_ui_text_layout(&mut self, object_id: u64, layout: TextLayoutConfig) -> bool {
+        let entity = EntityId::new(object_id);
+        self.scenes
+            .iter_mut()
+            .any(|scene| scene.ui.set_layout(entity, layout))
+    }
+
     pub fn take_ui_clicks(&mut self) -> Vec<u64> {
         std::mem::take(&mut self.pending_ui_clicks)
     }
@@ -81,8 +77,6 @@ impl Runtime {
         DEFAULT_UI_REFERENCE_RESOLUTION
     }
 
-    /// Routes the pointer to the buttons of the loaded scenes: a button that is
-    /// pressed and released under the pointer is clicked.
     pub(super) fn route_ui_pointer(&mut self) {
         let pointer = self.input.pointer_frame();
         let screen_size = self.ui_screen_size();

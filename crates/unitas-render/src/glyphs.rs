@@ -2,18 +2,14 @@ use std::collections::HashMap;
 
 use cosmic_text::fontdb;
 pub use cosmic_text::SwashCache;
-use cosmic_text::{Attrs, Buffer, CacheKey, FontSystem, Metrics, Shaping};
+use cosmic_text::{Attrs, Buffer, CacheKey, FontSystem, Metrics, Shaping, Wrap};
 
 use crate::image::Rgba8;
 
 const ATLAS_PADDING: u32 = 1;
 
-/// The Noto Sans Regular face the engine bundles, so text rasterizes the same
-/// on every machine. The licence text ships beside it as assets/OFL.txt.
 pub const BUNDLED_FONT: &[u8] = include_bytes!("../assets/NotoSans-Regular.ttf");
 
-/// The family name the bundled font carries, which the library makes the
-/// sans-serif default so that the bundled face wins the glyphs it has.
 const BUNDLED_FONT_FAMILY: &str = "Noto Sans";
 
 #[derive(Debug)]
@@ -37,9 +33,6 @@ impl FontLibrary {
         had_fonts || !self.system.db().is_empty()
     }
 
-    /// Loads the bundled font and makes it the sans-serif default, so that the
-    /// shaped text is the same on every machine. The fonts loaded afterwards
-    /// stay the fallback for the glyphs the bundled font lacks.
     pub fn load_bundled_font(&mut self) -> bool {
         self.system
             .db_mut()
@@ -61,6 +54,50 @@ impl FontLibrary {
 impl Default for FontLibrary {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub enum HorizontalAlign {
+    #[default]
+    Left,
+    Center,
+    Right,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub enum VerticalAlign {
+    #[default]
+    Top,
+    Middle,
+    Bottom,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct TextLayoutBox {
+    pub rect: Rect,
+    pub horizontal_align: HorizontalAlign,
+    pub vertical_align: VerticalAlign,
+    pub wrap: bool,
+    pub max_width: Option<f32>,
+    pub line_spacing: f32,
+}
+
+impl Default for TextLayoutBox {
+    fn default() -> Self {
+        Self {
+            rect: Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 0.0,
+                height: 0.0,
+            },
+            horizontal_align: HorizontalAlign::Left,
+            vertical_align: VerticalAlign::Top,
+            wrap: false,
+            max_width: None,
+            line_spacing: 1.0,
+        }
     }
 }
 
@@ -140,24 +177,102 @@ pub fn layout_text(
     );
     buffer.set_size(&mut fonts.system, max_width, None);
     buffer.set_text(&mut fonts.system, text, Attrs::new(), Shaping::Advanced);
+    extract_buffer_layout(&buffer, style.color, (0.0, 0.0))
+}
 
+pub fn layout_text_in_box(
+    fonts: &mut FontLibrary,
+    text: &str,
+    layout_box: &TextLayoutBox,
+    style: &TextStyle,
+) -> TextLayout {
+    let font_size = if style.font_size > 0.0 {
+        style.font_size
+    } else {
+        1.0
+    };
+    let line_spacing = if layout_box.line_spacing > 0.0 {
+        layout_box.line_spacing
+    } else {
+        1.0
+    };
+    let line_height = (style.line_height * line_spacing).max(1.0);
+    let mut buffer = Buffer::new(&mut fonts.system, Metrics::new(font_size, line_height));
+    let wrap_mode = if layout_box.wrap {
+        Wrap::WordOrGlyph
+    } else {
+        Wrap::None
+    };
+    buffer.set_wrap(&mut fonts.system, wrap_mode);
+    let effective_width = if layout_box.wrap {
+        layout_box
+            .max_width
+            .or_else(|| (layout_box.rect.width > 0.0).then_some(layout_box.rect.width))
+    } else {
+        None
+    };
+    buffer.set_size(&mut fonts.system, effective_width, None);
+    buffer.set_text(&mut fonts.system, text, Attrs::new(), Shaping::Advanced);
+    for line in &mut buffer.lines {
+        line.set_align(None);
+    }
+    buffer.shape_until_scroll(&mut fonts.system, false);
+    collect_boxed_runs(&buffer, layout_box, style.color)
+}
+
+fn collect_boxed_runs(
+    buffer: &Buffer,
+    layout_box: &TextLayoutBox,
+    default_color: [f32; 4],
+) -> TextLayout {
+    let mut total_height = 0.0f32;
+    let mut max_line_width = 0.0f32;
+    for run in buffer.layout_runs() {
+        total_height = total_height.max(run.line_top + run.line_height);
+        max_line_width = max_line_width.max(run.line_w);
+    }
+    let dy = match layout_box.vertical_align {
+        VerticalAlign::Top => 0.0,
+        VerticalAlign::Middle => (layout_box.rect.height - total_height) * 0.5,
+        VerticalAlign::Bottom => layout_box.rect.height - total_height,
+    };
+
+    let mut layout = TextLayout {
+        width: max_line_width,
+        height: total_height,
+        glyphs: Vec::new(),
+    };
+    for run in buffer.layout_runs() {
+        let dx = match layout_box.horizontal_align {
+            HorizontalAlign::Left => 0.0,
+            HorizontalAlign::Center => (layout_box.rect.width - run.line_w) * 0.5,
+            HorizontalAlign::Right => layout_box.rect.width - run.line_w,
+        };
+        for glyph in run.glyphs {
+            let physical = glyph.physical((layout_box.rect.x + dx, layout_box.rect.y + dy), 1.0);
+            layout.glyphs.push(ShapedGlyph {
+                cache_key: physical.cache_key,
+                x: physical.x,
+                y: physical.y,
+                baseline_y: run.line_y,
+                width: glyph.w,
+                color: resolve_glyph_color(glyph.color_opt, default_color),
+            });
+        }
+    }
+    layout
+}
+
+fn extract_buffer_layout(
+    buffer: &Buffer,
+    default_color: [f32; 4],
+    offset: (f32, f32),
+) -> TextLayout {
     let mut layout = TextLayout::default();
     for run in buffer.layout_runs() {
         layout.height = layout.height.max(run.line_top + run.line_height);
         for glyph in run.glyphs {
-            let physical = glyph.physical((0.0, 0.0), 1.0);
-            let color = glyph
-                .color_opt
-                .map(|c| {
-                    let [r, g, b, a] = c.as_rgba();
-                    [
-                        f32::from(r) / 255.0,
-                        f32::from(g) / 255.0,
-                        f32::from(b) / 255.0,
-                        f32::from(a) / 255.0,
-                    ]
-                })
-                .unwrap_or(style.color);
+            let physical = glyph.physical(offset, 1.0);
             layout.width = layout.width.max(glyph.x + glyph.w);
             layout.glyphs.push(ShapedGlyph {
                 cache_key: physical.cache_key,
@@ -165,11 +280,25 @@ pub fn layout_text(
                 y: physical.y,
                 baseline_y: run.line_y,
                 width: glyph.w,
-                color,
+                color: resolve_glyph_color(glyph.color_opt, default_color),
             });
         }
     }
     layout
+}
+
+fn resolve_glyph_color(color_opt: Option<cosmic_text::Color>, fallback: [f32; 4]) -> [f32; 4] {
+    color_opt
+        .map(|c| {
+            let [r, g, b, a] = c.as_rgba();
+            [
+                f32::from(r) / 255.0,
+                f32::from(g) / 255.0,
+                f32::from(b) / 255.0,
+                f32::from(a) / 255.0,
+            ]
+        })
+        .unwrap_or(fallback)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -522,7 +651,6 @@ impl TextPipeline {
         }
     }
 
-    /// Uploads an image so it can be drawn as a textured quad.
     pub fn upload_image(
         &self,
         device: &wgpu::Device,
@@ -534,7 +662,6 @@ impl TextPipeline {
         resources
     }
 
-    /// Writes the pixels of an image into the texture of the resources.
     pub fn write_image(queue: &wgpu::Queue, resources: &GlyphResources, image: &Rgba8) {
         if image.width == 0 || image.height == 0 {
             return;
@@ -1203,5 +1330,165 @@ mod tests {
         assert_eq!(quads_first, quads_second);
         assert_eq!(atlas.regions.len(), region_count);
         assert!(region_count < quads_first.len() || quads_first.len() <= 4);
+    }
+
+    #[test]
+    fn default_layout_box_matches_legacy_layout_text_glyph_for_glyph() {
+        let mut fonts = FontLibrary::new();
+        fonts.load_bundled_font();
+        let style = TextStyle::new(18.0, 18.0, [1.0, 1.0, 1.0, 1.0]);
+        let legacy = layout_text(&mut fonts, "Score 0", None, &style);
+        let boxed = layout_text_in_box(
+            &mut fonts,
+            "Score 0",
+            &TextLayoutBox {
+                rect: Rect {
+                    x: 0.0,
+                    y: 0.0,
+                    width: 320.0,
+                    height: 28.0,
+                },
+                ..TextLayoutBox::default()
+            },
+            &style,
+        );
+        assert_eq!(legacy.glyphs, boxed.glyphs);
+    }
+
+    #[test]
+    fn layout_box_wraps_lines_when_wrap_is_enabled() {
+        let mut fonts = FontLibrary::new();
+        fonts.load_bundled_font();
+        let style = TextStyle::new(18.0, 18.0, [1.0, 1.0, 1.0, 1.0]);
+        let phrase = "Score 1000 Combo x4 Time 12.3";
+        let unwrapped = layout_text_in_box(
+            &mut fonts,
+            phrase,
+            &TextLayoutBox {
+                rect: Rect {
+                    x: 0.0,
+                    y: 0.0,
+                    width: 80.0,
+                    height: 80.0,
+                },
+                wrap: false,
+                ..TextLayoutBox::default()
+            },
+            &style,
+        );
+        let wrapped = layout_text_in_box(
+            &mut fonts,
+            phrase,
+            &TextLayoutBox {
+                rect: Rect {
+                    x: 0.0,
+                    y: 0.0,
+                    width: 80.0,
+                    height: 80.0,
+                },
+                wrap: true,
+                max_width: Some(80.0),
+                ..TextLayoutBox::default()
+            },
+            &style,
+        );
+        let unwrapped_baselines = unwrapped
+            .glyphs
+            .iter()
+            .map(|g| g.baseline_y.to_bits())
+            .collect::<std::collections::BTreeSet<_>>();
+        let wrapped_baselines = wrapped
+            .glyphs
+            .iter()
+            .map(|g| g.baseline_y.to_bits())
+            .collect::<std::collections::BTreeSet<_>>();
+        assert_eq!(unwrapped_baselines.len(), 1);
+        assert!(wrapped_baselines.len() >= 2);
+    }
+
+    #[test]
+    fn layout_box_aligns_horizontally_and_vertically() {
+        let mut fonts = FontLibrary::new();
+        fonts.load_bundled_font();
+        let style = TextStyle::new(18.0, 18.0, [1.0, 1.0, 1.0, 1.0]);
+        let rect = Rect {
+            x: 10.0,
+            y: 20.0,
+            width: 200.0,
+            height: 100.0,
+        };
+        let top_left = layout_text_in_box(
+            &mut fonts,
+            "PLAY",
+            &TextLayoutBox {
+                rect,
+                horizontal_align: HorizontalAlign::Left,
+                vertical_align: VerticalAlign::Top,
+                ..TextLayoutBox::default()
+            },
+            &style,
+        );
+        let center_middle = layout_text_in_box(
+            &mut fonts,
+            "PLAY",
+            &TextLayoutBox {
+                rect,
+                horizontal_align: HorizontalAlign::Center,
+                vertical_align: VerticalAlign::Middle,
+                ..TextLayoutBox::default()
+            },
+            &style,
+        );
+        let bottom_right = layout_text_in_box(
+            &mut fonts,
+            "PLAY",
+            &TextLayoutBox {
+                rect,
+                horizontal_align: HorizontalAlign::Right,
+                vertical_align: VerticalAlign::Bottom,
+                ..TextLayoutBox::default()
+            },
+            &style,
+        );
+        assert!(top_left.glyphs[0].x < center_middle.glyphs[0].x);
+        assert!(center_middle.glyphs[0].x < bottom_right.glyphs[0].x);
+        assert!(top_left.glyphs[0].y < center_middle.glyphs[0].y);
+        assert!(center_middle.glyphs[0].y < bottom_right.glyphs[0].y);
+    }
+
+    #[test]
+    fn layout_box_scales_line_height_by_line_spacing() {
+        let mut fonts = FontLibrary::new();
+        fonts.load_bundled_font();
+        let style = TextStyle::new(16.0, 16.0, [1.0, 1.0, 1.0, 1.0]);
+        let single_spaced = layout_text_in_box(
+            &mut fonts,
+            "Line A\nLine B",
+            &TextLayoutBox {
+                line_spacing: 1.0,
+                ..TextLayoutBox::default()
+            },
+            &style,
+        );
+        let double_spaced = layout_text_in_box(
+            &mut fonts,
+            "Line A\nLine B",
+            &TextLayoutBox {
+                line_spacing: 2.0,
+                ..TextLayoutBox::default()
+            },
+            &style,
+        );
+        let max_y_single = single_spaced
+            .glyphs
+            .iter()
+            .map(|g| g.baseline_y)
+            .fold(0.0f32, f32::max);
+        let max_y_double = double_spaced
+            .glyphs
+            .iter()
+            .map(|g| g.baseline_y)
+            .fold(0.0f32, f32::max);
+        assert!(max_y_double > max_y_single * 1.4);
     }
 }

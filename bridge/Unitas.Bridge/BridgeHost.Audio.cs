@@ -35,6 +35,42 @@ namespace Unitas.Bridge
             RuntimeInterop.unitas_runtime_audio_play(_runtimeHandle, entityId, oneShot ? 1U : 0U);
         }
 
+        public void PlayScheduled(ulong entityId, double dspTime)
+        {
+            if (_isDisposed || _runtimeHandle == 0 || entityId == 0)
+            {
+                return;
+            }
+            double delay = dspTime - GetDspTime();
+            if (double.IsNaN(delay) || double.IsInfinity(delay) || delay < 0.0)
+            {
+                delay = 0.0;
+            }
+            RuntimeInterop.unitas_runtime_audio_play_delayed(_runtimeHandle, entityId, 0U, delay);
+        }
+
+        public void PlayDelayed(ulong entityId, float delaySeconds)
+        {
+            if (_isDisposed || _runtimeHandle == 0 || entityId == 0)
+            {
+                return;
+            }
+            double delay = double.IsNaN(delaySeconds) || double.IsInfinity(delaySeconds)
+                ? 0.0
+                : Math.Max(0.0, delaySeconds);
+            RuntimeInterop.unitas_runtime_audio_play_delayed(_runtimeHandle, entityId, 0U, delay);
+        }
+
+        public double GetDspTime()
+        {
+            if (_isDisposed || _runtimeHandle == 0)
+            {
+                return 0.0;
+            }
+            double time = RuntimeInterop.unitas_runtime_audio_dsp_time(_runtimeHandle);
+            return double.IsNaN(time) || time < 0.0 ? 0.0 : time;
+        }
+
         public void Pause(ulong entityId)
         {
             if (_isDisposed || _runtimeHandle == 0 || entityId == 0)
@@ -574,5 +610,20 @@ namespace Unitas.Bridge
                     Enabled);
             }
         }
+    }
+
+    public static partial class RuntimeInterop
+    {
+        [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
+        internal static extern int unitas_runtime_audio_play_scheduled(ulong handle, ulong entity, uint oneShot, ulong startSample);
+
+        [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
+        internal static extern int unitas_runtime_audio_play_delayed(ulong handle, ulong entity, uint oneShot, double delaySeconds);
+
+        [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
+        internal static extern double unitas_runtime_audio_dsp_time(ulong handle);
+
+        [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
+        internal static extern int unitas_runtime_audio_set_device_sample_rate(ulong handle, uint sampleRate);
     }
 }

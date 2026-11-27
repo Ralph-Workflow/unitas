@@ -1,7 +1,16 @@
+use std::path::PathBuf;
+
+use unitas_asset::scene::SpriteDrawMode;
+
 use super::{
     CAMERA_BLOB_FLOATS, CAMERA_BLOB_SIZE, EntityId, RenderCameraParams, Vec3, path_buffer_offset,
     read_f32_le, read_u32_le, with_runtime_state,
 };
+
+/// The floats a sprite state travels in: colour, sorting layer and order, the
+/// flips, the enabled flag, the texture flag and the texture size in pixels.
+const SPRITE_STATE_FLOATS: usize = 12;
+const SPRITE_STATE_BYTES: usize = SPRITE_STATE_FLOATS * 4;
 
 ffi_export! {
 pub extern "C" fn unitas_runtime_render_buffer(handle: u64, capacity: u64) -> u64 {
@@ -536,6 +545,219 @@ pub extern "C" fn unitas_runtime_render_camera_screen_point_to_ray(
                 error.class()
             }
         }
+    }) {
+        Ok(code) => code,
+        Err(code) => code,
+    }
+}
+}
+ffi_export! {
+pub extern "C" fn unitas_runtime_sprite_create(
+    handle: u64,
+    entity: u64,
+    address: u64,
+    length: u64,
+) -> i32 {
+    if entity == 0 {
+        return -2;
+    }
+    let Ok(len) = usize::try_from(length) else {
+        return -2;
+    };
+    match with_runtime_state(handle, |state| {
+        let path = if len == 0 {
+            None
+        } else {
+            match super::read_path_buffer(state, address, len) {
+                Ok(text) => Some(PathBuf::from(text)),
+                Err(code) => return code,
+            }
+        };
+        if state
+            .runtime
+            .create_runtime_sprite(EntityId::new(entity), path.as_deref())
+        {
+            state.clear_error();
+            0
+        } else {
+            state.set_error("invalid argument: sprite entity id is zero");
+            -2
+        }
+    }) {
+        Ok(code) => code,
+        Err(code) => code,
+    }
+}
+}
+
+ffi_export! {
+pub extern "C" fn unitas_runtime_sprite_set_color(
+    handle: u64,
+    entity: u64,
+    r: f32,
+    g: f32,
+    b: f32,
+    a: f32,
+) -> i32 {
+    if entity == 0 {
+        return -2;
+    }
+    match with_runtime_state(handle, |state| {
+        if state
+            .runtime
+            .set_runtime_sprite_color(EntityId::new(entity), [r, g, b, a])
+        {
+            state.clear_error();
+            0
+        } else {
+            state.set_error("not found: the entity draws no sprite");
+            -3
+        }
+    }) {
+        Ok(code) => code,
+        Err(code) => code,
+    }
+}
+}
+
+ffi_export! {
+pub extern "C" fn unitas_runtime_sprite_set_sorting(
+    handle: u64,
+    entity: u64,
+    sorting_layer: i32,
+    sorting_order: i32,
+) -> i32 {
+    if entity == 0 {
+        return -2;
+    }
+    match with_runtime_state(handle, |state| {
+        if state.runtime.set_runtime_sprite_sorting(
+            EntityId::new(entity),
+            sorting_layer,
+            sorting_order,
+        ) {
+            state.clear_error();
+            0
+        } else {
+            state.set_error("not found: the entity draws no sprite");
+            -3
+        }
+    }) {
+        Ok(code) => code,
+        Err(code) => code,
+    }
+}
+}
+
+ffi_export! {
+pub extern "C" fn unitas_runtime_sprite_set_flip(
+    handle: u64,
+    entity: u64,
+    flip_x: u8,
+    flip_y: u8,
+) -> i32 {
+    if entity == 0 {
+        return -2;
+    }
+    match with_runtime_state(handle, |state| {
+        if state.runtime.set_runtime_sprite_flip(
+            EntityId::new(entity),
+            flip_x != 0,
+            flip_y != 0,
+        ) {
+            state.clear_error();
+            0
+        } else {
+            state.set_error("not found: the entity draws no sprite");
+            -3
+        }
+    }) {
+        Ok(code) => code,
+        Err(code) => code,
+    }
+}
+}
+
+ffi_export! {
+pub extern "C" fn unitas_runtime_sprite_set_enabled(handle: u64, entity: u64, enabled: u8) -> i32 {
+    if entity == 0 {
+        return -2;
+    }
+    match with_runtime_state(handle, |state| {
+        if state
+            .runtime
+            .set_runtime_sprite_enabled(EntityId::new(entity), enabled != 0)
+        {
+            state.clear_error();
+            0
+        } else {
+            state.set_error("not found: the entity draws no sprite");
+            -3
+        }
+    }) {
+        Ok(code) => code,
+        Err(code) => code,
+    }
+}
+}
+
+ffi_export! {
+pub extern "C" fn unitas_runtime_sprite_set_draw_mode(
+    handle: u64,
+    entity: u64,
+    mode: u32,
+) -> i32 {
+    if entity == 0 {
+        return -2;
+    }
+    let mode = match mode {
+        0 => SpriteDrawMode::Simple,
+        1 => SpriteDrawMode::Sliced,
+        2 => SpriteDrawMode::Tiled,
+        _ => return -2,
+    };
+    match with_runtime_state(handle, |state| {
+        if state
+            .runtime
+            .set_runtime_sprite_draw_mode(EntityId::new(entity), mode)
+        {
+            state.clear_error();
+            0
+        } else {
+            state.set_error("invalid argument: sprite entity id is zero");
+            -2
+        }
+    }) {
+        Ok(code) => code,
+        Err(code) => code,
+    }
+}
+}
+
+ffi_export! {
+pub extern "C" fn unitas_runtime_sprite_get_state(
+    handle: u64,
+    entity: u64,
+    blob: *mut f32,
+) -> i32 {
+    if entity == 0 || blob.is_null() {
+        return -2;
+    }
+    match with_runtime_state(handle, |state| {
+        let Some(offset) = path_buffer_offset(state, blob as usize, SPRITE_STATE_BYTES) else {
+            state.set_error("invalid argument: output buffer is out of range");
+            return -2;
+        };
+        let Some(values) = state.runtime.runtime_sprite_state(EntityId::new(entity)) else {
+            state.set_error("not found: the entity draws no sprite");
+            return -3;
+        };
+        for (index, value) in values.iter().enumerate() {
+            let start = offset + index * 4;
+            state.path_buffer[start..start + 4].copy_from_slice(&value.to_le_bytes());
+        }
+        state.clear_error();
+        0
     }) {
         Ok(code) => code,
         Err(code) => code,

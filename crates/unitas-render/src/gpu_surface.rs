@@ -1,5 +1,4 @@
 use crate::camera::Camera;
-use crate::image::Rgba8;
 use crate::math::Mat4;
 use crate::model::{DirectionalLight, MeshInstance};
 use crate::render_graph::{RenderGraph, RenderPassKind};
@@ -7,9 +6,28 @@ use crate::render_graph::{RenderGraph, RenderPassKind};
 use super::gpu_pipelines::create_pipelines;
 use super::{
     background_color, lock, material_draw_items, opaque_order, plain_draw_items, transparent_order,
-    DrawItem, GpuInstance, GpuMaterialInstance, RenderError, RenderScene, Renderer, SurfaceState,
-    TextOverlayItem,
+    CanvasRect, DrawItem, GpuInstance, GpuMaterialInstance, Pipelines, RenderError, RenderScene,
+    Renderer, SurfaceState, TextOverlayItem,
 };
+
+#[derive(Debug, Clone, Copy)]
+pub struct SurfaceFrame<'a> {
+    pub instances: &'a [GpuMaterialInstance<'a>],
+    pub scene: RenderScene<'a>,
+    pub size: (u32, u32),
+    pub overlay: &'a [TextOverlayItem],
+    pub canvas_rects: &'a [CanvasRect],
+    pub canvas_texts: &'a [TextOverlayItem],
+}
+
+struct SurfaceTarget<'a> {
+    color_view: &'a wgpu::TextureView,
+    depth_view: &'a wgpu::TextureView,
+    pipelines: &'a Pipelines,
+    format: wgpu::TextureFormat,
+    size: (u32, u32),
+    scale: f32,
+}
 
 #[must_use]
 pub fn present_mode_for_v_sync_count(
@@ -183,12 +201,34 @@ impl Renderer {
         scene: RenderScene<'_>,
         overlay: &[TextOverlayItem],
     ) -> Result<(), RenderError> {
-        let RenderScene {
-            camera,
-            view,
-            light,
-            background,
-        } = scene;
+        self.render_surface_items(surface, items, scene, overlay, &[], &[])
+    }
+
+    pub fn render_surface_frame(
+        &self,
+        surface: &wgpu::Surface<'_>,
+        frame: &SurfaceFrame<'_>,
+    ) -> Result<(), RenderError> {
+        let items = material_draw_items(frame.instances);
+        self.render_surface_items(
+            surface,
+            items,
+            frame.scene,
+            frame.overlay,
+            frame.canvas_rects,
+            frame.canvas_texts,
+        )
+    }
+
+    fn render_surface_items(
+        &self,
+        surface: &wgpu::Surface<'_>,
+        items: Vec<DrawItem<'_>>,
+        scene: RenderScene<'_>,
+        overlay: &[TextOverlayItem],
+        canvas_rects: &[CanvasRect],
+        canvas_texts: &[TextOverlayItem],
+    ) -> Result<(), RenderError> {
         let mut state = lock(&self.surface);
         let surface_state = match state.as_mut() {
             Some(surface_state) => surface_state,
@@ -207,35 +247,121 @@ impl Renderer {
             surface_state.depth = self.create_depth_texture(size.0, size.1);
             surface_state.depth_size = size;
         }
-        let mut camera = *camera;
-        camera.aspect = size.0 as f32 / size.1 as f32;
         let color_view = surface_texture
             .texture
             .create_view(&wgpu::TextureViewDescriptor::default());
         let depth_view = surface_state
             .depth
             .create_view(&wgpu::TextureViewDescriptor::default());
-        let shadows_enabled = self.prepare_shadow_map(size.0.max(size.1));
-        let sprites = self.sprites();
-        let (prepared, prepared_sprites) =
-            self.prepare_draw_items(&items, &sprites, &camera, view, light)?;
-        let graph = RenderGraph::surface(!overlay.is_empty(), shadows_enabled)
-            .with_sprites(!sprites.is_empty());
+        let scale = size.0 as f32 / surface_state.config_size.0 as f32;
+        let format = surface_state.format;
+        let pipelines = surface_state.pipelines.clone();
         let mut encoder = self
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("surface"),
             });
+        self.encode_frame(
+            &mut encoder,
+            SurfaceTarget {
+                color_view: &color_view,
+                depth_view: &depth_view,
+                pipelines: &pipelines,
+                format,
+                size,
+                scale,
+            },
+            &items,
+            scene,
+            overlay,
+            canvas_rects,
+            canvas_texts,
+        )?;
+        self.queue.submit(Some(encoder.finish()));
+        self.queue.present(surface_texture);
+        Ok(())
+    }
+
+    pub fn render_frame_to_view(
+        &self,
+        view: &wgpu::TextureView,
+        format: wgpu::TextureFormat,
+        frame: &SurfaceFrame<'_>,
+    ) -> Result<(), RenderError> {
+        if frame.size.0 == 0 || frame.size.1 == 0 {
+            return Ok(());
+        }
+        let items = material_draw_items(frame.instances);
+        let pipelines = create_pipelines(&self.device, &self.pipeline_layout, &self.shader, format);
+        let depth = self.create_depth_texture(frame.size.0, frame.size.1);
+        let depth_view = depth.create_view(&wgpu::TextureViewDescriptor::default());
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("frame"),
+            });
+        self.encode_frame(
+            &mut encoder,
+            SurfaceTarget {
+                color_view: view,
+                depth_view: &depth_view,
+                pipelines: &pipelines,
+                format,
+                size: frame.size,
+                scale: 1.0,
+            },
+            &items,
+            frame.scene,
+            frame.overlay,
+            frame.canvas_rects,
+            frame.canvas_texts,
+        )?;
+        self.queue.submit(Some(encoder.finish()));
+        Ok(())
+    }
+
+    fn encode_frame(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        target: SurfaceTarget<'_>,
+        items: &[DrawItem<'_>],
+        scene: RenderScene<'_>,
+        overlay: &[TextOverlayItem],
+        canvas_rects: &[CanvasRect],
+        canvas_texts: &[TextOverlayItem],
+    ) -> Result<(), RenderError> {
+        let SurfaceTarget {
+            color_view,
+            depth_view,
+            pipelines,
+            format,
+            size,
+            scale,
+        } = target;
+        let RenderScene {
+            camera,
+            view,
+            light,
+            background,
+        } = scene;
+        let mut camera = *camera;
+        camera.aspect = size.0 as f32 / size.1 as f32;
+        let shadows_enabled = self.prepare_shadow_map(size.0.max(size.1));
+        let sprites = self.sprites();
+        let (prepared, prepared_sprites) =
+            self.prepare_draw_items(items, &sprites, &camera, view, light)?;
+        let graph = RenderGraph::surface(!overlay.is_empty(), shadows_enabled)
+            .with_sprites(!sprites.is_empty());
         for graph_pass in graph.passes() {
             match graph_pass.kind {
                 RenderPassKind::Shadow => {
-                    self.encode_shadow_pass(&mut encoder, &items, &prepared);
+                    self.encode_shadow_pass(encoder, items, &prepared);
                 }
                 RenderPassKind::Opaque => {
                     let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                         label: Some("surface-opaque"),
                         color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                            view: &color_view,
+                            view: color_view,
                             depth_slice: None,
                             resolve_target: None,
                             ops: wgpu::Operations {
@@ -244,7 +370,7 @@ impl Renderer {
                             },
                         })],
                         depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
-                            view: &depth_view,
+                            view: depth_view,
                             depth_ops: Some(wgpu::Operations {
                                 load: wgpu::LoadOp::Clear(1.0),
                                 store: wgpu::StoreOp::Store,
@@ -257,19 +383,19 @@ impl Renderer {
                     });
                     self.draw_pass_indices(
                         &mut pass,
-                        &surface_state.pipelines,
-                        &items,
+                        pipelines,
+                        items,
                         &prepared,
-                        &opaque_order(&items),
+                        &opaque_order(items),
                     );
                 }
                 RenderPassKind::Transparent => {
-                    let indices = transparent_order(&items, view);
+                    let indices = transparent_order(items, view);
                     if !indices.is_empty() {
                         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                             label: Some("surface-transparent"),
                             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                                view: &color_view,
+                                view: color_view,
                                 depth_slice: None,
                                 resolve_target: None,
                                 ops: wgpu::Operations {
@@ -279,7 +405,7 @@ impl Renderer {
                             })],
                             depth_stencil_attachment: Some(
                                 wgpu::RenderPassDepthStencilAttachment {
-                                    view: &depth_view,
+                                    view: depth_view,
                                     depth_ops: Some(wgpu::Operations {
                                         load: wgpu::LoadOp::Load,
                                         store: wgpu::StoreOp::Store,
@@ -291,67 +417,27 @@ impl Renderer {
                             occlusion_query_set: None,
                             multiview_mask: None,
                         });
-                        self.draw_pass_indices(
-                            &mut pass,
-                            &surface_state.pipelines,
-                            &items,
-                            &prepared,
-                            &indices,
-                        );
+                        self.draw_pass_indices(&mut pass, pipelines, items, &prepared, &indices);
                     }
                 }
                 RenderPassKind::Sprites => {
                     self.encode_sprite_pass(
-                        &mut encoder,
-                        &[&color_view],
-                        &depth_view,
+                        encoder,
+                        &[color_view],
+                        depth_view,
                         &prepared_sprites,
-                        &surface_state.pipelines.sprite,
+                        &pipelines.sprite,
                         items.len(),
                     );
                 }
                 RenderPassKind::UiOverlay => {
-                    let scale = size.0 as f32 / surface_state.config_size.0 as f32;
-                    let format = surface_state.format;
-                    self.draw_text_overlay(&mut encoder, &color_view, format, size, scale, overlay);
+                    self.draw_text_overlay(encoder, color_view, format, size, scale, overlay);
                 }
                 RenderPassKind::CaptureIds => {}
             }
         }
-        self.queue.submit(Some(encoder.finish()));
-        self.queue.present(surface_texture);
-        Ok(())
-    }
-
-    /// Presents a composed frame on a window surface.
-    pub fn present_rgba_to_surface(
-        &self,
-        surface: &wgpu::Surface<'_>,
-        image: &Rgba8,
-    ) -> Result<(), RenderError> {
-        let surface_texture = match surface.get_current_texture() {
-            wgpu::CurrentSurfaceTexture::Success(texture) => texture,
-            wgpu::CurrentSurfaceTexture::Suboptimal(texture) => texture,
-            other => return Err(RenderError::SurfaceUnavailable(format!("{other:?}"))),
-        };
-        let size = (
-            surface_texture.texture.width(),
-            surface_texture.texture.height(),
-        );
-        let format = {
-            let state = lock(&self.surface);
-            match state.as_ref() {
-                Some(surface_state) => surface_state.format,
-                None => return Err(RenderError::SurfaceNotConfigured),
-            }
-        };
-        {
-            let view = surface_texture
-                .texture
-                .create_view(&wgpu::TextureViewDescriptor::default());
-            self.draw_rgba_to_view(&view, format, size, image)?;
-        }
-        self.queue.present(surface_texture);
+        self.draw_ui_rects(encoder, color_view, format, size, canvas_rects);
+        self.draw_text_overlay(encoder, color_view, format, size, 1.0, canvas_texts);
         Ok(())
     }
 }

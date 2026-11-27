@@ -12,6 +12,15 @@ namespace Unitas.Bridge
         [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl, EntryPoint = "unitas_runtime_ui_text_style")]
         public static extern int unitas_runtime_ui_text_style(ulong runtime, ulong objectId, float fontSize, float r, float g, float b, float a);
 
+        [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl, EntryPoint = "unitas_runtime_ui_text_layout")]
+        public static extern int unitas_runtime_ui_text_layout(
+            ulong runtime,
+            ulong objectId,
+            uint alignment,
+            uint horizontalOverflow,
+            uint verticalOverflow,
+            float lineSpacing);
+
         [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl, EntryPoint = "unitas_runtime_ui_pointer_over")]
         public static extern int unitas_runtime_ui_pointer_over(ulong runtime);
 
@@ -19,11 +28,6 @@ namespace Unitas.Bridge
         public static extern int unitas_runtime_ui_poll_clicks(ulong runtime, ulong clicksPointer, ulong capacity);
     }
 
-    /// <summary>
-    /// The native uGUI surface. It talks to the runtime ABI the same way the other
-    /// providers do: the runtime owns one scratch buffer, so every call fetches it
-    /// again before it writes into it.
-    /// </summary>
     internal sealed class RuntimeUiProvider : UnityEngine.UI.IUiProvider
     {
         private readonly ulong _runtimeHandle;
@@ -60,6 +64,22 @@ namespace Unitas.Bridge
                 color.g,
                 color.b,
                 color.a);
+        }
+
+        public int SetTextLayout(
+            ulong objectId,
+            UnityEngine.TextAnchor alignment,
+            UnityEngine.HorizontalWrapMode horizontalOverflow,
+            UnityEngine.VerticalWrapMode verticalOverflow,
+            float lineSpacing)
+        {
+            return RuntimeInterop.unitas_runtime_ui_text_layout(
+                _runtimeHandle,
+                objectId,
+                (uint)alignment,
+                (uint)horizontalOverflow,
+                (uint)verticalOverflow,
+                lineSpacing);
         }
 
         public bool IsPointerOver()

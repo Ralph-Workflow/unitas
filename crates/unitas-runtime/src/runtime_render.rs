@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use unitas_asset::scene::{MeshRendererComponent, RenderBinding};
+use unitas_asset::scene::{MeshRendererComponent, RenderBinding, SpriteDrawMode};
 use unitas_core::{EntityId, IDENTITY_ROTATION, SceneGraph, Transform, rotate_vector};
 use unitas_render::image::{Image, Rgba8};
 use unitas_render::ui_pass::{GlyphTextPainter, UiTarget, composite_ui};
@@ -677,6 +677,186 @@ impl Runtime {
         sprites
     }
 
+    /// The index of the sprite an entity draws, when it draws one.
+    fn runtime_sprite_index(&self, entity: EntityId) -> Option<usize> {
+        self.render
+            .sprites
+            .iter()
+            .position(|sprite| sprite.entity == entity)
+    }
+
+    /// Gives an entity the sprite a script asked for. The sprite joins the list
+    /// the scene sprites live in, so a script sprite and a scene sprite sort
+    /// into the same draw pass.
+    pub fn create_runtime_sprite(&mut self, entity: EntityId, texture_path: Option<&Path>) -> bool {
+        if entity.as_u64() == 0 {
+            return false;
+        }
+        let texture = load_texture_image(texture_path).map(Arc::new);
+        if texture.is_none()
+            && let Some(path) = texture_path
+        {
+            self.push_runtime_diagnostic(
+                entity,
+                format!(
+                    "SpriteRenderer on entity {} references sprite {} that could not be imported",
+                    entity.as_u64(),
+                    path.display()
+                ),
+            );
+        }
+        let size = match texture.as_ref() {
+            Some(image) => [
+                image.width as f32 / SPRITE_PIXELS_PER_UNIT,
+                image.height as f32 / SPRITE_PIXELS_PER_UNIT,
+            ],
+            None => [0.0, 0.0],
+        };
+        match self.runtime_sprite_index(entity) {
+            Some(index) => {
+                let sprite = &mut self.render.sprites[index];
+                sprite.texture = texture;
+                sprite.size = size;
+            }
+            None => self.render.sprites.push(RenderSprite {
+                entity,
+                texture,
+                color: [1.0, 1.0, 1.0, 1.0],
+                sorting_layer: 0,
+                sorting_order: 0,
+                size,
+                flip_x: false,
+                flip_y: false,
+                enabled: true,
+            }),
+        }
+        true
+    }
+
+    /// Tints the sprite an entity draws.
+    pub fn set_runtime_sprite_color(&mut self, entity: EntityId, color: [f32; 4]) -> bool {
+        let Some(index) = self.runtime_sprite_index(entity) else {
+            return false;
+        };
+        self.render.sprites[index].color = color;
+        true
+    }
+
+    /// Moves the sprite an entity draws in the sorting order.
+    pub fn set_runtime_sprite_sorting(
+        &mut self,
+        entity: EntityId,
+        sorting_layer: i32,
+        sorting_order: i32,
+    ) -> bool {
+        let Some(index) = self.runtime_sprite_index(entity) else {
+            return false;
+        };
+        let sprite = &mut self.render.sprites[index];
+        sprite.sorting_layer = sorting_layer;
+        sprite.sorting_order = sorting_order;
+        true
+    }
+
+    /// Flips the sprite an entity draws.
+    pub fn set_runtime_sprite_flip(
+        &mut self,
+        entity: EntityId,
+        flip_x: bool,
+        flip_y: bool,
+    ) -> bool {
+        let Some(index) = self.runtime_sprite_index(entity) else {
+            return false;
+        };
+        let sprite = &mut self.render.sprites[index];
+        sprite.flip_x = flip_x;
+        sprite.flip_y = flip_y;
+        true
+    }
+
+    /// Draws or hides the sprite an entity owns.
+    pub fn set_runtime_sprite_enabled(&mut self, entity: EntityId, enabled: bool) -> bool {
+        let Some(index) = self.runtime_sprite_index(entity) else {
+            return false;
+        };
+        self.render.sprites[index].enabled = enabled;
+        true
+    }
+
+    /// Records the draw mode a script asked for. The modes the renderer does
+    /// not draw are reported as a diagnostic, worded like the diagnostic a
+    /// scene sprite in the same mode reports.
+    pub fn set_runtime_sprite_draw_mode(&mut self, entity: EntityId, mode: SpriteDrawMode) -> bool {
+        if entity.as_u64() == 0 {
+            return false;
+        }
+        self.clear_runtime_diagnostic(
+            entity,
+            &draw_mode_diagnostic(entity, SpriteDrawMode::Sliced),
+        );
+        self.clear_runtime_diagnostic(entity, &draw_mode_diagnostic(entity, SpriteDrawMode::Tiled));
+        if mode != SpriteDrawMode::Simple {
+            self.push_runtime_diagnostic(entity, draw_mode_diagnostic(entity, mode));
+        }
+        true
+    }
+
+    /// The sprite state of an entity: its colour, its sorting layer and order,
+    /// its flips, whether it draws, whether it has a texture and the size of
+    /// that texture in pixels.
+    pub fn runtime_sprite_state(&self, entity: EntityId) -> Option<[f32; 12]> {
+        let sprite = self
+            .render
+            .sprites
+            .iter()
+            .find(|sprite| sprite.entity == entity)?;
+        Some([
+            sprite.color[0],
+            sprite.color[1],
+            sprite.color[2],
+            sprite.color[3],
+            sprite.sorting_layer as f32,
+            sprite.sorting_order as f32,
+            f32::from(u8::from(sprite.flip_x)),
+            f32::from(u8::from(sprite.flip_y)),
+            f32::from(u8::from(sprite.enabled)),
+            f32::from(u8::from(sprite.texture.is_some())),
+            sprite.size[0] * SPRITE_PIXELS_PER_UNIT,
+            sprite.size[1] * SPRITE_PIXELS_PER_UNIT,
+        ])
+    }
+
+    /// Records a diagnostic for an entity, keeping the message once.
+    fn push_runtime_diagnostic(&mut self, entity: EntityId, message: String) {
+        let Some(index) = self.active_scene else {
+            return;
+        };
+        let Some(scene) = self.scenes.get_mut(index) else {
+            return;
+        };
+        if scene
+            .diagnostics
+            .iter()
+            .any(|(id, text)| *id == entity && *text == message)
+        {
+            return;
+        }
+        scene.diagnostics.push((entity, message));
+    }
+
+    /// Drops the diagnostic an entity carries with the given message.
+    fn clear_runtime_diagnostic(&mut self, entity: EntityId, message: &str) {
+        let Some(index) = self.active_scene else {
+            return;
+        };
+        let Some(scene) = self.scenes.get_mut(index) else {
+            return;
+        };
+        scene
+            .diagnostics
+            .retain(|(id, text)| !(*id == entity && text == message));
+    }
+
     pub(crate) fn render_frame(
         &mut self,
         camera: u64,
@@ -963,6 +1143,16 @@ fn render_material_for(renderer: &MeshRendererComponent) -> RenderMaterial {
         smoothness: renderer.smoothness.unwrap_or(0.0),
         emission_color: renderer.emission_color,
     }
+}
+
+/// The diagnostic the renderer reports for a sprite it does not draw in the
+/// requested mode, worded like the diagnostic a scene sprite in that mode
+/// reports.
+fn draw_mode_diagnostic(entity: EntityId, mode: SpriteDrawMode) -> String {
+    format!(
+        "SpriteRenderer on entity {} draws in the {mode:?} mode, which the renderer does not draw yet",
+        entity.as_u64()
+    )
 }
 
 /// The model matrix a sprite draws with: the transform of its entity with

@@ -102,6 +102,19 @@ namespace Unitas.Bridge.Tests
 
                 Check.Equal("The managed uGUI text shows the text the scene gave it", "Score 0", text.text);
                 Check.Equal("The managed uGUI text keeps the font size the scene gave it", 18, text.fontSize);
+                Check.That("The managed uGUI text defaults to UpperLeft alignment", text.alignment == TextAnchor.UpperLeft);
+                Check.That("The managed uGUI text defaults to Overflow horizontalOverflow", text.horizontalOverflow == HorizontalWrapMode.Overflow);
+                Check.That("The managed uGUI text defaults to Overflow verticalOverflow", text.verticalOverflow == VerticalWrapMode.Overflow);
+                Check.Equal("The managed uGUI text defaults to lineSpacing 1", 1f, text.lineSpacing);
+
+                text.alignment = TextAnchor.MiddleCenter;
+                text.horizontalOverflow = HorizontalWrapMode.Wrap;
+                text.verticalOverflow = VerticalWrapMode.Truncate;
+                text.lineSpacing = 1.5f;
+                Check.That("The managed uGUI text updates alignment", text.alignment == TextAnchor.MiddleCenter);
+                Check.That("The managed uGUI text updates horizontalOverflow", text.horizontalOverflow == HorizontalWrapMode.Wrap);
+                Check.That("The managed uGUI text updates verticalOverflow", text.verticalOverflow == VerticalWrapMode.Truncate);
+                Check.Equal("The managed uGUI text updates lineSpacing", 1.5f, text.lineSpacing);
 
                 GameObject? canvas = GameObject.Find(CanvasObjectName);
                 CanvasScaler? scaler = canvas != null ? canvas.GetComponent<CanvasScaler>() : null;

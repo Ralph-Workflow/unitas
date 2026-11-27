@@ -22,7 +22,7 @@ namespace Unitas.Bridge.Tests
 
     public static class RigidbodyDepthTests
     {
-        private const string ProbeGuid = "99112233445566778899aabbccddeeff";
+        private const string ProbeGuid = "90000000000000000000000000000001";
 
         public static void Run()
         {
@@ -337,7 +337,7 @@ MonoBehaviour:
   m_ObjectHideFlags: 0
   m_GameObject: {fileID: 519420021}
   m_Enabled: 1
-  m_Script: {fileID: 11500000, guid: 99112233445566778899aabbccddeeff, type: 3}
+  m_Script: {fileID: 11500000, guid: 90000000000000000000000000000001, type: 3}
 ";
     }
 }

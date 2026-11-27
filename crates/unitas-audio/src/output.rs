@@ -1,24 +1,20 @@
+use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
+use cpal::{Device, FromSample, SampleFormat, SizedSample, Stream, StreamConfig};
 use std::collections::VecDeque;
 use std::io;
 use std::path::Path;
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 use std::time::Duration;
 
-use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
-use cpal::{Device, FromSample, SampleFormat, SizedSample, Stream, StreamConfig};
-
+use crate::ring::SampleRing;
 use crate::{AudioError, AudioWorld};
 
-pub const OUTPUT_CHANNELS: usize = 2;
+pub use crate::ring::PushReport;
+pub use crate::OUTPUT_CHANNELS;
 
 const DEFAULT_CAPACITY_FRAMES: usize = 4096;
+const MAX_CALLBACK_FRAMES: usize = 4096;
 const STREAM_TIMEOUT: Duration = Duration::from_secs(2);
-
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct PushReport {
-    pub accepted_frames: u64,
-    pub dropped_frames: u64,
-}
 
 /// The samples the device output accepted, kept for the device lane's audio proof.
 #[derive(Clone, Debug)]
@@ -116,18 +112,10 @@ impl DeviceCapture {
     }
 }
 
-#[derive(Debug, Default)]
-struct HandoffState {
-    samples: VecDeque<f32>,
-    accepted_frames: u64,
-    dropped_frames: u64,
-    drained_frames: u64,
-    capture: Option<DeviceCapture>,
-}
-
 #[derive(Clone, Debug)]
 pub struct FrameHandoff {
-    state: Arc<Mutex<HandoffState>>,
+    ring: Arc<SampleRing>,
+    capture: OnceLock<DeviceCapture>,
     capacity_frames: usize,
 }
 
@@ -135,7 +123,8 @@ impl FrameHandoff {
     pub fn new(capacity_frames: usize) -> Self {
         let capacity_frames = capacity_frames.max(1);
         Self {
-            state: Arc::new(Mutex::new(HandoffState::default())),
+            ring: Arc::new(SampleRing::new(capacity_frames)),
+            capture: OnceLock::new(),
             capacity_frames,
         }
     }
@@ -144,104 +133,49 @@ impl FrameHandoff {
         self.capacity_frames
     }
 
-    /// Records the accepted samples into the capture, bounded to the last
-    /// seconds of audio the capture asked for.
     pub fn enable_capture(&self, capture: DeviceCapture, sample_rate: u32) {
         let capacity_samples =
             capture.lock().seconds as usize * sample_rate as usize * OUTPUT_CHANNELS;
-        {
-            let mut captured = capture.lock();
-            captured.sample_rate = sample_rate;
-            captured.capacity_samples = capacity_samples;
-        }
-        self.lock().capture = Some(capture);
+        let stored = self.capture.get_or_init(|| capture);
+        let mut captured = stored.lock();
+        captured.sample_rate = sample_rate;
+        captured.capacity_samples = capacity_samples;
     }
 
     pub fn push(&self, interleaved: &[f32]) -> PushReport {
-        let incoming_frames = interleaved.len() / OUTPUT_CHANNELS;
-        if incoming_frames == 0 {
-            return PushReport::default();
-        }
-        let mut state = self.lock();
-        let mut dropped_frames = 0u64;
-        while !state.samples.is_empty()
-            && state.samples.len() / OUTPUT_CHANNELS + incoming_frames > self.capacity_frames
-        {
-            state.samples.pop_front();
-            state.samples.pop_front();
-            dropped_frames += 1;
-        }
-        let mut kept_frames = incoming_frames;
-        if kept_frames > self.capacity_frames {
-            dropped_frames += (kept_frames - self.capacity_frames) as u64;
-            kept_frames = self.capacity_frames;
-        }
-        let start = (incoming_frames - kept_frames) * OUTPUT_CHANNELS;
-        let end = start + kept_frames * OUTPUT_CHANNELS;
-        state
-            .samples
-            .extend(interleaved[start..end].iter().copied());
-        if let Some(capture) = &state.capture {
+        let report = self.ring.push(interleaved);
+        if let Some(capture) = self.capture.get() {
+            let accepted = (report.accepted_frames as usize) * OUTPUT_CHANNELS;
+            let accepted = accepted.min(interleaved.len());
             let mut captured = capture.lock();
             captured
                 .samples
-                .extend(interleaved[start..end].iter().copied());
+                .extend(interleaved[..accepted].iter().copied());
             while captured.samples.len() > captured.capacity_samples {
                 captured.samples.pop_front();
             }
         }
-        state.accepted_frames += kept_frames as u64;
-        state.dropped_frames += dropped_frames;
-        PushReport {
-            accepted_frames: kept_frames as u64,
-            dropped_frames,
-        }
+        report
     }
 
     pub fn fill(&self, out: &mut [f32]) -> usize {
-        let capacity_frames = out.len() / OUTPUT_CHANNELS;
-        if capacity_frames == 0 {
-            return 0;
-        }
-        let Ok(mut state) = self.state.try_lock() else {
-            return 0;
-        };
-        let available_frames = state.samples.len() / OUTPUT_CHANNELS;
-        let frames = available_frames.min(capacity_frames);
-        let samples = frames * OUTPUT_CHANNELS;
-        for (index, slot) in out.iter_mut().take(samples).enumerate() {
-            *slot = state.samples[index];
-        }
-        out[samples..].fill(0.0);
-        for _ in 0..samples {
-            state.samples.pop_front();
-        }
-        state.drained_frames += frames as u64;
-        frames
+        self.ring.fill(out)
     }
 
     pub fn pending_frames(&self) -> usize {
-        let state = self.lock();
-        state.samples.len() / OUTPUT_CHANNELS
+        self.ring.pending_frames()
     }
 
     pub fn accepted_frames(&self) -> u64 {
-        self.lock().accepted_frames
+        self.ring.accepted_frames()
     }
 
     pub fn dropped_frames(&self) -> u64 {
-        self.lock().dropped_frames
+        self.ring.dropped_frames()
     }
 
     pub fn drained_frames(&self) -> u64 {
-        self.lock().drained_frames
-    }
-
-    fn lock(&self) -> MutexGuard<'_, HandoffState> {
-        match self.state.lock() {
-            Ok(guard) => guard,
-            Err(poisoned) => poisoned.into_inner(),
-        }
+        self.ring.drained_frames()
     }
 }
 
@@ -304,7 +238,9 @@ impl DeviceOutput {
     }
 
     pub fn pump_world(&self, world: &mut AudioWorld, n_frames: usize) -> PushReport {
-        let mixed = world.mix(n_frames);
+        world.set_device_sample_rate(self.sample_rate);
+        let mut mixed = vec![0.0f32; n_frames * OUTPUT_CHANNELS];
+        world.mix_into(&mut mixed);
         self.handoff.push(&mixed)
     }
 
@@ -360,12 +296,12 @@ where
     T: SizedSample + FromSample<f32>,
 {
     let channels = usize::from(config.channels.max(1));
-    let mut scratch: Vec<f32> = Vec::new();
+    let mut scratch: Vec<f32> = Vec::with_capacity(MAX_CALLBACK_FRAMES * OUTPUT_CHANNELS);
     device
         .build_output_stream::<T, _, _>(
             config,
             move |output: &mut [T], _info: &cpal::OutputCallbackInfo| {
-                let frames = output.len() / channels;
+                let frames = (output.len() / channels).min(MAX_CALLBACK_FRAMES);
                 let needed = frames * OUTPUT_CHANNELS;
                 if scratch.len() != needed {
                     scratch.resize(needed, 0.0);
@@ -449,29 +385,28 @@ mod tests {
     }
 
     #[test]
-    fn handoff_drops_the_oldest_frames_when_full() {
+    fn handoff_keeps_the_queued_frames_when_the_ring_is_full() {
         let handoff = FrameHandoff::new(2);
         handoff.push(&[1.0, 1.0, 2.0, 2.0]);
         let report = handoff.push(&[3.0, 3.0]);
-        assert_eq!(report.accepted_frames, 1);
+        assert_eq!(report.accepted_frames, 0);
         assert_eq!(report.dropped_frames, 1);
         assert_eq!(handoff.dropped_frames(), 1);
         assert_eq!(handoff.pending_frames(), 2);
         let mut out = vec![0.0f32; 4];
         handoff.fill(&mut out);
-        assert_eq!(out, vec![2.0, 2.0, 3.0, 3.0]);
+        assert_eq!(out, vec![1.0, 1.0, 2.0, 2.0]);
     }
 
     #[test]
-    fn handoff_keeps_the_newest_frames_when_a_batch_exceeds_capacity() {
+    fn handoff_writes_the_batch_up_to_the_capacity_and_reports_the_remainder() {
         let handoff = FrameHandoff::new(2);
         let report = handoff.push(&[1.0, 1.0, 2.0, 2.0, 3.0, 3.0]);
         assert_eq!(report.accepted_frames, 2);
         assert_eq!(report.dropped_frames, 1);
         let mut out = vec![0.0f32; 4];
-        let frames = handoff.fill(&mut out);
-        assert_eq!(frames, 2);
-        assert_eq!(out, vec![2.0, 2.0, 3.0, 3.0]);
+        handoff.fill(&mut out);
+        assert_eq!(out, vec![1.0, 1.0, 2.0, 2.0]);
     }
 
     #[test]

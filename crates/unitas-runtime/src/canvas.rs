@@ -5,7 +5,9 @@ use unitas_asset::scene::{
     UiBinding, UiButtonComponent, UiElementComponent,
 };
 use unitas_core::EntityId;
-use unitas_render::ui_pass::{FOCUS_INDICATOR_COLOR, focus_border_rects};
+use unitas_render::ui_pass::{
+    FOCUS_INDICATOR_COLOR, HorizontalAlign, VerticalAlign, focus_border_rects,
+};
 
 use crate::input::{
     GAMEPAD_AXIS_LEFT_X, GAMEPAD_AXIS_LEFT_Y, GAMEPAD_BUTTON_DPAD_DOWN, GAMEPAD_BUTTON_DPAD_LEFT,
@@ -21,12 +23,114 @@ const MAX_HIERARCHY_DEPTH: usize = 64;
 const FOCUS_BORDER_THICKNESS: f32 = 2.0;
 const STICK_NAVIGATION_THRESHOLD: f64 = 0.5;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum TextAnchor {
+    #[default]
+    UpperLeft = 0,
+    UpperCenter = 1,
+    UpperRight = 2,
+    MiddleLeft = 3,
+    MiddleCenter = 4,
+    MiddleRight = 5,
+    LowerLeft = 6,
+    LowerCenter = 7,
+    LowerRight = 8,
+}
+
+impl TextAnchor {
+    pub const fn from_u32(code: u32) -> Option<Self> {
+        match code {
+            0 => Some(Self::UpperLeft),
+            1 => Some(Self::UpperCenter),
+            2 => Some(Self::UpperRight),
+            3 => Some(Self::MiddleLeft),
+            4 => Some(Self::MiddleCenter),
+            5 => Some(Self::MiddleRight),
+            6 => Some(Self::LowerLeft),
+            7 => Some(Self::LowerCenter),
+            8 => Some(Self::LowerRight),
+            _ => None,
+        }
+    }
+
+    pub const fn horizontal(self) -> HorizontalAlign {
+        match self {
+            Self::UpperLeft | Self::MiddleLeft | Self::LowerLeft => HorizontalAlign::Left,
+            Self::UpperCenter | Self::MiddleCenter | Self::LowerCenter => HorizontalAlign::Center,
+            Self::UpperRight | Self::MiddleRight | Self::LowerRight => HorizontalAlign::Right,
+        }
+    }
+
+    pub const fn vertical(self) -> VerticalAlign {
+        match self {
+            Self::UpperLeft | Self::UpperCenter | Self::UpperRight => VerticalAlign::Top,
+            Self::MiddleLeft | Self::MiddleCenter | Self::MiddleRight => VerticalAlign::Middle,
+            Self::LowerLeft | Self::LowerCenter | Self::LowerRight => VerticalAlign::Bottom,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum HorizontalWrapMode {
+    Wrap = 0,
+    #[default]
+    Overflow = 1,
+}
+
+impl HorizontalWrapMode {
+    pub const fn from_u32(code: u32) -> Option<Self> {
+        match code {
+            0 => Some(Self::Wrap),
+            1 => Some(Self::Overflow),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum VerticalWrapMode {
+    Truncate = 0,
+    #[default]
+    Overflow = 1,
+}
+
+impl VerticalWrapMode {
+    pub const fn from_u32(code: u32) -> Option<Self> {
+        match code {
+            0 => Some(Self::Truncate),
+            1 => Some(Self::Overflow),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct TextLayoutConfig {
+    pub alignment: TextAnchor,
+    pub horizontal_overflow: HorizontalWrapMode,
+    pub vertical_overflow: VerticalWrapMode,
+    pub line_spacing: f32,
+}
+
+impl Default for TextLayoutConfig {
+    fn default() -> Self {
+        Self {
+            alignment: TextAnchor::UpperLeft,
+            horizontal_overflow: HorizontalWrapMode::Overflow,
+            vertical_overflow: VerticalWrapMode::Overflow,
+            line_spacing: 1.0,
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct UiDrawItem {
     pub rect_px: [f32; 4],
     pub color: [f32; 4],
     pub sprite: Option<SpriteRef>,
     pub text: Option<UiTextItem>,
+    pub text_layout: TextLayoutConfig,
+    pub text_clip_rect: Option<[f32; 4]>,
 }
 
 impl unitas_render::ui_pass::UiElement for UiDrawItem {
@@ -43,15 +147,22 @@ impl unitas_render::ui_pass::UiElement for UiDrawItem {
     }
 
     fn text(&self) -> Option<unitas_render::ui_pass::UiText<'_>> {
-        self.text
-            .as_ref()
-            .map(|item| unitas_render::ui_pass::UiText {
+        self.text.as_ref().map(|item| {
+            let wrap = self.text_layout.horizontal_overflow == HorizontalWrapMode::Wrap;
+            unitas_render::ui_pass::UiText {
                 text: &item.text,
                 x: item.x,
                 y: item.y,
                 size_px: item.size_px,
                 color: item.color,
-            })
+                horizontal_align: self.text_layout.alignment.horizontal(),
+                vertical_align: self.text_layout.alignment.vertical(),
+                wrap,
+                max_width: wrap.then_some(self.rect_px[2]),
+                line_spacing: self.text_layout.line_spacing,
+                clip_rect: self.text_clip_rect,
+            }
+        })
     }
 }
 
@@ -61,12 +172,12 @@ pub struct CanvasRect {
     pub size: [f32; 2],
 }
 
-/// The runtime state of a `Text` component: its content, font size and colour.
 #[derive(Clone, Debug, PartialEq)]
 pub struct TextOverride {
     pub text: String,
     pub font_size: f32,
     pub color: [f32; 4],
+    pub layout: TextLayoutConfig,
 }
 
 pub fn resolve_canvas_rect(rect: &RectTransformComponent, parent: CanvasRect) -> CanvasRect {
@@ -288,6 +399,8 @@ impl CanvasState {
                             uv_rect: [0.0, 0.0, 1.0, 1.0],
                         }),
                         text: None,
+                        text_layout: TextLayoutConfig::default(),
+                        text_clip_rect: None,
                     });
                 }
                 UiElementComponent::Text(text) => {
@@ -298,6 +411,10 @@ impl CanvasState {
                     let content = state.map_or(text.text.as_str(), |state| state.text.as_str());
                     let color = state.map_or(text.color, |state| state.color);
                     let font_size = state.map_or(text.font_size, |state| state.font_size);
+                    let text_layout = state.map_or_else(TextLayoutConfig::default, |s| s.layout);
+                    let text_clip_rect =
+                        (text_layout.vertical_overflow == VerticalWrapMode::Truncate)
+                            .then_some(rect_px);
                     items.push(UiDrawItem {
                         rect_px,
                         color,
@@ -309,6 +426,8 @@ impl CanvasState {
                             size_px: font_size * scale,
                             color,
                         }),
+                        text_layout,
+                        text_clip_rect,
                     });
                 }
                 UiElementComponent::Button(_) => {}
@@ -324,6 +443,8 @@ impl CanvasState {
                     color: FOCUS_INDICATOR_COLOR,
                     sprite: None,
                     text: None,
+                    text_layout: TextLayoutConfig::default(),
+                    text_clip_rect: None,
                 });
             }
         }
@@ -445,8 +566,6 @@ impl CanvasState {
         step_focus(focusables, Some(current_id), fallback_step)
     }
 
-    /// The pixel rectangle of one element under its canvas and the scale of
-    /// that canvas, in screen pixels with the origin at the top left.
     pub fn element_rect(&self, entity: EntityId, screen_size: [f32; 2]) -> Option<([f32; 4], f32)> {
         if screen_size[0] <= 0.0 || screen_size[1] <= 0.0 {
             return None;
@@ -919,5 +1038,63 @@ mod tests {
         input.begin_frame(1.0 / 60.0);
         assert_eq!(canvas.handle_focus(&input, SCREEN), vec![QUIT_BUTTON_ID]);
         assert_eq!(canvas.take_focused_clicks(), vec![QUIT_BUTTON_ID.as_u64()]);
+    }
+
+    #[test]
+    fn text_override_layout_plumbs_alignment_wrap_and_truncate_clip_into_ui_text() {
+        use unitas_render::ui_pass::{GlyphTextPainter, HorizontalAlign, UiElement, VerticalAlign};
+
+        let canvas = sample_canvas();
+        let default_items = canvas.draw_items(SCREEN);
+        let default_play = default_items
+            .iter()
+            .find(|item| item.text.is_some())
+            .and_then(|item| item.text());
+        assert!(default_play.is_some());
+        if let Some(ui_text) = default_play {
+            assert_eq!(ui_text.horizontal_align, HorizontalAlign::Left);
+            assert_eq!(ui_text.vertical_align, VerticalAlign::Top);
+            assert!(!ui_text.wrap);
+            assert_eq!(ui_text.max_width, None);
+            assert_eq!(ui_text.line_spacing, 1.0);
+            assert_eq!(ui_text.clip_rect, None);
+        }
+
+        let mut overrides = HashMap::new();
+        overrides.insert(
+            PLAY_BUTTON_ID,
+            TextOverride {
+                text: "START GAME NOW".to_string(),
+                font_size: 20.0,
+                color: [1.0, 1.0, 1.0, 1.0],
+                layout: TextLayoutConfig {
+                    alignment: TextAnchor::MiddleCenter,
+                    horizontal_overflow: HorizontalWrapMode::Wrap,
+                    vertical_overflow: VerticalWrapMode::Truncate,
+                    line_spacing: 1.25,
+                },
+            },
+        );
+        let overridden_items = canvas.draw_items_with(SCREEN, &overrides);
+        let play_item = overridden_items.iter().find(|item| item.text.is_some());
+        assert!(play_item.is_some());
+        if let Some(item) = play_item
+            && let Some(ui_text) = item.text()
+        {
+            assert_eq!(ui_text.horizontal_align, HorizontalAlign::Center);
+            assert_eq!(ui_text.vertical_align, VerticalAlign::Middle);
+            assert!(ui_text.wrap);
+            assert_eq!(ui_text.max_width, Some(item.rect_px[2]));
+            assert_eq!(ui_text.line_spacing, 1.25);
+            assert_eq!(ui_text.clip_rect, Some(item.rect_px));
+        }
+
+        let mut painter = GlyphTextPainter::new();
+        let mut image = Rgba8::new(800, 600);
+        let mut target = UiTarget {
+            image: &mut image,
+            ids: None,
+        };
+        composite_ui(&mut target, &overridden_items, 1, Some(&mut painter));
     }
 }
