@@ -41,7 +41,7 @@ namespace UnityEngine
             }
             float radius = _direction != 0 ? _size.x * 0.5f : _size.y * 0.5f;
             float height = _direction != 0 ? _size.y : _size.x;
-            provider.TryCreateCapsuleCollider2D(owner.NativeEntityId, radius, height, _direction, offset, isTrigger);
+            provider.TryCreateCapsuleCollider2D(owner.NativeEntityId, radius, height, _direction, offset, isTrigger, (uint)owner.layer);
             ApplyNativeMaterialAndComposite();
         }
     }

@@ -15,6 +15,7 @@ namespace Unitas.Bridge
             if (mode == LoadSceneMode.Single)
             {
                 _sceneObjectNames.Clear();
+                _sceneObjectLayers.Clear();
                 _sceneRigidbodies.Clear();
                 _sceneSphereColliders.Clear();
                 _sceneBoxColliders.Clear();
@@ -101,6 +102,10 @@ namespace Unitas.Bridge
 
         private void CollectSceneDocumentRecords(SceneDocumentParseState state)
         {
+            if (state.CurrentClassId == 1 && !string.IsNullOrEmpty(state.CurrentFileId) && state.CurrentLayer != 0)
+            {
+                state.GameObjectLayers[state.CurrentFileId] = state.CurrentLayer;
+            }
             if (state.CurrentClassId == 4 && state.CurrentFileId.Length > 0)
             {
                 state.Transforms.Add(new ParsedTransformRecord(
@@ -188,6 +193,7 @@ namespace Unitas.Bridge
             ParseDocumentHeader(headerLine, out state.CurrentClassId, out state.CurrentFileId);
             state.CurrentGameObjectFileId = string.Empty;
             state.CurrentName = string.Empty;
+            state.CurrentLayer = 0;
             state.CurrentMass = 1f;
             state.CurrentUseGravity = true;
             state.CurrentIsKinematic = false;
@@ -327,6 +333,10 @@ namespace Unitas.Bridge
             {
                 state.CurrentName = ParseStringValue(line);
             }
+            else if (line.StartsWith("m_Layer:", StringComparison.Ordinal))
+            {
+                state.CurrentLayer = (int)ParseFloatValue(line, 0f);
+            }
         }
 
         private void ApplySceneTransformProperty(SceneDocumentParseState state, string line)
@@ -459,6 +469,10 @@ namespace Unitas.Bridge
             else if (line.StartsWith("m_CollisionDetection:", StringComparison.Ordinal))
             {
                 state.Current2D.CollisionDetectionMode = (int)ParseFloatValue(line, 0f);
+            }
+            else if (line.StartsWith("m_Constraints:", StringComparison.Ordinal))
+            {
+                state.Current2D.Constraints = (int)ParseFloatValue(line, 0f);
             }
         }
 
@@ -948,6 +962,10 @@ namespace Unitas.Bridge
                 {
                     _sceneObjectNames[shiftedEntity] = name;
                 }
+                if (state.GameObjectLayers.TryGetValue(entry.Key, out int layer) && layer != 0)
+                {
+                    _sceneObjectLayers[shiftedEntity] = layer;
+                }
             }
         }
 
@@ -1041,7 +1059,8 @@ namespace Unitas.Bridge
                         record.Mass,
                         record.GravityScale,
                         ToRigidbodyInterpolation2D(record.Interpolation),
-                        ToCollisionDetectionMode2D(record.CollisionDetectionMode));
+                        ToCollisionDetectionMode2D(record.CollisionDetectionMode),
+                        (RigidbodyConstraints2D)record.Constraints);
                 }
             }
 
@@ -2307,7 +2326,7 @@ namespace Unitas.Bridge
 
         private readonly struct ParsedRigidbody2DRecord
         {
-            public ParsedRigidbody2DRecord(string gameObjectFileId, int bodyType, bool simulated, float mass, float gravityScale, int interpolation, int collisionDetectionMode)
+            public ParsedRigidbody2DRecord(string gameObjectFileId, int bodyType, bool simulated, float mass, float gravityScale, int interpolation, int collisionDetectionMode, int constraints = 0)
             {
                 GameObjectFileId = gameObjectFileId;
                 BodyType = bodyType;
@@ -2316,6 +2335,7 @@ namespace Unitas.Bridge
                 GravityScale = gravityScale;
                 Interpolation = interpolation;
                 CollisionDetectionMode = collisionDetectionMode;
+                Constraints = constraints;
             }
 
             public string GameObjectFileId { get; }
@@ -2331,6 +2351,8 @@ namespace Unitas.Bridge
             public int Interpolation { get; }
 
             public int CollisionDetectionMode { get; }
+
+            public int Constraints { get; }
         }
 
         private readonly struct ParsedBoxCollider2DRecord
@@ -2791,10 +2813,12 @@ namespace Unitas.Bridge
             public ulong LocalEntityIndex;
             public Dictionary<string, ulong> GameObjectEntities = new Dictionary<string, ulong>(StringComparer.Ordinal);
             public Dictionary<string, string> GameObjectNames = new Dictionary<string, string>(StringComparer.Ordinal);
+            public Dictionary<string, int> GameObjectLayers = new Dictionary<string, int>(StringComparer.Ordinal);
             public int CurrentClassId;
             public string CurrentFileId = string.Empty;
             public string CurrentGameObjectFileId = string.Empty;
             public string CurrentName = string.Empty;
+            public int CurrentLayer;
             public float CurrentMass = 1f;
             public bool CurrentUseGravity = true;
             public bool CurrentIsKinematic;

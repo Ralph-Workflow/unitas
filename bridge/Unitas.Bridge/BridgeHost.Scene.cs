@@ -585,6 +585,10 @@ namespace Unitas.Bridge
             {
                 created = new GameObject(name);
             }
+            if (_sceneObjectLayers.TryGetValue(entity, out int parsedLayer))
+            {
+                created.layer = parsedLayer;
+            }
             created.scene = default;
             created.AssignNativeEntityId(entity);
             ApplySceneTransform(entity, created);
@@ -670,6 +674,7 @@ namespace Unitas.Bridge
         private bool IsSceneEntity(ulong entity)
         {
             return _sceneObjectNames.ContainsKey(entity)
+                || _sceneObjectLayers.ContainsKey(entity)
                 || _sceneRigidbodies.ContainsKey(entity)
                 || _sceneSphereColliders.ContainsKey(entity)
                 || _sceneBoxColliders.ContainsKey(entity)
@@ -678,6 +683,11 @@ namespace Unitas.Bridge
                 || _sceneRigidbodies2D.ContainsKey(entity)
                 || _sceneBoxColliders2D.ContainsKey(entity)
                 || _sceneCircleColliders2D.ContainsKey(entity)
+                || _sceneCapsuleColliders2D.ContainsKey(entity)
+                || _scenePolygonColliders2D.ContainsKey(entity)
+                || _sceneEdgeColliders2D.ContainsKey(entity)
+                || _sceneCompositeColliders2D.ContainsKey(entity)
+                || _sceneTilemapColliders2D.ContainsKey(entity)
                 || _scenePlatformEffectors2D.ContainsKey(entity)
                 || _sceneSurfaceEffectors2D.ContainsKey(entity)
                 || _sceneAudioSources.ContainsKey(entity);
@@ -870,12 +880,23 @@ namespace Unitas.Bridge
             }
 
             ShiftEntityKeys(_sceneObjectNames, delta);
+            ShiftEntityKeys(_sceneObjectLayers, delta);
             ShiftEntityKeys(_sceneTransforms, delta);
             ShiftEntityKeys(_sceneRigidbodies, delta);
             ShiftEntityKeys(_sceneSphereColliders, delta);
             ShiftEntityKeys(_sceneBoxColliders, delta);
             ShiftEntityKeys(_sceneCapsuleColliders, delta);
             ShiftEntityKeys(_sceneMeshColliders, delta);
+            ShiftEntityKeys(_sceneRigidbodies2D, delta);
+            ShiftEntityKeys(_sceneBoxColliders2D, delta);
+            ShiftEntityKeys(_sceneCircleColliders2D, delta);
+            ShiftEntityKeys(_sceneCapsuleColliders2D, delta);
+            ShiftEntityKeys(_scenePolygonColliders2D, delta);
+            ShiftEntityKeys(_sceneEdgeColliders2D, delta);
+            ShiftEntityKeys(_sceneCompositeColliders2D, delta);
+            ShiftEntityKeys(_sceneTilemapColliders2D, delta);
+            ShiftEntityKeys(_scenePlatformEffectors2D, delta);
+            ShiftEntityKeys(_sceneSurfaceEffectors2D, delta);
             ShiftEntityKeys(_sceneCameras, delta);
             ShiftEntityKeys(_sceneAudioSources, delta);
             ShiftParentEntities(delta);

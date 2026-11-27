@@ -22,7 +22,7 @@ namespace UnityEngine
             return false;
         }
 
-        bool TryCreateCapsuleCollider2D(ulong entity, float radius, float height, int direction, Vector2 offset, bool isTrigger)
+        bool TryCreateCapsuleCollider2D(ulong entity, float radius, float height, int direction, Vector2 offset, bool isTrigger, uint layer = 0u)
         {
             return false;
         }

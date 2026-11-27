@@ -521,6 +521,9 @@ namespace Unitas.Bridge.Tests
                     Check.Equal("Wick capsule height is 1.375", 1.375f, wickCapsule.size.y);
                     Check.Equal("Wick collisionDetectionMode is Continuous", (int)CollisionDetectionMode2D.Continuous, (int)wickBody!.collisionDetectionMode);
                     Check.Equal("Wick interpolation is Interpolate", (int)RigidbodyInterpolation2D.Interpolate, (int)wickBody.interpolation);
+                    Check.Equal("Wick freezeRotation is true from scene m_Constraints", true, wickBody.freezeRotation);
+                    GameObject? oneWayObj = GameObject.Find("OneWayPlatform2D");
+                    Check.That("OneWayPlatform2D exists and carries scene layer 8", oneWayObj != null && oneWayObj.layer == 8);
 
                     ContactFilter2D groundFilter = new ContactFilter2D
                     {

@@ -369,7 +369,7 @@ namespace Unitas.Bridge
             return RuntimeInterop.unitas_runtime_body2d_set_constraints(_runtimeHandle, entity, (uint)constraints) == 0;
         }
 
-        public bool TryCreateCapsuleCollider2D(ulong entity, float radius, float height, int direction, Vector2 offset, bool isTrigger)
+        public bool TryCreateCapsuleCollider2D(ulong entity, float radius, float height, int direction, Vector2 offset, bool isTrigger, uint layer)
         {
             if (_isDisposed || entity == 0)
             {
@@ -384,7 +384,7 @@ namespace Unitas.Bridge
                 offset.x,
                 offset.y,
                 isTrigger ? 1 : 0,
-                0u) == 0;
+                layer) == 0;
         }
 
         public bool TryCreatePolygonCollider2D(ulong entity, ulong attachedBody, Vector2[] points, Vector2 offset, bool isTrigger, uint layer)
@@ -961,6 +961,7 @@ namespace Unitas.Bridge
                 body.simulated = rigidbodyMeta.Simulated;
                 body.interpolation = rigidbodyMeta.Interpolation;
                 body.collisionDetectionMode = rigidbodyMeta.CollisionDetectionMode;
+                body.constraints = rigidbodyMeta.Constraints;
             }
             if (_sceneCompositeColliders2D.TryGetValue(entity, out SceneCompositeCollider2DMetadata compositeMeta))
             {
@@ -1099,6 +1100,10 @@ namespace Unitas.Bridge
                 hasBody && !bodyMetadata.Simulated ? 0u : 1u,
                 hasBody ? (uint)bodyMetadata.Interpolation : 0u,
                 hasBody ? (uint)bodyMetadata.CollisionDetectionMode : 0u);
+            if (hasBody && bodyMetadata.Constraints != RigidbodyConstraints2D.None)
+            {
+                TrySetBodyConstraints2D(entity, bodyMetadata.Constraints);
+            }
             if (hasBox)
             {
                 SceneBoxCollider2DMetadata metadata = _sceneBoxColliders2D[entity];
@@ -1135,7 +1140,7 @@ namespace Unitas.Bridge
             {
                 float radius = capsuleMeta.Direction != 0 ? capsuleMeta.Size.x * 0.5f : capsuleMeta.Size.y * 0.5f;
                 float height = capsuleMeta.Direction != 0 ? capsuleMeta.Size.y : capsuleMeta.Size.x;
-                TryCreateCapsuleCollider2D(entity, radius, height, capsuleMeta.Direction, capsuleMeta.Offset, capsuleMeta.IsTrigger);
+                TryCreateCapsuleCollider2D(entity, radius, height, capsuleMeta.Direction, capsuleMeta.Offset, capsuleMeta.IsTrigger, (uint)owner.layer);
             }
             if (_scenePolygonColliders2D.TryGetValue(entity, out ScenePolygonCollider2DMetadata polygonMeta) && polygonMeta.Points.Length >= 3)
             {
@@ -1211,6 +1216,8 @@ namespace Unitas.Bridge
             public int Interpolation { get; set; }
 
             public int CollisionDetectionMode { get; set; }
+
+            public int Constraints { get; set; }
 
             public Vector2 Offset { get; set; }
 
@@ -1303,7 +1310,8 @@ namespace Unitas.Bridge
                         fields.Mass,
                         fields.GravityScale,
                         fields.Interpolation,
-                        fields.CollisionDetectionMode));
+                        fields.CollisionDetectionMode,
+                        fields.Constraints));
                     break;
                 case BOX_COLLIDER2D_CLASS:
                     boxColliders2D.Add(new ParsedBoxCollider2DRecord(
@@ -1356,7 +1364,7 @@ namespace Unitas.Bridge
 
         private readonly struct SceneRigidbody2DMetadata
         {
-            public SceneRigidbody2DMetadata(RigidbodyType2D bodyType, bool simulated, float mass, float gravityScale, RigidbodyInterpolation2D interpolation, CollisionDetectionMode2D collisionDetectionMode)
+            public SceneRigidbody2DMetadata(RigidbodyType2D bodyType, bool simulated, float mass, float gravityScale, RigidbodyInterpolation2D interpolation, CollisionDetectionMode2D collisionDetectionMode, RigidbodyConstraints2D constraints = RigidbodyConstraints2D.None)
             {
                 BodyType = bodyType;
                 Simulated = simulated;
@@ -1364,6 +1372,7 @@ namespace Unitas.Bridge
                 GravityScale = gravityScale;
                 Interpolation = interpolation;
                 CollisionDetectionMode = collisionDetectionMode;
+                Constraints = constraints;
             }
 
             public RigidbodyType2D BodyType { get; }
@@ -1377,6 +1386,8 @@ namespace Unitas.Bridge
             public RigidbodyInterpolation2D Interpolation { get; }
 
             public CollisionDetectionMode2D CollisionDetectionMode { get; }
+
+            public RigidbodyConstraints2D Constraints { get; }
         }
 
         private readonly struct SceneBoxCollider2DMetadata

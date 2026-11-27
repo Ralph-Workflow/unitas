@@ -356,8 +356,8 @@ The named non-default profiles, each with the five required fields:
   value_ms against ceiling_ms, and value_bytes against ceiling_bytes for the
   PlayerLoop per-frame allocation measurement; fails hard when run; last run
   2026-11-26, recorded in the gate-lane review entry below; staleness horizon
-  one milestone. The lane reports sixteen measurements: import throughput,
-  scene load, physics step, particle eval, animation eval, the
+  one milestone. The lane reports seventeen measurements: import throughput,
+  scene load, physics step, 2D physics step (`physics2d_step`), particle eval, animation eval, the
   100,000-GameObject frame loop, `world_scale_100k` (the core scene graph
   holding 100,000 GameObjects, with handle lookup under churn, bulk hierarchy
   reparent, and change-tracking drain), the managed-to-native scripting call
