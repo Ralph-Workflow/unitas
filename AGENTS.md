@@ -1,12 +1,16 @@
 # AGENTS.md
 
-This repository holds the unitas project-policy corpus and the verification
-tooling that enforces it.
+unitas is a commercial-quality game engine, editor, and player that opens and runs
+Unity 2022.3 LTS projects unchanged. This file holds the rules every agent working in
+this repository follows. The product itself is described in
+`docs/product-specification/`. Read it as the product's design documents, as a whole,
+not as a checklist.
 
 ## Before you start
 
 Read `docs/ralph-workflow-policy/execution-kernel.md`, then the policy files the
-changed surface triggers. The corpus names its own triggers; load nothing else.
+changed surface triggers. The corpus names its own triggers, so load no other policy
+files. Product requirements come from the specification, not from the policy.
 
 ## Verification
 
@@ -21,21 +25,8 @@ that cannot run is a red gate.
 
 ## Product status
 
-The Rust workspace and Milestone 1 asset-import/scene-graph foundation are
-implemented. The C# UnityEngine bridge is implemented, and its
-dotnet-build, dotnet-format, and dotnet-test gates run in the default
-`make verify` lane. The C# editor host and the Rust editor ABI are implemented
-too, and their gates run in that same default lane.
-
-The editor owns a scene document model now: it parses Unity tagged-YAML
-scenes and prefabs byte-exactly, edits them through eight scene commands
-(`scene.open`, `scene.hierarchy`, `scene.set_property`, `scene.create_object`,
-`scene.destroy_object`, `scene.save`, `editor.undo`, `editor.redo`) that are
-registered on the same MCP tool registry as every other command, with scopes,
-untrusted-content marking and change-set recording, and it undoes and redoes
-those edits byte-exactly. A headless edit-and-restore scenario on roll-a-ball
-proves the round trip against the real sample scene. The person-facing half of
-the editor (scene view, inspector, hierarchy window) is still open.
+The real state of the product is the code on `main` and the results of its gates and
+lanes. Read the code, not a summary of it.
 
 <!-- ralph-workflow-policy:begin v3 -->
 Quality policies live under `docs/ralph-workflow-policy/`. Every agent role loads

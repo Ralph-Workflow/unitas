@@ -5,47 +5,19 @@
 > and its APIs, file formats, and behavior change without notice. Nothing here
 > is released.
 
-unitas is an open-source game engine, runtime, and build product that is
-C#-first and built for AI agents and the Model Context Protocol (MCP). The goal
-is that an existing C# game project opens in place, and that an authorized
-agent, a developer, or both together can inspect it, change it, run it, test
-it, debug it, and build it without converting it first.
+unitas is an open-source, commercial-quality game engine, editor, and player. A
+Unity 2022.3 LTS project opens in place and runs unchanged, and a person can make,
+play, and ship a game with it on desktop, the web, and later mobile, XR, and consoles.
+An agent can do the same work through the editor's Model Context Protocol (MCP)
+interface. MCP belongs to the editor only. The engine and the games built with it
+contain none.
 
 ## Status
 
 The [product specification](docs/product-specification/INDEX.md) describes the
-finished product. Its present-tense statements are requirements, not claims
-about what exists today.
-
-What the repository contains today:
-
-* **Asset import.** Parsing of YAML-serialized scenes, prefabs, materials,
-  `.meta` files and GUIDs, and project settings (`crates/unitas-asset`).
-* **Scene graph and transforms** (`crates/unitas-core`).
-* **Runtime.** Script lifecycle ticks, coroutines, multi-scene loading, legacy
-  input, application lifecycle, and persistent preferences
-  (`crates/unitas-runtime`).
-* **Physics.** Rigidbodies; box, sphere, and capsule colliders; collision and
-  trigger callbacks; raycasts and other queries; and a kinematic character
-  controller (`crates/unitas-physics`).
-* **Animation.** Animation clips, curves, and animator controllers
-  (`crates/unitas-animation`).
-* **Audio.** Scene audio playback of WAV clips (`crates/unitas-audio`).
-* **Rendering.** A headless software renderer for scenes and their materials
-  (`crates/unitas-render`).
-* **Builds.** Build configuration, content bundles, build reports, and a
-  `unitas-player` binary that launches a bundle and steps it headlessly
-  (`crates/unitas-build`).
-* **C# bridge.** A C# scripting API that runs component scripts against the
-  Rust runtime, plus a declarative playtest scenario runner (`bridge/`).
-* **Editor host and MCP automation.** A headless C# editor host that serves
-  the Model Context Protocol over stdio and HTTP, registers project, scene,
-  audit, play-session, capture, and native Rust tools, and binds to the Rust
-  editor ABI (`editor/`, `crates/unitas-editor-abi`).
-
-Not built yet: the visual editor, opening an existing project directly,
-platform targets beyond the macOS player, and most of the
-[feature catalog](docs/product-specification/feature-catalog.md).
+finished product. Its present-tense statements are requirements, not claims about
+what exists today. The real state of the product is the code on `main` and the
+results of its gates and lanes.
 
 ## Repository layout
 
@@ -53,7 +25,7 @@ platform targets beyond the macOS player, and most of the
 | --- | --- |
 | `crates/` | Rust workspace: engine, runtime, build, and editor-ABI crates |
 | `bridge/` | C# scripting API, bridge host, and their tests |
-| `editor/` | C# editor host: MCP tools, play sessions, and the headless CLI |
+| `editor/` | The editor and its MCP interface |
 | `docs/product-specification/` | What the finished product does, feature by feature |
 | `docs/ralph-workflow-policy/` | Quality policy that every change must satisfy |
 | `tools/` | Verification gates and the CLA check, in standard-library Python |
