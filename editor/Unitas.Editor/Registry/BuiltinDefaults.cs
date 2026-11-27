@@ -73,8 +73,6 @@ namespace Unitas.Editor.Mcp
                 });
         }
 
-        // Unity keeps scenes under Assets; anchoring there also avoids the
-        // generated root folders (Library, obj, ...) that project.list filters.
         private static IEnumerable<JsonObject> ScanScenes(string root)
         {
             string assets = Path.Combine(root, "Assets");
@@ -93,9 +91,6 @@ namespace Unitas.Editor.Mcp
             }
         }
 
-        // The generated folders hold build output rather than project scenes,
-        // so the walk skips them the way project.list does; without that a
-        // project root that is a whole repository walks every build artefact.
         private static void CollectSceneFiles(string directory, List<string> sceneFiles)
         {
             string[] entries;
@@ -131,8 +126,6 @@ namespace Unitas.Editor.Mcp
             }
         }
 
-        // Scene inspection the asset pipeline already trusts: a GameObject is a
-        // class-1 YAML document, so counting document headers is the object count.
         private static int CountGameObjects(string sceneFile)
         {
             int count = 0;
@@ -154,9 +147,6 @@ namespace Unitas.Editor.Mcp
             return count;
         }
 
-        // Trust state of the open project for the calling session: running project
-        // code is the trusted verb, so probe the ExecuteProjectCode grant the same
-        // way the headless CLI maps it to refused-untrusted-project.
         private static JsonObject TrustState(McpHost host)
         {
             bool mayRunProjectCode = false;
@@ -192,6 +182,7 @@ namespace Unitas.Editor.Mcp
             ChangeSetStore changeSets = new ChangeSetStore(host);
             ChangeReviewTools.Register(host, changeSets);
             ProjectTools.Register(host, changeSets);
+            AssetTools.Register(host, changeSets);
             SceneTools.Register(host, changeSets);
             ScriptTools.Register(host);
             TestTools.Register(host);
@@ -244,9 +235,6 @@ namespace Unitas.Editor.Mcp
             return host;
         }
 
-        // The command line is a person-driven local invocation, so a test run
-        // from it holds the scope that runs project code; the grant is bound to
-        // the CLI agent of that invocation and to no other session.
         private static void GrantCliTestExecution(McpHost host, string[]? args)
         {
             if (args == null || !HeadlessCli.IsCliInvocation(args))

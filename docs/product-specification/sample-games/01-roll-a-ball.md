@@ -441,19 +441,19 @@ different score value, has a distinct material and collection sound, appears at
 specified positions in an arena, and shows a score-feedback message in the UI
 when collected. The request includes a test that checks the awarded score.
 
-Status of the reference change request: the benchmark lane runs the change
-request against a copy of this sample and demonstrates that the project
-compiles with no errors, that the test the request adds and the sample's
-existing tests pass, that the request's acceptance scenario passes in editor
-play mode, that the scenarios that passed at the starting revision still pass,
-that the change set holds only the changes the request allows, and that
-rejecting the change set returns the copy to its starting content. The run does
-not demonstrate that the acceptance scenario passes in a player on a declared
-target, because it builds no player, and it does not demonstrate that the
-changed project opens in Unity 2022.3 LTS, because that editor is not present
-in the environment the run executes in. The engine exposes no command that
-creates or imports a binary asset, and the benchmark records that absence as a
-parity failure of AUT-001 naming the capability.
+Status of the reference change request: the benchmark lane (`make verify-benchmark`)
+runs the change request against a copy of this sample, creates and imports the
+request's distinct material and binary collection sound through the
+`assets.import` MCP command, and demonstrates that the project compiles with no
+errors, that the test the request adds and the sample's existing tests pass,
+that the request's acceptance scenario passes in editor play mode, that the
+scenarios that passed at the starting revision still pass, that the change set
+holds only the changes the request allows, and that rejecting the change set
+returns the copy to its starting content. The run does not demonstrate that the
+acceptance scenario passes in a player on a declared target, because it builds
+no player, and it does not demonstrate that the changed project opens in Unity
+2022.3 LTS, because that editor is not present in the environment the run
+executes in.
 
 A second change request adds a magnet power-up. For 5 seconds, it pulls pickups
 within 3 m toward the marble. The request includes a scenario proving that

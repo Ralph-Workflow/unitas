@@ -1706,6 +1706,53 @@ def test_verify_benchmark_entry_point_passes_and_fails(tmp_path: Path) -> None:
     assert "verify-benchmark failed: inputs-present" in stdout.getvalue()
 
 
+def test_verify_benchmark_rerun_sample_scenarios_cleans_and_isolates_persist(
+    tmp_path: Path,
+) -> None:
+    persist_dir = tmp_path / "persist"
+    persist_dir.mkdir(parents=True)
+    stale_marker = persist_dir / "stale.bin"
+    stale_marker.write_text("stale", encoding="utf-8")
+    scenarios = (
+        ("collect_all", "collect_all.json", (), False),
+        ("persist_write", "persist_write.json", (), True),
+        ("persist_read", "persist_read.json", (), True),
+        ("ghost_replay", "ghost_replay.scenario.json", ("--repeat", "2"), True),
+    )
+    recorded_paths: dict[str, str | None] = {}
+    stale_on_first_run = False
+
+    def fake_run_scenario(
+        name: str,
+        _scenario_file: str,
+        _extra_args: tuple[str, ...],
+        scenario_env: dict[str, str],
+    ) -> int:
+        nonlocal stale_on_first_run
+        if not recorded_paths:
+            stale_on_first_run = stale_marker.exists()
+        recorded_paths[name] = scenario_env.get("UNITAS_PERSISTENT_DATA_PATH")
+        return 0
+
+    with (
+        mock.patch.object(verify_benchmark, "REPORT_DIR", tmp_path),
+        mock.patch.object(verify_benchmark, "PERSIST_DIR", persist_dir),
+        mock.patch.object(verify_samples, "SCENARIOS", scenarios),
+        mock.patch.object(verify_samples, "run_scenario", fake_run_scenario),
+    ):
+        ok, detail = verify_benchmark.rerun_sample_scenarios({"BASE": "1"})
+    assert ok is True
+    assert "all 4 sample scenarios passed" in detail
+    assert stale_on_first_run is False
+    assert recorded_paths["collect_all"] is None
+    assert recorded_paths["persist_write"] == str(persist_dir)
+    assert recorded_paths["persist_read"] == str(persist_dir)
+    ghost_path = recorded_paths["ghost_replay"]
+    assert ghost_path is not None
+    assert ghost_path != str(persist_dir)
+    assert ghost_path.startswith(str(tmp_path))
+
+
 _TIMED_GATE_CHILD_SOURCE = """import os
 import pathlib
 import sys

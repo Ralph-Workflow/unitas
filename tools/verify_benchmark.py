@@ -8,6 +8,7 @@ import secrets
 import shutil
 import subprocess
 import sys
+import tempfile
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -520,11 +521,23 @@ def rerun_sample_scenarios(env: dict[str, str]) -> tuple[bool, str]:
     verify_samples.SAMPLE_ROOT = WORKSPACE_SAMPLES / "roll-a-ball"
     verify_samples.SCENARIO_DIR = WORKSPACE_SAMPLES / "roll-a-ball" / "Scenarios"
     verify_samples.REPORT_DIR = SCENARIO_REPORT_DIR
+    if PERSIST_DIR.exists():
+        shutil.rmtree(PERSIST_DIR)
+    PERSIST_DIR.mkdir(parents=True, exist_ok=True)
     persist_env = dict(env)
     persist_env["UNITAS_PERSISTENT_DATA_PATH"] = str(PERSIST_DIR)
+    own_persist_scenarios = frozenset({"ghost_replay"})
     failures: list[str] = []
     for name, scenario_file, extra_args, needs_persist in verify_samples.SCENARIOS:
-        scenario_env = persist_env if needs_persist else env
+        if not needs_persist:
+            scenario_env = env
+        elif name in own_persist_scenarios:
+            scenario_env = dict(env)
+            scenario_env["UNITAS_PERSISTENT_DATA_PATH"] = str(
+                Path(tempfile.mkdtemp(prefix="prefs-", dir=PERSIST_DIR.parent))
+            )
+        else:
+            scenario_env = persist_env
         rc = verify_samples.run_scenario(name, scenario_file, extra_args, scenario_env)
         if rc != 0:
             failures.append(f"{name} (exit {rc})")

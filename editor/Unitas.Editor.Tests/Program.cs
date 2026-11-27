@@ -13,7 +13,6 @@ namespace Unitas.Editor.Tests
                 return EditorPerfTests.Run(args);
             }
 
-            // The suite table is explicit so the runner discovers suites without reflection.
             (string Name, Action Run)[] suites =
             {
                 ("AuditTests", AuditTests.Run),
@@ -41,6 +40,7 @@ namespace Unitas.Editor.Tests
                 ("StdioTransportTests", StdioTransportTests.Run),
                 ("UntrustedContentTests", UntrustedContentTests.Run),
                 ("AuthoringToolsTests", AuthoringToolsTests.Run),
+                ("AssetToolsTests", AssetToolsTests.Run),
                 ("ScenarioGlueDiscoveryTests", ScenarioGlueDiscoveryTests.Run),
                 ("SceneTests", SceneTests.Run),
                 ("UndoHistoryTests", UndoHistoryTests.Run),

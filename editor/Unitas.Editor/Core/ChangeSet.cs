@@ -50,9 +50,6 @@ namespace Unitas.Editor.Mcp
         public string ChangeSetId { get; }
     }
 
-    // A held agent-identity mutation under the project review policy (EDT-008,
-    // contract C1). The JSON shape is pinned: {id, author, createdUtc, status,
-    // operations}.
     public sealed class ChangeSet
     {
         private readonly List<JsonObject> operations = new List<JsonObject>();
@@ -64,6 +61,12 @@ namespace Unitas.Editor.Mcp
             CreatedUtc = createdUtc;
             Status = ChangeSetStatus.Pending;
             operations.Add(operation);
+        }
+
+        internal void AddOperation(JsonObject operation)
+        {
+            ArgumentNullException.ThrowIfNull(operation);
+            operations.Add((JsonObject)operation.DeepClone());
         }
 
         public string Id { get; }

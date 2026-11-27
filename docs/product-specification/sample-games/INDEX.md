@@ -402,22 +402,22 @@ A run succeeds only when every criterion is observed:
   project to its starting content.
 
 Status of the benchmark: `make verify-benchmark` runs the agent session
-against a copy of the sample, and the run demonstrates the criteria it
-observes in editor play mode: the project compiles with no errors, the test
-the agent added and the project's existing tests pass, the change request's
-acceptance scenario passes, the scenarios that passed at the starting revision
-still pass, the change set holds only the changes the change request allows,
-and rejecting the change set returns the copied project to its starting
-content. Two criteria are not observed by that run and are recorded as not
-demonstrated rather than as passed: the acceptance scenario is not run in a
-player on a declared target, because the run exercises the sample in editor
-play mode and builds no player; and the changed project is not opened in Unity
-2022.3 LTS, because that editor is not present in the environment the run
-executes in. The criteria above are unchanged: a run succeeds only when every
-criterion is observed. A capability the agent needs and the product does not
-provide is reported as a parity failure of AUT-001 naming the capability, and
-the absence of a command that creates or imports a binary asset is reported
-that way.
+against a copy of the sample, creates and imports the change request's distinct
+material and binary collection sound through the `assets.import` MCP command,
+and demonstrates the criteria it observes in editor play mode: the project
+compiles with no errors, the test the agent added and the project's existing
+tests pass, the change request's acceptance scenario passes, the scenarios that
+passed at the starting revision still pass, the change set holds only the
+changes the change request allows, and rejecting the change set returns the
+copied project to its starting content. Two criteria are not observed by that
+run and are recorded as not demonstrated rather than as passed: the acceptance
+scenario is not run in a player on a declared target, because the run exercises
+the sample in editor play mode and builds no player; and the changed project is
+not opened in Unity 2022.3 LTS, because that editor is not present in the
+environment the run executes in. The criteria above are unchanged: a run
+succeeds only when every criterion is observed. A capability the agent needs
+and the product does not provide is reported as a parity failure of AUT-001
+naming the capability.
 
 The run result records the sample revision, the change request, the unitas
 version, the agent client as it identified itself, elapsed time, the number of

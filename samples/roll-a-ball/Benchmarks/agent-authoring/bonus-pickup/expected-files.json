@@ -1,5 +1,7 @@
 {
   "files": [
+    "samples/roll-a-ball/Assets/Audio/BonusChime.wav",
+    "samples/roll-a-ball/Assets/Audio/BonusChime.wav.meta",
     "samples/roll-a-ball/Assets/Materials/BonusPickup.mat",
     "samples/roll-a-ball/Assets/Materials/BonusPickup.mat.meta",
     "samples/roll-a-ball/Assets/Scripts/BonusPickup.cs",

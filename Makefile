@@ -21,7 +21,7 @@ EDITOR_TEST_SHARDS := AuditTests,BuildToolsTests,BuiltinDefaultsTests,ChangeRevi
 	PlaySessionLifecycleTests \
 	PlayWorkerCrashTests \
 	PlayLiveCaptureTests,PlayPersonOnlyGrantTests,PlayRuntimeDisposalTests \
-	AuthoringToolsTests \
+	AuthoringToolsTests,AssetToolsTests \
 	DebugToolsTests \
 	SceneTests,UndoHistoryTests,SceneToolsTests
 

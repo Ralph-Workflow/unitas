@@ -5,12 +5,9 @@ using System.Text.Json.Nodes;
 
 namespace Unitas.Editor.Mcp
 {
-    // Holds agent-identity mutations under the project review policy (EDT-008):
-    // a held mutation stays pending until a person approves it (then it is
-    // applied through the applier) or rejects it. Every transition appends an
-    // audit record, so the store is the single choke point for transitions.
     public sealed class ChangeSetStore
     {
+        private const string Base64EncodingPrefix = "base64:";
         private readonly McpHost host;
         private readonly Func<JsonObject, JsonObject>? applier;
         private readonly List<ChangeSet> order = new List<ChangeSet>();
@@ -150,6 +147,11 @@ namespace Unitas.Editor.Mcp
                         File.Delete(target);
                         PruneEmptyParentDirectories(target, roots);
                     }
+                    else if (before.StartsWith(Base64EncodingPrefix, StringComparison.Ordinal))
+                    {
+                        byte[] raw = Convert.FromBase64String(before.Substring(Base64EncodingPrefix.Length));
+                        File.WriteAllBytes(target, raw);
+                    }
                     else
                     {
                         File.WriteAllText(target, before);
@@ -278,9 +280,34 @@ namespace Unitas.Editor.Mcp
         {
             try
             {
-                return File.Exists(path) && File.ReadAllText(path) == content;
+                if (!File.Exists(path))
+                {
+                    return false;
+                }
+
+                if (content.StartsWith(Base64EncodingPrefix, StringComparison.Ordinal))
+                {
+                    byte[] expected = Convert.FromBase64String(content.Substring(Base64EncodingPrefix.Length));
+                    byte[] actual = File.ReadAllBytes(path);
+                    if (expected.Length != actual.Length)
+                    {
+                        return false;
+                    }
+
+                    for (int index = 0; index < expected.Length; index++)
+                    {
+                        if (expected[index] != actual[index])
+                        {
+                            return false;
+                        }
+                    }
+
+                    return true;
+                }
+
+                return File.ReadAllText(path) == content;
             }
-            catch (Exception error) when (error is IOException || error is UnauthorizedAccessException)
+            catch (Exception error) when (error is IOException || error is UnauthorizedAccessException || error is FormatException)
             {
                 return false;
             }

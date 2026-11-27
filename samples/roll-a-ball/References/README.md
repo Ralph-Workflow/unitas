@@ -121,6 +121,28 @@ nothing: the approved files are the exact captures the lane produces today,
 and the lane still fails when a capture differs from them by more than 0.5 %
 of its pixels.
 
+## What the 2026-11-27 trail-binding re-approval changed
+
+`s8_results_gold_checkpoint.bmp` was re-approved on 2026-11-27 because the
+bridge now binds a managed `TrailRenderer` component when a scene-backed
+`GameObject` owns a native trail (`TrailRenderer.BindNativeTrail` called from
+`GameObject.AssignNativeEntityId` in `bridge/UnityEngine/GameObject.cs` and
+`bridge/UnityEngine/TrailRenderer.cs`). Before that binding, the marble's
+`GetComponent<TrailRenderer>()` returned `null`, so `PlayerController.Update`
+could not control `trail.emitting` from the marble's velocity and the native
+trail emitted continuously across the scenario. With the managed
+`TrailRenderer` bound, `PlayerController.Update` sets
+`trail.emitting = body.velocity.magnitude >= TrailEmissionSpeed` (`10f`),
+which gates the speed trail to speeds at or above the emission threshold.
+
+Against the prior capture, `s8_results_gold_checkpoint.bmp` differs by
+439/65536 pixels (0.67 %) in the trail region behind the marble (`x` in
+`115..190`, `y` in `144..173`), where the un-gated trail ribbon no longer
+covers the arena floor. The other six approved references are unchanged
+(0/65536 differing pixels). Three consecutive runs of
+`Scenarios/s8_results_gold_checkpoint.scenario.json` produced byte-identical
+captures (sha256 `c80169dd…`). The declared tolerance of 0.005 is unchanged.
+
 ## Why the tolerance is 0.005
 
 `tolerance` is the fraction of pixels allowed to differ. The references are
@@ -175,3 +197,12 @@ captures the lane produces now at the Low and Medium levels of the sample's
 `QualitySettings.asset` (shadows off and the hard shadow map), and
 `s8_quality_high.bmp` is unchanged because the project's default level is
 `High`. The tolerance `0.005` is unchanged.
+
+Re-approved on 2026-11-27 by the development session that refreshed
+`s8_results_gold_checkpoint.bmp` after managed `TrailRenderer` binding let
+`PlayerController` gate the marble's speed trail by its emission-speed
+threshold, against the same requirements: `s8_results_gold_checkpoint.bmp` is
+the deterministic capture the lane produces now (`439/65536` (`0.67 %`) in the
+trail region behind the marble against the prior capture, sha256 `c80169dd…`
+across three consecutive runs), and the other six references are unchanged.
+The tolerance `0.005` is unchanged.

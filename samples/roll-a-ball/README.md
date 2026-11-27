@@ -505,3 +505,39 @@ The steps this note owns are recorded here rather than left implicit:
   lane fails the step when a capture drifts past that tolerance; the
   reference-approval record is `References/README.md` and the determinism
   fix that made the approval honest is recorded above.
+
+## Peripheral gaps found during discovery — tracked, not closed
+
+Two gaps outside the sample's own scenarios are recorded here, so that this
+file's green lane is not read as a claim that they are closed.
+
+- **No standalone runtime-log read tool for agents.** The editor's MCP
+  registry registers `project.*`, `scene.*`, `play.*`, `debug.*`, `changes.*`,
+  `operations.*`, `scripts.*`, `audit.*`, `tests.run`, `capture`,
+  `scenario.run` and the native `assets.*`, `diagnostics.*`, `profiler.*`,
+  `compat.*` tools, and no `logs.*` tool among them: `rg 'logs'
+  editor/Unitas.Editor/Registry/ editor/Unitas.Editor/Play/` matches nothing.
+  The runtime log itself is recorded by the bridge's `UnityEngine.LogRecorder`
+  (`bridge/UnityEngine/LogRecorder.cs:44`) and is consumed only by the
+  tooling that asserts on it — the playtest framework's `log` checkpoint
+  (`bridge/Unitas.Bridge/Playtest/CheckpointEvaluators.cs:43`) and the NUnit
+  log assertions — so an agent cannot read a log line for itself, and there is
+  no `logs.read`-style tool.
+- **The capture-to-disk path is unproven in the benchmark lane.** The managed
+  camera's own capture-to-disk is proven
+  (`bridge/Unitas.Bridge.Tests/RenderTests.cs:358` reads the file back), and so
+  is the BMP writer
+  (`crates/unitas-render/tests/render/render_tests.rs:309-312`). The path that
+  writes the sample's capture to disk, `capture_sample_reference_bmp`
+  (`crates/unitas-build/src/player.rs:811`), sits behind the `device` feature,
+  needs a GPU, and is called only by the player's `--capture-reference` flag
+  (`crates/unitas-build/src/bin/unitas-player.rs:141`), while the editor's
+  `capture` MCP tool (`editor/Unitas.Editor/Play/CaptureTool.cs:19`) returns its
+  frame payload in memory and the agent-authoring benchmark plan
+  (`samples/roll-a-ball/Benchmarks/agent-authoring/bonus-pickup/agent-steps.json`)
+  and acceptance scenario (`acceptance.scenario.json`) take no capture to disk,
+  so neither the default gate nor the benchmark lane (`make verify-benchmark`)
+  verifies capture-to-disk evidence.
+
+Neither gap is closed, and no other claim in this file changes because of
+them.
