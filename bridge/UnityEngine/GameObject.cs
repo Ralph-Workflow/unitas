@@ -147,6 +147,7 @@ namespace UnityEngine
         internal void AssignNativeEntityId(ulong entity)
         {
             _nativeEntityId = entity;
+            TrailRenderer.BindNativeTrail(this);
         }
 
         public GameObject() : this("New Game Object")

@@ -49,6 +49,27 @@ namespace UnityEngine
         /// The native trail the managed component reads and writes.
         public static ITrailProvider? Provider { get; set; }
 
+        /// <summary>
+        /// Binds the managed trail of a GameObject whose entity owns a native trail, so a
+        /// scene that authored a trail exposes it as a component of its GameObject.
+        /// </summary>
+        internal static void BindNativeTrail(GameObject owner)
+        {
+            ITrailProvider? provider = Provider;
+            ulong entity = owner.NativeEntityId;
+            if (provider == null || entity == 0 || owner.GetComponent<TrailRenderer>() != null)
+            {
+                return;
+            }
+
+            if (!provider.TryGetTrailEmitting(entity, out _))
+            {
+                return;
+            }
+
+            owner.AttachComponent(new TrailRenderer(), typeof(TrailRenderer));
+        }
+
         private bool _emitting = true;
         private TrailSettings _settings = new TrailSettings(
             DefaultTime,
