@@ -24,6 +24,8 @@ pub use crate::trail::TRAIL_RENDERER_CLASS;
 pub use scene_audio::{AudioFilterComponent, AudioFilterKind};
 pub use scene_physics::parse_physic_material;
 
+#[path = "scene_anim.rs"]
+mod scene_anim;
 #[path = "scene_audio.rs"]
 mod scene_audio;
 #[path = "scene_physics.rs"]
@@ -39,6 +41,7 @@ pub const CAMERA_CLASS: u32 = 20;
 pub const MESH_RENDERER_CLASS: u32 = 23;
 pub const MESH_FILTER_CLASS: u32 = 33;
 pub const MESH_COLLIDER_CLASS: u32 = 64;
+pub const ANIMATOR_CLASS: u32 = 95;
 pub const LIGHT_CLASS: u32 = 108;
 pub const SPRITE_RENDERER_CLASS: u32 = 212;
 pub const CANVAS_CLASS: u32 = 223;
@@ -723,6 +726,16 @@ pub struct TrailBinding {
     pub binding: TrailRendererBinding,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct AnimatorBinding {
+    pub entity: EntityId,
+    pub controller_guid: Option<String>,
+    pub enabled: bool,
+    pub apply_root_motion: bool,
+    pub culling_mode: i32,
+    pub update_mode: i32,
+}
+
 #[derive(Debug)]
 pub struct AssembledScene {
     pub graph: SceneGraph,
@@ -733,6 +746,7 @@ pub struct AssembledScene {
     pub render: RenderBinding,
     pub particles: Vec<ParticleBinding>,
     pub trails: Vec<TrailBinding>,
+    pub animators: Vec<AnimatorBinding>,
     pub ui: UiBinding,
     pub diagnostics: Vec<(EntityId, String)>,
 }
@@ -748,6 +762,7 @@ struct DocumentSet {
     render: RenderBinding,
     particles: Vec<ParticleBinding>,
     trails: Vec<TrailBinding>,
+    animators: Vec<AnimatorBinding>,
     ui: UiBinding,
     unsupported_classes: Vec<(EntityId, u32)>,
 }
@@ -873,6 +888,7 @@ fn assemble_stream(
         render: set.render,
         particles: set.particles,
         trails: set.trails,
+        animators: set.animators,
         ui: set.ui,
         diagnostics,
     })
@@ -1025,6 +1041,7 @@ fn assemble_documents(
         render: RenderBinding::default(),
         particles: Vec::new(),
         trails: Vec::new(),
+        animators: Vec::new(),
         ui: UiBinding::default(),
         unsupported_classes: Vec::new(),
     };
@@ -1117,6 +1134,7 @@ fn assemble_documents(
         collect_particles_and_trails(stream, &set.game_objects, &instance_roots);
     set.particles = particles;
     set.trails = trails;
+    set.animators = scene_anim::collect_animators(stream, &set.game_objects, &instance_roots);
     set.unsupported_classes =
         collect_unsupported_components(stream, &set.game_objects, &instance_roots);
     if expand {
@@ -2209,6 +2227,7 @@ fn handled_component_class(class_id: u32) -> bool {
                 | PHYSIC_MATERIAL_CLASS
                 | PARTICLE_SYSTEM_CLASS
                 | TRAIL_RENDERER_CLASS
+                | ANIMATOR_CLASS
                 | PREFAB_INSTANCE_CLASS
                 | CANVAS_CLASS
                 | RECT_TRANSFORM_CLASS

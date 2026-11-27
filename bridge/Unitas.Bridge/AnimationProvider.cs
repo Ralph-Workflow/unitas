@@ -248,6 +248,99 @@ namespace Unitas.Bridge
             return true;
         }
 
+        public readonly struct FiredAnimatorEvent
+        {
+            public FiredAnimatorEvent(ulong entityId, string functionName, float floatParameter, int intParameter, string stringParameter)
+            {
+                EntityId = entityId;
+                FunctionName = functionName;
+                FloatParameter = floatParameter;
+                IntParameter = intParameter;
+                StringParameter = stringParameter;
+            }
+
+            public ulong EntityId { get; }
+
+            public string FunctionName { get; }
+
+            public float FloatParameter { get; }
+
+            public int IntParameter { get; }
+
+            public string StringParameter { get; }
+        }
+
+        public List<FiredAnimatorEvent> DrainFiredEvents()
+        {
+            List<FiredAnimatorEvent> events = new List<FiredAnimatorEvent>();
+            if (_runtimeHandle == 0UL)
+            {
+                return events;
+            }
+
+            int byteLength = RuntimeInterop.unitas_runtime_animator_drain_fired_events(_runtimeHandle);
+            if (byteLength < 4)
+            {
+                return events;
+            }
+
+            IntPtr buffer = RuntimeInterop.unitas_runtime_path_buffer(_runtimeHandle, (ulong)byteLength);
+            if (buffer == IntPtr.Zero)
+            {
+                return events;
+            }
+
+            byte[] payload = ReadBytes(buffer, byteLength);
+            uint count = BitConverter.ToUInt32(payload, 0);
+            int offset = 4;
+            for (uint index = 0; index < count; index++)
+            {
+                if (offset + 20 > payload.Length)
+                {
+                    break;
+                }
+
+                ulong entityId = BitConverter.ToUInt64(payload, offset);
+                offset += 8;
+                float floatParam = BitConverter.ToSingle(payload, offset);
+                offset += 4;
+                int intParam = BitConverter.ToInt32(payload, offset);
+                offset += 4;
+
+                int fnLen = (int)BitConverter.ToUInt32(payload, offset);
+                offset += 4;
+                if (fnLen < 0 || offset + fnLen > payload.Length)
+                {
+                    break;
+                }
+
+                string functionName = fnLen > 0 ? Encoding.UTF8.GetString(payload, offset, fnLen) : string.Empty;
+                offset += fnLen;
+
+                if (offset + 4 > payload.Length)
+                {
+                    break;
+                }
+
+                int strLen = (int)BitConverter.ToUInt32(payload, offset);
+                offset += 4;
+                if (strLen < 0 || offset + strLen > payload.Length)
+                {
+                    break;
+                }
+
+                string stringParam = strLen > 0 ? Encoding.UTF8.GetString(payload, offset, strLen) : string.Empty;
+                offset += strLen;
+
+                if (!string.IsNullOrEmpty(functionName))
+                {
+                    events.Add(new FiredAnimatorEvent(entityId, functionName, floatParam, intParam, stringParam));
+                }
+            }
+
+            return events;
+        }
+
         private bool TryWriteName(string name, int minimumCapacity, out IntPtr buffer, out ulong length)
         {
             byte[] utf8 = Encoding.UTF8.GetBytes(name ?? string.Empty);

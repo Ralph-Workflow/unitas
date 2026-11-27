@@ -36,6 +36,7 @@ EDITOR_SCENARIOS = (
     "restart_recovery.scenario.json",
     "combo_timing_sweep.json",
     "pointer_ui.scenario.json",
+    "../../2d-platformer/Scenarios/animator_smoke.json",
     "../../2d-platformer/Scenarios/movement_smoke.json",
     "../../2d-platformer/Scenarios/one_way_platform.json",
 )
@@ -118,6 +119,12 @@ SCENARIOS: tuple[tuple[str, str, tuple[str, ...], bool], ...] = (
     ("nested_prefab", "nested_prefab.json", ("--repeat", "2"), False),
     ("speed_trail", "speed_trail.json", ("--repeat", "2"), False),
     ("attract_ghost", "attract_ghost.json", ("--repeat", "2"), False),
+    (
+        "animator_smoke",
+        "../../2d-platformer/Scenarios/animator_smoke.json",
+        ("--repeat", "2"),
+        False,
+    ),
     (
         "movement_smoke",
         "../../2d-platformer/Scenarios/movement_smoke.json",

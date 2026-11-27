@@ -547,6 +547,14 @@ impl AnimationWorld {
             .map(|entry| entry.fired_events.len())
     }
 
+    /// Takes the events the animator fired since the last take, so the player
+    /// that delivers them to scripts gets each event exactly once.
+    pub fn take_fired_events(&mut self, entity: EntityId) -> Vec<AnimationEvent> {
+        self.entries
+            .get_mut(&entity)
+            .map_or_else(Vec::new, |entry| std::mem::take(&mut entry.fired_events))
+    }
+
     pub fn diagnostics(&self, entity: EntityId) -> Option<&[String]> {
         self.entries
             .get(&entity)

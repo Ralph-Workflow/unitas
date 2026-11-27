@@ -393,6 +393,7 @@ namespace Unitas.Bridge
                 DispatchPhaseInExecutionOrder(_updatePhaseHandles, script => script.Update());
                 _updatePhaseHandles.Clear();
             }
+            PumpFiredAnimationEvents();
             if (_lateUpdatePhaseHandles.Count > 0)
             {
                 DispatchPhaseInExecutionOrder(_lateUpdatePhaseHandles, script => script.LateUpdate());
@@ -412,6 +413,42 @@ namespace Unitas.Bridge
             // The clicks the runtime queued this frame reach the managed buttons
             // here, the point the packaged player pumps them at.
             UnityEngine.UI.Ui.PumpClicks();
+        }
+
+        private void PumpFiredAnimationEvents()
+        {
+            if (_isDisposed || _runtimeHandle == 0)
+            {
+                return;
+            }
+
+            List<RuntimeAnimationProvider.FiredAnimatorEvent> events = _animationProvider.DrainFiredEvents();
+            for (int index = 0; index < events.Count; index++)
+            {
+                RuntimeAnimationProvider.FiredAnimatorEvent fired = events[index];
+                GameObject? owner = ResolveGameObjectByEntity(fired.EntityId);
+                if (owner == null || owner.IsDestroyed || !owner.activeInHierarchy)
+                {
+                    continue;
+                }
+
+                if (!string.IsNullOrEmpty(fired.StringParameter))
+                {
+                    owner.SendMessage(fired.FunctionName, fired.StringParameter, SendMessageOptions.DontRequireReceiver);
+                }
+                else if (fired.FloatParameter != 0f)
+                {
+                    owner.SendMessage(fired.FunctionName, fired.FloatParameter, SendMessageOptions.DontRequireReceiver);
+                }
+                else if (fired.IntParameter != 0)
+                {
+                    owner.SendMessage(fired.FunctionName, fired.IntParameter, SendMessageOptions.DontRequireReceiver);
+                }
+                else
+                {
+                    owner.SendMessage(fired.FunctionName, SendMessageOptions.DontRequireReceiver);
+                }
+            }
         }
 
         private void SyncAudioSourceTransforms()

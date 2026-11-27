@@ -2,7 +2,6 @@ use std::cell::RefCell;
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
-use unitas_animation::SampledBinding;
 use unitas_asset::particle::ParticleSystemBinding;
 use unitas_asset::project_settings::{
     Physics2DProjectSettings, PhysicsProjectSettings, QualityLevel, QualitySettings,
@@ -37,7 +36,7 @@ use self::runtime_physics::{
     ordered_pair, rotations_equivalent, shift_scene_bodies, validate_bodies,
 };
 use self::ui_components::UiComponents;
-use crate::animation::{AnimationRuntimeDiagnostic, AnimationWorld, apply_transform_property};
+use crate::animation::AnimationWorld;
 use crate::error::RuntimeError;
 use crate::input::{AxisConfig, InputState, default_axis_configs};
 use crate::jobs::shared_job_system;
@@ -59,6 +58,8 @@ use unitas_jobs::JobSystem;
 #[path = "ui_components.rs"]
 pub(crate) mod ui_components;
 
+#[path = "runtime_animation.rs"]
+mod runtime_animation;
 #[path = "runtime_input.rs"]
 mod runtime_input;
 #[path = "runtime_physics.rs"]
@@ -420,6 +421,13 @@ impl Runtime {
         );
         let particle_entities = self.register_scene_particles(&assembled.particles, entity_base);
         let trail_entities = self.register_scene_trails(&assembled.trails, entity_base);
+        let animator_entities = self.register_scene_animators(
+            &assembled.animators,
+            entity_base,
+            &graph,
+            path,
+            &mut diagnostics,
+        );
         let entity_count = graph.len() as u64;
         let rigid_body_ids = rigidbodies.keys().copied().collect();
         self.scenes.push(LoadedScene {
@@ -431,7 +439,7 @@ impl Runtime {
             body_colliders,
             character_controllers,
             audio_sources,
-            animators: Vec::new(),
+            animators: animator_entities,
             particles: particle_entities,
             trails: trail_entities,
             ui,
@@ -961,80 +969,6 @@ impl Runtime {
         &mut self.terrain
     }
 
-    pub fn ensure_animator(&mut self, entity: u64) -> EntityId {
-        let id = if entity == 0 {
-            let allocated = self.next_entity_base();
-            self.dynamic_entity_floor = allocated + 1;
-            EntityId::new(allocated)
-        } else {
-            if entity >= self.dynamic_entity_floor {
-                self.dynamic_entity_floor = entity + 1;
-            }
-            EntityId::new(entity)
-        };
-        let mut initial_transform = Transform::default();
-        for scene in &mut self.scenes {
-            if let Some(transform) = scene.graph.transform(id) {
-                initial_transform = transform.clone();
-                if !scene.animators.contains(&id) {
-                    scene.animators.push(id);
-                }
-                break;
-            }
-        }
-        self.animation.ensure_animator(id, initial_transform);
-        id
-    }
-
-    pub fn remove_animator(&mut self, entity: EntityId) -> bool {
-        for scene in &mut self.scenes {
-            scene.animators.retain(|id| *id != entity);
-        }
-        self.persistent_animators.retain(|id| *id != entity);
-        self.animation.remove_animator(entity)
-    }
-
-    pub fn set_animator_controller(
-        &mut self,
-        entity: EntityId,
-        controller_handle: u64,
-    ) -> Result<(), String> {
-        let child_bindings = self.animation.set_controller(entity, controller_handle)?;
-        self.write_back_animator_transform(entity);
-        self.apply_child_animator_bindings(entity, &child_bindings);
-        Ok(())
-    }
-
-    pub fn animation(&self) -> &AnimationWorld {
-        &self.animation
-    }
-
-    pub fn animation_mut(&mut self) -> &mut AnimationWorld {
-        &mut self.animation
-    }
-
-    fn step_animators(&mut self, scaled_delta: f64) {
-        for scene in &self.scenes {
-            for entity in &scene.animators {
-                if let Some(graph_transform) = scene.graph.transform(*entity)
-                    && let Some(entry) = self.animation.entry_mut(*entity)
-                {
-                    entry.transform.parent = graph_transform.parent;
-                    entry.transform.children = graph_transform.children.clone();
-                }
-            }
-        }
-        let child_updates = self.animation.tick_parallel(scaled_delta, &self.job_system);
-        for entity in self.animation.take_pending_transform_writes() {
-            if !self.write_back_animator_transform(entity) {
-                self.animation.queue_transform_write(entity);
-            }
-        }
-        for (entity, child_bindings) in child_updates {
-            self.apply_child_animator_bindings(entity, &child_bindings);
-        }
-    }
-
     fn step_trails(&mut self, delta_time: f32) {
         let entities = self.trails.trail_entities();
         let mut positions = BTreeMap::new();
@@ -1044,56 +978,6 @@ impl Runtime {
             }
         }
         self.trails.step_all(delta_time, &positions);
-    }
-
-    fn write_back_animator_transform(&mut self, entity: EntityId) -> bool {
-        let Some(anim_transform) = self.animation.transform(entity) else {
-            return true;
-        };
-        for scene in &mut self.scenes {
-            if let Some(graph_transform) = scene.graph.transform_mut(entity) {
-                graph_transform.translation = anim_transform.translation;
-                graph_transform.rotation = anim_transform.rotation;
-                graph_transform.scale = anim_transform.scale;
-                return true;
-            }
-        }
-        false
-    }
-
-    fn apply_child_animator_bindings(
-        &mut self,
-        entity: EntityId,
-        child_bindings: &[SampledBinding],
-    ) {
-        for binding in child_bindings {
-            let Some((prop, ch)) = binding.target.parse_transform_property() else {
-                continue;
-            };
-            let mut applied = false;
-            for scene in &mut self.scenes {
-                if !scene.graph.contains(entity) {
-                    continue;
-                }
-                if let Some(child_id) =
-                    resolve_child_path_in_graph(&scene.graph, entity, &binding.target.object_path)
-                    && let Some(child_transform) = scene.graph.transform_mut(child_id)
-                {
-                    apply_transform_property(child_transform, prop, ch, binding.value);
-                    applied = true;
-                }
-                break;
-            }
-            if !applied {
-                self.animation.record_diagnostic(
-                    entity,
-                    AnimationRuntimeDiagnostic::UnresolvedChildPath {
-                        entity,
-                        object_path: binding.target.object_path.clone(),
-                    },
-                );
-            }
-        }
     }
 
     pub fn audio_source_config(&self, entity: EntityId) -> Option<&AudioSourceComponent> {
@@ -2581,31 +2465,6 @@ pub(crate) fn world_to_local_translation(
             unrotated[2]
         },
     ]
-}
-
-fn resolve_child_path_in_graph(
-    graph: &SceneGraph,
-    root: EntityId,
-    object_path: &str,
-) -> Option<EntityId> {
-    let mut current = root;
-    for segment in object_path.split('/') {
-        let trimmed = segment.trim();
-        if trimmed.is_empty() {
-            continue;
-        }
-        let mut next = None;
-        for child_id in graph.children(current) {
-            if let Some(entity) = graph.entity(*child_id)
-                && entity.name == trimmed
-            {
-                next = Some(*child_id);
-                break;
-            }
-        }
-        current = next?;
-    }
-    if current == root { None } else { Some(current) }
 }
 
 #[cfg(test)]

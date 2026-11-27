@@ -626,3 +626,44 @@ pub extern "C" fn unitas_runtime_animator_state_name(handle: u64, entity: u64) -
     }
 }
 }
+
+ffi_export! {
+pub extern "C" fn unitas_runtime_animator_drain_fired_events(handle: u64) -> i32 {
+    match with_runtime_state(handle, |state| {
+        let entities = state.runtime.animation().entities();
+        let mut records = Vec::new();
+        for entity in entities {
+            let events = state.runtime.animation_mut().take_fired_events(entity);
+            for event in events {
+                records.push((entity.as_u64(), event));
+            }
+        }
+        let count = records.len();
+        let mut payload = Vec::new();
+        let count_u32 = u32::try_from(count).unwrap_or(u32::MAX);
+        payload.extend_from_slice(&count_u32.to_le_bytes());
+        for (entity_id, event) in &records {
+            payload.extend_from_slice(&entity_id.to_le_bytes());
+            payload.extend_from_slice(&event.float_parameter.to_le_bytes());
+            payload.extend_from_slice(&event.int_parameter.to_le_bytes());
+            let fn_bytes = event.function_name.as_bytes();
+            let fn_len = u32::try_from(fn_bytes.len()).unwrap_or(0);
+            payload.extend_from_slice(&fn_len.to_le_bytes());
+            payload.extend_from_slice(&fn_bytes[..usize::try_from(fn_len).unwrap_or(0)]);
+            let str_bytes = event.string_parameter.as_bytes();
+            let str_len = u32::try_from(str_bytes.len()).unwrap_or(0);
+            payload.extend_from_slice(&str_len.to_le_bytes());
+            payload.extend_from_slice(&str_bytes[..usize::try_from(str_len).unwrap_or(0)]);
+        }
+        if state.path_buffer.len() < payload.len() {
+            state.path_buffer.resize(payload.len(), 0);
+        }
+        state.path_buffer[..payload.len()].copy_from_slice(&payload);
+        state.clear_error();
+        i32::try_from(payload.len()).unwrap_or(-4)
+    }) {
+        Ok(code) => code,
+        Err(code) => code,
+    }
+}
+}

@@ -10,6 +10,7 @@ workspace = true
 [dependencies]
 jpeg-decoder = { version = "0.3.2", default-features = false }
 swash = "0.1.19"
+unitas-animation = { path = "../unitas-animation" }
 unitas-core = { path = "../unitas-core" }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]

@@ -43,6 +43,28 @@ namespace UnityEngine
 
         public static IAnimationProvider? Provider { get; set; }
 
+        internal static void BindNativeAnimator(GameObject owner)
+        {
+            IAnimationProvider? provider = Provider;
+            ulong entity = owner.NativeEntityId;
+            if (provider == null || entity == 0UL || owner.GetComponent<Animator>() != null)
+            {
+                return;
+            }
+
+            if (!provider.GetSpeed(entity, out float nativeSpeed))
+            {
+                return;
+            }
+
+            Animator animator = new Animator
+            {
+                _nativeEntityId = entity,
+                _speed = nativeSpeed,
+            };
+            owner.AttachComponent(animator, typeof(Animator));
+        }
+
         public AnimatorController? runtimeAnimatorController
         {
             get => _controller;

@@ -52,5 +52,8 @@ namespace Unitas.Bridge
 
         [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
         internal static extern int unitas_runtime_animator_state_name(ulong handle, ulong entity);
+
+        [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
+        internal static extern int unitas_runtime_animator_drain_fired_events(ulong handle);
     }
 }

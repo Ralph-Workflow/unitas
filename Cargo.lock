@@ -2646,6 +2646,7 @@ dependencies = [
  "lewton",
  "minimp3",
  "swash",
+ "unitas-animation",
  "unitas-core",
 ]
 

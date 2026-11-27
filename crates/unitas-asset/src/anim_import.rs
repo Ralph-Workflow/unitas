@@ -4,6 +4,11 @@ use std::path::Path;
 use crate::dependencies::{ImportDiagnostic, ImportOutcome};
 use crate::unity_yaml::{parse, YamlError, YamlNode};
 
+#[path = "controller_import.rs"]
+mod controller_import;
+
+pub use controller_import::import_animator_controller;
+
 pub const ANIMATION_CLIP_CLASS_ID: u32 = 74;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -164,6 +169,28 @@ pub enum AnimImportError {
     MissingAnimationClipDocument,
     InvalidSampleRate(String),
     MalformedCurve(String),
+    Read {
+        asset: String,
+        message: String,
+    },
+    MissingAnimatorControllerDocument {
+        asset: String,
+    },
+    UnresolvedReference {
+        asset: String,
+        member: String,
+        reference: String,
+    },
+    UnsupportedConstruct {
+        asset: String,
+        member: String,
+        reason: String,
+    },
+    MalformedController {
+        asset: String,
+        member: String,
+        reason: String,
+    },
 }
 
 impl fmt::Display for AnimImportError {
@@ -186,6 +213,48 @@ impl fmt::Display for AnimImportError {
             }
             AnimImportError::MalformedCurve(detail) => {
                 write!(formatter, "malformed AnimationClip curve: {detail}")
+            }
+            AnimImportError::Read { asset, message } => {
+                write!(
+                    formatter,
+                    "cannot read animation asset '{asset}': {message}"
+                )
+            }
+            AnimImportError::MissingAnimatorControllerDocument { asset } => {
+                write!(
+                    formatter,
+                    "AnimatorController '{asset}' does not contain a class 91 AnimatorController document"
+                )
+            }
+            AnimImportError::UnresolvedReference {
+                asset,
+                member,
+                reference,
+            } => {
+                write!(
+                    formatter,
+                    "AnimatorController '{asset}' member '{member}' references unresolvable asset '{reference}'"
+                )
+            }
+            AnimImportError::UnsupportedConstruct {
+                asset,
+                member,
+                reason,
+            } => {
+                write!(
+                    formatter,
+                    "AnimatorController '{asset}' member '{member}' uses unsupported construct: {reason}"
+                )
+            }
+            AnimImportError::MalformedController {
+                asset,
+                member,
+                reason,
+            } => {
+                write!(
+                    formatter,
+                    "AnimatorController '{asset}' member '{member}' is malformed: {reason}"
+                )
             }
         }
     }

@@ -26,6 +26,7 @@ namespace Unitas.Samples.Platformer2D
         private float jumpVelocity = JumpVelocity;
 
         private Rigidbody2D? _body;
+        private Animator? _animator;
         private Vector2 _respawnPosition;
         private float _coyoteTimer;
         private float _jumpBufferTimer;
@@ -42,6 +43,7 @@ namespace Unitas.Samples.Platformer2D
         private new void Awake()
         {
             _body = GetComponent<Rigidbody2D>();
+            _animator = GetComponent<Animator>();
             Vector3 initial = transform.position;
             _respawnPosition = new Vector2(initial.x, initial.y);
             Debug.Log("Wick lantern ready");
@@ -93,13 +95,14 @@ namespace Unitas.Samples.Platformer2D
                 return;
             }
 
-            UpdateTimersAndGround(dt);
+            bool grounded = UpdateTimersAndGround(dt);
             Vector2 velocity = body.velocity;
             float moveX = ReadHorizontalInput();
             float targetVx = moveX * moveSpeed;
             float nextVx = MoveTowards(velocity.x, targetVx, RunAcceleration * dt);
             float nextVy = ComputeVerticalVelocity(velocity.y);
             body.velocity = new Vector2(nextVx, nextVy);
+            UpdateAnimator(nextVx, grounded);
         }
 
         private void UpdateRespawnPause(Rigidbody2D body, float dt)
@@ -114,9 +117,10 @@ namespace Unitas.Samples.Platformer2D
             }
         }
 
-        private void UpdateTimersAndGround(float dt)
+        private bool UpdateTimersAndGround(float dt)
         {
-            if (CheckGrounded())
+            bool grounded = CheckGrounded();
+            if (grounded)
             {
                 _coyoteTimer = CoyoteWindowSeconds;
                 _jumpCutApplied = false;
@@ -130,6 +134,24 @@ namespace Unitas.Samples.Platformer2D
             {
                 _jumpBufferTimer = Mathf.Max(0f, _jumpBufferTimer - dt);
             }
+
+            return grounded;
+        }
+
+        private void UpdateAnimator(float velocityX, bool grounded)
+        {
+            float speed = Mathf.Clamp01(Mathf.Abs(velocityX) / moveSpeed);
+            Animator? animator = _animator;
+            if (animator != null)
+            {
+                animator.SetFloat("Speed", speed);
+                animator.SetBool("Grounded", grounded);
+            }
+        }
+
+        private void OnFootstep()
+        {
+            Debug.Log("Wick footstep");
         }
 
         private float ComputeVerticalVelocity(float currentVy)
@@ -258,6 +280,7 @@ namespace Unitas.Samples.Platformer2D
             body.velocity = Vector2.zero;
             body.simulated = false;
             _respawnTimer = RespawnFadeSeconds;
+            _animator?.SetTrigger("Hurt");
             Debug.Log($"Heart lost to {hazardName}: {_heartsRemaining} remaining");
         }
 
@@ -271,6 +294,7 @@ namespace Unitas.Samples.Platformer2D
             }
 
             Debug.Log($"Goal bell rung: embers {_embersCollected} glow {_glowScore}");
+            _animator?.SetTrigger("Cheer");
         }
 
         private static float ReadHorizontalInput()

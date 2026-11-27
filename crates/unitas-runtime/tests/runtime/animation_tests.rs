@@ -1793,3 +1793,78 @@ fn ani_001_outcome_33_object_reference_curve_applies_the_resolved_reference_to_t
     assert_eq!(runtime.animation().diagnostic_count(entity), Some(0));
     Ok(())
 }
+
+#[test]
+fn scene_load_attaches_and_steps_authored_wick_animator_and_fires_events()
+-> Result<(), Box<dyn Error>> {
+    let mut runtime = Runtime::new()?;
+    let scene_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../samples/2d-platformer/Assets/Scenes/Rootway.unity");
+    runtime.load_scene(&scene_path)?;
+
+    let wick = entity_by_name(&runtime, "Wick")?;
+    let initial = runtime.animation().state_info(wick)?;
+    assert_eq!(initial.state_name, "Idle");
+
+    runtime.animation_mut().set_float(wick, "Speed", 1.0)?;
+    runtime.tick(0.0)?;
+    let mut footsteps = 0usize;
+    for _ in 0..35 {
+        runtime.tick(0.02)?;
+        for event in runtime.animation_mut().take_fired_events(wick) {
+            if event.function_name == "OnFootstep" {
+                footsteps += 1;
+            }
+        }
+    }
+    let after = runtime.animation().state_info(wick)?;
+    assert_eq!(after.state_name, "Run");
+    assert!(
+        footsteps >= 1,
+        "expected OnFootstep clip event to fire when Speed=1.0, got {footsteps}"
+    );
+    let sprite_target = CurveBindingTarget::new("", "SpriteRenderer", "m_Sprite");
+    assert!(
+        runtime
+            .animation()
+            .applied_object_reference(wick, &sprite_target)
+            .is_some(),
+        "expected SpriteRenderer.m_Sprite object reference binding to apply on Wick"
+    );
+    Ok(())
+}
+
+#[test]
+fn scene_load_reports_diagnostic_for_unresolved_animator_controller_guid()
+-> Result<(), Box<dyn Error>> {
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    let temp_root = std::env::temp_dir().join(format!(
+        "unitas_runtime_unresolved_animator_{}_{nanos}",
+        std::process::id()
+    ));
+    let scenes_dir = temp_root.join("Assets").join("Scenes");
+    std::fs::create_dir_all(&scenes_dir)?;
+    std::fs::create_dir_all(temp_root.join("ProjectSettings"))?;
+
+    let scene_yaml = "%YAML 1.1\n%TAG !u! tag:unity3d.com,2011:\n--- !u!1 &100\nGameObject:\n  m_Name: Hero\n  m_Layer: 0\n--- !u!4 &101\nTransform:\n  m_GameObject: {fileID: 100}\n  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}\n  m_LocalPosition: {x: 0, y: 0, z: 0}\n  m_LocalScale: {x: 1, y: 1, z: 1}\n  m_Children: []\n  m_Father: {fileID: 0}\n--- !u!95 &102\nAnimator:\n  m_GameObject: {fileID: 100}\n  m_Enabled: 1\n  m_Controller: {fileID: 9100000, guid: 70000000000000000000000000000099, type: 2}\n  m_CullingMode: 0\n  m_UpdateMode: 0\n  m_ApplyRootMotion: 0\n";
+    let scene_path = scenes_dir.join("MissingController.unity");
+    std::fs::write(&scene_path, scene_yaml)?;
+
+    let mut runtime = Runtime::new()?;
+    runtime.load_scene(&scene_path)?;
+    let hero = entity_by_name(&runtime, "Hero")?;
+    let diags = runtime.entity_diagnostics(hero);
+    assert!(
+        diags
+            .iter()
+            .any(|msg| msg.contains("70000000000000000000000000000099")),
+        "expected diagnostic naming unresolved controller guid, got {diags:?}"
+    );
+    runtime.tick(0.0)?;
+    runtime.tick(0.02)?;
+    let _ = std::fs::remove_dir_all(&temp_root);
+    Ok(())
+}

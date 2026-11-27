@@ -148,6 +148,7 @@ namespace UnityEngine
         {
             _nativeEntityId = entity;
             TrailRenderer.BindNativeTrail(this);
+            Animator.BindNativeAnimator(this);
         }
 
         public GameObject() : this("New Game Object")
