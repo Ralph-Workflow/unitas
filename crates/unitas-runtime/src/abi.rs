@@ -1175,6 +1175,33 @@ fn with_active_state<T>(handle: u64, action: impl FnOnce(&mut RuntimeState) -> T
     })
 }
 
+fn take_top_active_state() -> Option<(u64, RuntimeState)> {
+    ACTIVE_STATES.with(|cell| cell.borrow_mut().pop())
+}
+
+fn restore_top_active_state(handle: u64, state: RuntimeState) {
+    ACTIVE_STATES.with(|cell| cell.borrow_mut().push((handle, state)));
+}
+
+fn take_active_state(handle: u64) -> Option<(usize, RuntimeState)> {
+    ACTIVE_STATES.with(|cell| {
+        let mut stack = cell.borrow_mut();
+        let pos = stack
+            .iter()
+            .rposition(|(active_handle, _)| *active_handle == handle)?;
+        let (_, state) = stack.remove(pos);
+        Some((pos, state))
+    })
+}
+
+fn restore_active_state(index: usize, handle: u64, state: RuntimeState) {
+    ACTIVE_STATES.with(|cell| {
+        let mut stack = cell.borrow_mut();
+        let insert_at = index.min(stack.len());
+        stack.insert(insert_at, (handle, state));
+    });
+}
+
 fn take_from_registry(handle: u64) -> Option<RuntimeState> {
     let mut map = registry().lock().ok()?;
     map.remove(&handle)

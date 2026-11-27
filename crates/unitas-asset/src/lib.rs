@@ -33,6 +33,16 @@ pub use material::{
     parse_material_with_guids, Material, MaterialError,
 };
 pub use meta::{GuidIndex, MetaError, MetaIndex};
+pub use model::{
+    build_mesh_candidate, cook_mesh_candidates, cook_project_meshes, cooked_mesh_relative_path,
+    decode_cooked_mesh, default_mesh_cache_dir, default_mesh_cache_dir_for_path,
+    encode_cooked_mesh, import_model, import_model_sub_assets, is_mesh_source_path,
+    is_model_source_path, load_or_cook_mesh, load_or_cook_mesh_with_cache, manifest_entry,
+    CookedMesh, CookedMeshEntry, CookedMeshManifest, ModelImportError, COOKED_MESH_DIR_NAME,
+    COOKED_MESH_EXTENSION, COOKED_MESH_FORMAT_VERSION, COOKED_MESH_IMPORTER, COOKED_MESH_MAGIC,
+    COOKED_MESH_MANIFEST_FILENAME, COOKED_MESH_MANIFEST_FORMAT,
+    COOKED_MESH_MANIFEST_FORMAT_VERSION, MESH_IMPORTER_VERSION,
+};
 pub use project_settings::{
     parse_dynamics_manager, parse_dynamics_manager_stream, parse_input_manager,
     parse_input_manager_stream, parse_player_settings, parse_player_settings_stream,

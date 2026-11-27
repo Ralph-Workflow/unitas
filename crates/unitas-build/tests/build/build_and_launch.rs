@@ -292,9 +292,10 @@ fn failed_build_validation_and_missing_source_scene_produce_failed_build_report(
 fn staged_bundle_cooks_textures_under_cooked_with_manifest_excludes_raw_textures_and_reuses_cache(
 ) -> Result<(), Box<dyn std::error::Error>> {
     use unitas_build::cooked::{
-        stage_project_cooked_audio_with_cache, stage_project_cooked_textures_with_cache,
-        CookedAudio, CookedAudioManifest, CookedTexture, CookedTextureManifest, COOKED_DIR_NAME,
-        COOKED_MANIFEST_FILENAME,
+        stage_project_cooked_audio_with_cache, stage_project_cooked_meshes_with_cache,
+        stage_project_cooked_textures_with_cache, CookedAudio, CookedAudioManifest, CookedMesh,
+        CookedMeshManifest, CookedTexture, CookedTextureManifest, COOKED_DIR_NAME,
+        COOKED_MANIFEST_FILENAME, COOKED_MESH_MANIFEST_FILENAME,
     };
     use unitas_build::player::install_project_trust;
     use unitas_build::sample::stage_roll_a_ball_bundle_for_host;
@@ -307,6 +308,7 @@ fn staged_bundle_cooks_textures_under_cooked_with_manifest_excludes_raw_textures
     let cooked_dir = staged.output_dir.join(COOKED_DIR_NAME);
     assert!(cooked_dir.is_dir());
     assert!(cooked_dir.join(COOKED_MANIFEST_FILENAME).is_file());
+    assert!(cooked_dir.join(COOKED_MESH_MANIFEST_FILENAME).is_file());
 
     let manifest = CookedTextureManifest::load_from_dir(&cooked_dir)
         .ok_or("expected cooked manifest in bundle")?;
@@ -318,6 +320,26 @@ fn staged_bundle_cooks_textures_under_cooked_with_manifest_excludes_raw_textures
     let decoded = CookedTexture::decode(&fs::read(&cooked_file)?)?;
     assert_eq!(decoded.width, pickup_entry.width);
     assert_eq!(decoded.height, pickup_entry.height);
+
+    let mesh_manifest = CookedMeshManifest::load_from_dir(&cooked_dir)
+        .ok_or("expected cooked mesh manifest in bundle")?;
+    let obj_entry = mesh_manifest
+        .get_by_asset_path("Assets/Models/ConcaveFrame.obj")
+        .ok_or("expected Assets/Models/ConcaveFrame.obj in cooked mesh manifest")?;
+    let cooked_obj = cooked_dir.join(&obj_entry.cooked_path);
+    assert!(cooked_obj.is_file());
+    let decoded_obj = CookedMesh::decode(&fs::read(&cooked_obj)?)?;
+    assert_eq!(decoded_obj.vertex_count(), obj_entry.vertex_count);
+    assert_eq!(decoded_obj.index_count(), obj_entry.index_count);
+
+    let fbx_entry = mesh_manifest
+        .get_by_asset_path("Assets/Models/ArenaProp.fbx")
+        .ok_or("expected Assets/Models/ArenaProp.fbx in cooked mesh manifest")?;
+    let cooked_fbx = cooked_dir.join(&fbx_entry.cooked_path);
+    assert!(cooked_fbx.is_file());
+    let decoded_fbx = CookedMesh::decode(&fs::read(&cooked_fbx)?)?;
+    assert_eq!(decoded_fbx.vertex_count(), fbx_entry.vertex_count);
+    assert_eq!(decoded_fbx.index_count(), fbx_entry.index_count);
 
     assert!(
         !staged
@@ -336,6 +358,42 @@ fn staged_bundle_cooks_textures_under_cooked_with_manifest_excludes_raw_textures
             .join("Pickup.png.meta")
             .is_file(),
         "texture .meta sidecar remains in bundle Assets/ for GUID resolution"
+    );
+    assert!(
+        !staged
+            .output_dir
+            .join("Assets")
+            .join("Models")
+            .join("ConcaveFrame.obj")
+            .exists(),
+        "raw source .obj model must not be copied into bundle Assets/"
+    );
+    assert!(
+        staged
+            .output_dir
+            .join("Assets")
+            .join("Models")
+            .join("ConcaveFrame.obj.meta")
+            .is_file(),
+        "model .meta sidecar remains in bundle Assets/ for GUID resolution"
+    );
+    assert!(
+        !staged
+            .output_dir
+            .join("Assets")
+            .join("Models")
+            .join("ArenaProp.fbx")
+            .exists(),
+        "raw source .fbx model must not be copied into bundle Assets/"
+    );
+    assert!(
+        staged
+            .output_dir
+            .join("Assets")
+            .join("Models")
+            .join("ArenaProp.fbx.meta")
+            .is_file(),
+        "model .meta sidecar remains in bundle Assets/ for GUID resolution"
     );
 
     let audio_manifest = CookedAudioManifest::load_from_dir(&cooked_dir)
@@ -401,6 +459,25 @@ fn staged_bundle_cooks_textures_under_cooked_with_manifest_excludes_raw_textures
         stage_project_cooked_audio_with_cache(&project_root, &audio_cache_dir, &second_out)?;
     assert_eq!(second_audio_report.imported, 0);
     assert_eq!(second_audio_report.reused, first_audio_report.imported);
+
+    let mesh_cache_dir = workspace.join("mesh_import_cache");
+    let (_, first_mesh_report) =
+        stage_project_cooked_meshes_with_cache(&project_root, &mesh_cache_dir, &first_out)?;
+    assert!(first_mesh_report.imported > 0);
+    assert_eq!(first_mesh_report.reused, 0);
+    assert!(first_out
+        .join(COOKED_DIR_NAME)
+        .join(COOKED_MANIFEST_FILENAME)
+        .is_file());
+    assert!(first_out
+        .join(COOKED_DIR_NAME)
+        .join(COOKED_MESH_MANIFEST_FILENAME)
+        .is_file());
+
+    let (_, second_mesh_report) =
+        stage_project_cooked_meshes_with_cache(&project_root, &mesh_cache_dir, &second_out)?;
+    assert_eq!(second_mesh_report.imported, 0);
+    assert_eq!(second_mesh_report.reused, first_mesh_report.imported);
 
     let session = launch_bundle(&bundle_dir, 2, 1.0 / 60.0)?;
     assert!(session.root_object_count > 0);

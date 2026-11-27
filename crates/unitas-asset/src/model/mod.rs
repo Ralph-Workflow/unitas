@@ -2,10 +2,20 @@ use std::fmt;
 
 use crate::primitive::{resolve_tangents, MeshData, SubMesh};
 
+pub mod artifact;
 pub mod fbx;
 pub mod gltf;
 pub mod obj;
 
+pub use artifact::{
+    build_mesh_candidate, cook_mesh_candidates, cook_project_meshes, cooked_mesh_relative_path,
+    decode_cooked_mesh, default_mesh_cache_dir, default_mesh_cache_dir_for_path,
+    encode_cooked_mesh, is_mesh_source_path, is_model_source_path, load_or_cook_mesh,
+    load_or_cook_mesh_with_cache, manifest_entry, CookedMesh, CookedMeshEntry, CookedMeshManifest,
+    COOKED_MESH_DIR_NAME, COOKED_MESH_EXTENSION, COOKED_MESH_FORMAT_VERSION, COOKED_MESH_IMPORTER,
+    COOKED_MESH_MAGIC, COOKED_MESH_MANIFEST_FILENAME, COOKED_MESH_MANIFEST_FORMAT,
+    COOKED_MESH_MANIFEST_FORMAT_VERSION, MESH_IMPORTER_VERSION,
+};
 pub use fbx::{
     import_fbx, import_fbx_bytes, import_fbx_with_settings, FbxAnimationCompression,
     FbxAnimationType, FbxAvatarBone, FbxClipDefinition, FbxExtractedMaterial, FbxImportBundle,
@@ -66,6 +76,10 @@ pub enum ModelImportError {
         file_name: String,
         format: String,
     },
+    InvalidCookedSignature,
+    UnsupportedCookedVersion(u16),
+    TruncatedCookedMesh,
+    CorruptCookedMesh(String),
 }
 
 impl From<FbxImportError> for ModelImportError {
@@ -132,6 +146,21 @@ impl fmt::Display for ModelImportError {
                     formatter,
                     "{file_name}: {format} format is Unsupported (content-creation application files are not converted)"
                 )
+            }
+            ModelImportError::InvalidCookedSignature => {
+                write!(formatter, "invalid cooked mesh signature (expected UMSH)")
+            }
+            ModelImportError::UnsupportedCookedVersion(version) => {
+                write!(
+                    formatter,
+                    "unsupported cooked mesh format version {version}"
+                )
+            }
+            ModelImportError::TruncatedCookedMesh => {
+                write!(formatter, "truncated cooked mesh data")
+            }
+            ModelImportError::CorruptCookedMesh(reason) => {
+                write!(formatter, "corrupt cooked mesh data: {reason}")
             }
         }
     }

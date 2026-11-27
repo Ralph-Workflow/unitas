@@ -47,6 +47,7 @@ use crate::physics::{CollisionPayload2D, ContactEvent, PhysicsRuntimeWorld};
 use crate::physics_settings::{
     apply_physics2d_project_settings, layer_matrix_of, solver_settings_of,
 };
+use crate::physics2d_colliders::attach_scene_physics_2d;
 use crate::player_loop::{
     BuiltinWork, CustomSystemPosition, PlayerLoop, PlayerLoopCallback, PlayerLoopError,
     PlayerLoopStep, PlayerLoopSystem,
@@ -415,6 +416,12 @@ impl Runtime {
         );
         let rigidbodies = collect_scene_rigidbodies(&assembled.physics, entity_base);
         self.register_scene_bodies(&bodies, &descs, &rigidbodies)?;
+        attach_scene_physics_2d(
+            &mut self.physics,
+            &graph,
+            &assembled.physics_2d,
+            entity_base,
+        );
         let particle_entities = self.register_scene_particles(&assembled.particles, entity_base);
         let trail_entities = self.register_scene_trails(&assembled.trails, entity_base);
         let entity_count = graph.len() as u64;
@@ -458,6 +465,7 @@ impl Runtime {
         match mode {
             LoadSceneMode::Single => {
                 self.unload_all_scenes(hook);
+                self.physics.clear_2d();
                 self.apply_project_settings(settings);
             }
             LoadSceneMode::Additive => {
@@ -1582,7 +1590,7 @@ impl Runtime {
 
     pub(crate) fn dispatch_physics_messages<H>(&mut self, hook: &mut H)
     where
-        H: FnMut(&mut Self, &mut dyn FnMut()),
+        H: FnMut(&mut Self, &mut dyn FnMut()) + ?Sized,
     {
         let Some(messages) = self.pending_physics_messages.take() else {
             return;

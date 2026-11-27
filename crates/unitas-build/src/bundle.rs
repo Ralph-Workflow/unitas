@@ -649,6 +649,7 @@ pub fn stage_bundle_for_host(
         stage_project_assets(&project_root, output_dir)?;
         crate::cooked::stage_project_cooked_textures(&project_root, output_dir)?;
         crate::cooked::stage_project_cooked_audio(&project_root, output_dir)?;
+        crate::cooked::stage_project_cooked_meshes(&project_root, output_dir)?;
         stage_project_settings(&project_root, output_dir)?;
         if project_has_scripts(&project_root) {
             script_host = ScriptHost::CoreClr;
@@ -2796,6 +2797,18 @@ Transform:\n\
         let scripted_scripts = scripted_root.join("Assets").join("Scripts");
         fs::create_dir_all(&scripted_scenes)?;
         fs::create_dir_all(&scripted_scripts)?;
+        let models_dir = scripted_root.join("Assets").join("Models");
+        fs::create_dir_all(&models_dir)?;
+        fs::write(
+            models_dir.join("Quad.obj"),
+            "o Quad\nv 0.0 0.0 0.0\nv 1.0 0.0 0.0\nv 1.0 1.0 0.0\nv 0.0 1.0 0.0\nvn 0.0 0.0 1.0\nvt 0.0 0.0\nvt 1.0 0.0\nvt 1.0 1.0\nvt 0.0 1.0\nf 1/1/1 2/2/1 3/3/1\nf 1/1/1 3/3/1 4/4/1\n",
+        )?;
+        fs::write(
+            models_dir.join("Quad.obj.meta"),
+            "fileFormatVersion: 2\nguid: 1234567890abcdef1234567890abcdef\n",
+        )?;
+        fs::write(models_dir.join("Dummy.gltf"), b"not used")?;
+        fs::write(models_dir.join("Dummy.glb"), b"not used")?;
         let scripted_scene = scripted_scenes.join("Main.unity");
         fs::write(&scripted_scene, sample_unity_scene("MainRoot"))?;
         fs::write(
@@ -2821,6 +2834,17 @@ Transform:\n\
 
         let round_trip = BundleManifest::load_from_dir(&scripted_out)?;
         assert_eq!(round_trip.script_host, ScriptHost::CoreClr);
+        assert!(!scripted_out.join("Assets/Models/Quad.obj").exists());
+        assert!(!scripted_out.join("Assets/Models/Dummy.gltf").exists());
+        assert!(!scripted_out.join("Assets/Models/Dummy.glb").exists());
+        assert!(scripted_out.join("Assets/Models/Quad.obj.meta").is_file());
+        let cooked_dir = scripted_out.join(crate::cooked::COOKED_MESH_DIR_NAME);
+        let mesh_manifest = crate::cooked::CookedMeshManifest::load_from_dir(&cooked_dir)
+            .ok_or("expected cooked mesh manifest")?;
+        let quad_entry = mesh_manifest
+            .get_by_asset_path("Assets/Models/Quad.obj")
+            .ok_or("expected Assets/Models/Quad.obj entry")?;
+        assert!(cooked_dir.join(&quad_entry.cooked_path).is_file());
 
         fs::remove_dir_all(&workspace)?;
         Ok(())

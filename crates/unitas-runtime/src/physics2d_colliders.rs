@@ -3,14 +3,22 @@ use std::path::Path;
 use unitas_asset::database::tilemap::{
     TileColliderType, TilemapArtifact, TilemapKind, import_tilemap, import_tilemap_file,
 };
-use unitas_core::EntityId;
+use unitas_asset::scene::scene_physics::{
+    AssembledScenePhysics, Collider2DDesc, ColliderShape2DDesc, SceneEffector2DBinding,
+    SceneEffectorKind2D,
+};
+use unitas_core::{EntityId, SceneGraph};
 use unitas_physics::two_d::{
-    BodyDesc2D, BodyId2D, ColliderDesc2D, ColliderId2D, CompositeCollider2D,
-    CompositeGenerationType2D, CompositeGeometryType2D, PhysicsMaterial2D, Shape2D,
+    AreaEffector2D, BodyDesc2D, BodyId2D, BuoyancyEffector2D, ColliderDesc2D, ColliderId2D,
+    CompositeCollider2D, CompositeGenerationType2D, CompositeGeometryType2D, Effector2D,
+    PhysicsMaterial2D, PlatformEffector2D, PointEffector2D, Shape2D, SurfaceEffector2D,
     TileColliderType2D, TilemapCollider2D,
 };
 
 use crate::abi::RuntimeState;
+use crate::error::RuntimeError;
+use crate::physics::PhysicsRuntimeWorld;
+use crate::runtime::Runtime;
 
 fn buffer_offset(base: usize, length: usize, address: usize, size: usize) -> Option<usize> {
     let end = base.checked_add(length)?;
@@ -523,4 +531,195 @@ pub(crate) fn build_tilemap_collider(
     }
     state.clear_error();
     0
+}
+
+fn build_shape_2d(shape: &ColliderShape2DDesc, scale: [f32; 2]) -> Shape2D {
+    let sx = scale[0].abs();
+    let sy = scale[1].abs();
+    match shape {
+        ColliderShape2DDesc::Box { size } => Shape2D::Box {
+            half_extents: [0.5 * size[0] * sx, 0.5 * size[1] * sy],
+        },
+        ColliderShape2DDesc::Circle { radius } => Shape2D::Circle {
+            radius: radius * sx.max(sy),
+        },
+        ColliderShape2DDesc::Capsule { size, direction } => {
+            if *direction == 0 {
+                Shape2D::Capsule {
+                    radius: 0.5 * size[0] * sx,
+                    height: size[1] * sy,
+                    direction: 1,
+                }
+            } else {
+                Shape2D::Capsule {
+                    radius: 0.5 * size[1] * sy,
+                    height: size[0] * sx,
+                    direction: 0,
+                }
+            }
+        }
+        ColliderShape2DDesc::Polygon { vertices } => Shape2D::Polygon {
+            vertices: vertices.iter().map(|v| [v[0] * sx, v[1] * sy]).collect(),
+        },
+        ColliderShape2DDesc::Edge { points } => {
+            if points.len() == 2 {
+                Shape2D::Edge {
+                    start: [points[0][0] * sx, points[0][1] * sy],
+                    end: [points[1][0] * sx, points[1][1] * sy],
+                }
+            } else {
+                let shapes = points
+                    .windows(2)
+                    .map(|pair| Shape2D::Edge {
+                        start: [pair[0][0] * sx, pair[0][1] * sy],
+                        end: [pair[1][0] * sx, pair[1][1] * sy],
+                    })
+                    .collect();
+                Shape2D::Composite { shapes }
+            }
+        }
+        ColliderShape2DDesc::Composite { .. } => Shape2D::Composite { shapes: Vec::new() },
+    }
+}
+
+fn to_runtime_effector_2d(binding: &SceneEffector2DBinding) -> Effector2D {
+    let collider_mask = if binding.use_collider_mask {
+        binding.collider_mask
+    } else {
+        u32::MAX
+    };
+    match binding.kind {
+        SceneEffectorKind2D::Platform(p) => Effector2D::Platform(PlatformEffector2D {
+            use_one_way: p.use_one_way,
+            surface_arc: p.surface_arc,
+            rotational_offset: p.rotational_offset,
+            side_arc: p.side_arc,
+            use_side_friction: p.use_side_friction,
+            use_side_bounce: p.use_side_bounce,
+            collider_mask,
+        }),
+        SceneEffectorKind2D::Surface(s) => Effector2D::Surface(SurfaceEffector2D {
+            speed: s.speed,
+            speed_variation: s.speed_variation,
+            force_scale: s.force_scale,
+            use_contact_force: s.use_contact_force,
+            use_friction: s.use_friction,
+            use_bounce: s.use_bounce,
+            collider_mask,
+        }),
+        SceneEffectorKind2D::Area(a) => Effector2D::Area(AreaEffector2D {
+            force_angle: a.force_angle,
+            force_magnitude: a.force_magnitude,
+            force_variation: a.force_variation,
+            drag: a.drag,
+            angular_drag: a.angular_drag,
+            use_global_angle: a.use_global_angle,
+            collider_mask,
+        }),
+        SceneEffectorKind2D::Point(pt) => Effector2D::Point(PointEffector2D {
+            force_magnitude: pt.force_magnitude,
+            force_variation: pt.force_variation,
+            distance_scale: pt.distance_scale,
+            drag: pt.drag,
+            angular_drag: pt.angular_drag,
+            collider_mask,
+        }),
+        SceneEffectorKind2D::Buoyancy(b) => Effector2D::Buoyancy(BuoyancyEffector2D {
+            surface_level: b.surface_level,
+            density: b.density,
+            linear_drag: b.linear_drag,
+            angular_drag: b.angular_drag,
+            flow_angle: b.flow_angle,
+            flow_magnitude: b.flow_magnitude,
+            flow_variation: b.flow_variation,
+            collider_mask,
+        }),
+    }
+}
+
+fn attach_scene_collider_2d(
+    physics: &mut PhysicsRuntimeWorld,
+    graph: &SceneGraph,
+    col: &Collider2DDesc,
+    entity_base: u64,
+) -> ColliderId2D {
+    let entity = EntityId::new(entity_base + col.entity.as_u64());
+    let (pos, scale) = graph
+        .world_transform(entity)
+        .or_else(|| graph.world_transform(col.entity))
+        .map_or(([0.0, 0.0], [1.0, 1.0]), |t| {
+            (
+                [t.translation[0], t.translation[1]],
+                [t.scale[0], t.scale[1]],
+            )
+        });
+    let body_id = physics
+        .body_id_2d(entity)
+        .unwrap_or_else(|| physics.add_body_2d(BodyDesc2D::static_body(entity, pos)));
+    let desc = ColliderDesc2D {
+        shape: build_shape_2d(&col.shape, scale),
+        offset: [col.offset[0] * scale[0], col.offset[1] * scale[1]],
+        is_trigger: col.is_trigger,
+        used_by_effector: col.used_by_effector,
+        used_by_composite: col.used_by_composite,
+        game_object: entity,
+        attached_body: Some(body_id),
+        layer: (col.layer.min(31)) as u8,
+        enabled: col.enabled,
+        ..ColliderDesc2D::default()
+    };
+    let cid = physics.add_collider_2d(desc);
+    if let ColliderShape2DDesc::Composite {
+        geometry_type,
+        generation_type,
+    } = col.shape
+    {
+        let geom = if geometry_type == 0 {
+            CompositeGeometryType2D::Polygons
+        } else {
+            CompositeGeometryType2D::Outlines
+        };
+        let gen_type = if generation_type == 0 {
+            CompositeGenerationType2D::Synchronous
+        } else {
+            CompositeGenerationType2D::Manual
+        };
+        physics
+            .world_2d_mut()
+            .attach_composite(cid, CompositeCollider2D::new(geom, gen_type));
+    }
+    cid
+}
+
+pub fn attach_scene_physics_2d(
+    physics: &mut PhysicsRuntimeWorld,
+    graph: &SceneGraph,
+    scene_physics: &AssembledScenePhysics,
+    entity_base: u64,
+) {
+    let mut created: Vec<(EntityId, ColliderId2D, bool)> = Vec::new();
+    for col in &scene_physics.colliders {
+        let cid = attach_scene_collider_2d(physics, graph, col, entity_base);
+        let shifted = EntityId::new(entity_base + col.entity.as_u64());
+        created.push((shifted, cid, col.used_by_effector));
+    }
+    for eff in &scene_physics.effectors {
+        if !eff.enabled {
+            continue;
+        }
+        let target = EntityId::new(entity_base + eff.entity.as_u64());
+        let runtime_eff = to_runtime_effector_2d(eff);
+        for &(entity, cid, used_by_effector) in &created {
+            if entity == target && used_by_effector {
+                physics.world_2d_mut().attach_effector(cid, runtime_eff);
+            }
+        }
+    }
+}
+
+pub fn load_scene_physics_2d_into_world(
+    runtime: &mut Runtime,
+    path: &Path,
+) -> Result<usize, RuntimeError> {
+    runtime.load_scene(path)
 }

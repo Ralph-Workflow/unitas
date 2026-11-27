@@ -2,8 +2,8 @@ use unitas_physics::PhysicsError;
 use unitas_physics::simulate::SimulationMode;
 
 use super::{
-    Runtime, RuntimeError, restore_to_registry, run_reentrant_operation, take_from_registry,
-    with_active_state, with_runtime_state,
+    Runtime, RuntimeError, restore_active_state, restore_to_registry, run_reentrant_operation,
+    take_active_state, take_from_registry, with_runtime_state,
 };
 use crate::runtime::PhysicsMessages;
 
@@ -290,13 +290,9 @@ fn run_simulation_operation(
         &mut dyn FnMut(&mut Runtime, &mut dyn FnMut()),
     ) -> Result<(), RuntimeError>,
 ) -> i32 {
-    let mut op_opt = Some(op);
-    if let Some(code) = with_active_state(handle, |state| {
-        let Some(f) = op_opt.take() else {
-            return -1;
-        };
-        let result = run_reentrant_operation(handle, state, |runtime, hook| f(runtime, hook));
-        match result {
+    if let Some((index, mut state)) = take_active_state(handle) {
+        let result = run_reentrant_operation(handle, &mut state, |runtime, hook| op(runtime, hook));
+        let code = match result {
             Ok(()) => {
                 state.clear_error();
                 0
@@ -305,17 +301,14 @@ fn run_simulation_operation(
                 state.set_error(&err.to_string());
                 -4
             }
-        }
-    }) {
+        };
+        restore_active_state(index, handle, state);
         return code;
     }
-    let Some(f) = op_opt else {
-        return -1;
-    };
     let Some(mut state) = take_from_registry(handle) else {
         return -1;
     };
-    let result = run_reentrant_operation(handle, &mut state, |runtime, hook| f(runtime, hook));
+    let result = run_reentrant_operation(handle, &mut state, |runtime, hook| op(runtime, hook));
     let code = match result {
         Ok(()) => {
             state.clear_error();

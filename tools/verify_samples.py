@@ -36,6 +36,8 @@ EDITOR_SCENARIOS = (
     "restart_recovery.scenario.json",
     "combo_timing_sweep.json",
     "pointer_ui.scenario.json",
+    "../../2d-platformer/Scenarios/movement_smoke.json",
+    "../../2d-platformer/Scenarios/one_way_platform.json",
 )
 SCRIPTING_PROJECT = REPO_ROOT / "bridge" / "Unitas.Scripting"
 RUNTIME_LIBRARY = REPO_ROOT / "target" / "debug" / "libunitas_runtime.dylib"
@@ -116,6 +118,18 @@ SCENARIOS: tuple[tuple[str, str, tuple[str, ...], bool], ...] = (
     ("nested_prefab", "nested_prefab.json", ("--repeat", "2"), False),
     ("speed_trail", "speed_trail.json", ("--repeat", "2"), False),
     ("attract_ghost", "attract_ghost.json", ("--repeat", "2"), False),
+    (
+        "movement_smoke",
+        "../../2d-platformer/Scenarios/movement_smoke.json",
+        ("--repeat", "2"),
+        False,
+    ),
+    (
+        "one_way_platform",
+        "../../2d-platformer/Scenarios/one_way_platform.json",
+        ("--repeat", "2"),
+        False,
+    ),
 )
 
 LANE_METADATA: tuple[tuple[str, str], ...] = (
@@ -156,7 +170,7 @@ def editor_scenario_steps() -> list[tuple[str, list[str], float, Path | None, Pa
                 "-nographics",
                 "-quit",
                 "-runScenario",
-                str(SCENARIO_DIR / scenario),
+                str((SCENARIO_DIR / scenario).resolve()),
             ],
             RUN_BUDGET_SECONDS,
             None,
@@ -271,6 +285,9 @@ def run_scenario(
     extra_args: tuple[str, ...],
     env: dict[str, str],
 ) -> int:
+    scenario_path = (SCENARIO_DIR / scenario_file).resolve()
+    sample_root = scenario_path.parent.parent
+    cwd = sample_root if sample_root == SAMPLE_ROOT else REPO_ROOT
     report_path = REPORT_DIR / f"{name}_report.json"
     command = [
         "dotnet",
@@ -282,12 +299,12 @@ def run_scenario(
         "--no-build",
         "--",
         "scenario",
-        str(SAMPLE_ROOT),
-        str(SCENARIO_DIR / scenario_file),
+        str(sample_root),
+        str(scenario_path),
         *extra_args,
     ]
     rc = run_step(
-        (f"scenario-{name}", command, RUN_BUDGET_SECONDS, report_path, SAMPLE_ROOT),
+        (f"scenario-{name}", command, RUN_BUDGET_SECONDS, report_path, cwd),
         env,
     )
     if rc != 0:
@@ -296,7 +313,7 @@ def run_scenario(
     status = check_report(report_path, captured_path)
     if status != 0:
         return status
-    return check_absent_logs(SCENARIO_DIR / scenario_file, report_path)
+    return check_absent_logs(scenario_path, report_path)
 
 
 def native_scripted_launch(env: dict[str, str]) -> int:

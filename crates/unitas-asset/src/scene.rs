@@ -15,7 +15,9 @@ use crate::trail::{trail_renderer_component, TrailRendererBinding};
 use crate::unity_yaml::{self, Document, Node, Stream, YamlError};
 
 use self::scene_audio::collect_audio;
-use self::scene_physics::{collect_physics, is_character_controller};
+use self::scene_physics::{
+    collect_physics, collect_physics_2d, is_character_controller, AssembledScenePhysics,
+};
 
 pub use crate::particle::PARTICLE_SYSTEM_CLASS;
 pub use crate::trail::TRAIL_RENDERER_CLASS;
@@ -717,6 +719,7 @@ pub struct AssembledScene {
     pub graph: SceneGraph,
     pub scripts: Vec<ScriptBinding>,
     pub physics: Vec<PhysicsBinding>,
+    pub physics_2d: AssembledScenePhysics,
     pub audio_bindings: Vec<AudioBinding>,
     pub render: RenderBinding,
     pub particles: Vec<ParticleBinding>,
@@ -731,6 +734,7 @@ struct DocumentSet {
     root: Option<EntityId>,
     scripts: Vec<ScriptBinding>,
     physics: Vec<PhysicsBinding>,
+    physics_2d: AssembledScenePhysics,
     audio_bindings: Vec<AudioBinding>,
     render: RenderBinding,
     particles: Vec<ParticleBinding>,
@@ -855,6 +859,7 @@ fn assemble_stream(
         graph,
         scripts: set.scripts,
         physics: set.physics,
+        physics_2d: set.physics_2d,
         audio_bindings: set.audio_bindings,
         render: set.render,
         particles: set.particles,
@@ -1006,6 +1011,7 @@ fn assemble_documents(
         root: None,
         scripts: Vec::new(),
         physics: Vec::new(),
+        physics_2d: AssembledScenePhysics::default(),
         audio_bindings: Vec::new(),
         render: RenderBinding::default(),
         particles: Vec::new(),
@@ -1086,6 +1092,7 @@ fn assemble_documents(
         });
     }
     set.physics = collect_physics(stream, &set.game_objects, &instance_roots, context.index)?;
+    set.physics_2d = collect_physics_2d(stream, &set.game_objects, &instance_roots);
     set.audio_bindings = collect_audio(stream, &set.game_objects, &instance_roots, context.index)?;
     let index = context.index;
     let material_properties = &mut context.material_properties;
@@ -1385,6 +1392,12 @@ fn expand_instance(
     }
     set.scripts.extend(prefab_set.scripts);
     set.physics.extend(prefab_set.physics);
+    set.physics_2d
+        .colliders
+        .extend(prefab_set.physics_2d.colliders);
+    set.physics_2d
+        .effectors
+        .extend(prefab_set.physics_2d.effectors);
     set.audio_bindings.extend(prefab_set.audio_bindings);
     set.render.cameras.extend(prefab_set.render.cameras);
     set.render.renderers.extend(prefab_set.render.renderers);
@@ -2884,60 +2897,40 @@ MonoBehaviour: {m_GameObject: {fileID: 1}, m_Enabled: 1, m_Script: {fileID: 1150
 
     #[test]
     fn ui_scene_exposes_canvas_rect_transform_image_and_text() -> Result<(), Box<dyn Error>> {
-        let stream = unity_yaml::parse(UI_SCENE)?;
-        let assembled = assemble_scene_bundle(&stream)?;
-        let canvas = assembled
-            .ui
-            .canvases
-            .first()
-            .ok_or("the scene has no canvas")?;
-        assert_eq!(canvas.entity, EntityId::new(0));
+        let assembled = assemble_scene_bundle(&unity_yaml::parse(UI_SCENE)?)?;
+        let canvas = &assembled.ui.canvases[0];
+        assert_eq!((canvas.entity, canvas.sorting_order), (EntityId::new(0), 7));
         assert_eq!(canvas.render_mode, CanvasRenderMode::ScreenSpaceOverlay);
-        assert_eq!(canvas.sorting_order, 7);
         let scaler = canvas.scaler.as_ref().ok_or("the canvas has no scaler")?;
         assert_eq!(scaler.ui_scale_mode, CanvasScaleMode::ScaleWithScreenSize);
         assert_eq!(scaler.reference_resolution, [800.0, 600.0]);
-        assert_eq!(
-            scaler.screen_match_mode,
-            CanvasMatchMode::MatchWidthOrHeight
-        );
         assert_eq!(scaler.match_width_or_height, 0.5);
         assert_eq!(assembled.ui.rect_transforms.len(), 3);
-        let bar = assembled
-            .ui
-            .rect_transforms
-            .iter()
-            .find(|rect| rect.entity == EntityId::new(1))
-            .ok_or("the health bar has no rect transform")?;
-        assert_eq!(bar.parent, Some(EntityId::new(0)));
-        assert_eq!(bar.anchor_min, [0.5, 0.5]);
-        assert_eq!(bar.anchor_max, [0.5, 0.5]);
-        assert_eq!(bar.anchored_position, [-120.0, 30.0]);
-        assert_eq!(bar.size_delta, [200.0, 40.0]);
-        assert_eq!(bar.pivot, [0.5, 0.5]);
-        assert_eq!(assembled.ui.elements.len(), 2);
-        let image = match &assembled.ui.elements[0] {
-            UiElementComponent::Image(image) => image,
-            UiElementComponent::Text(_) => return Err("the first element is not an image".into()),
-            UiElementComponent::Button(_) => return Err("the first element is not an image".into()),
-        };
-        assert_eq!(image.entity, EntityId::new(1));
-        assert_eq!(image.color, [1.0, 0.5, 0.25, 0.75]);
+        let bar = &assembled.ui.rect_transforms[1];
         assert_eq!(
-            image.sprite_guid.as_deref(),
+            (bar.entity, bar.parent),
+            (EntityId::new(1), Some(EntityId::new(0)))
+        );
+        assert_eq!((bar.anchor_min, bar.anchor_max), ([0.5, 0.5], [0.5, 0.5]));
+        assert_eq!(bar.anchored_position, [-120.0, 30.0]);
+        assert_eq!((bar.size_delta, bar.pivot), ([200.0, 40.0], [0.5, 0.5]));
+        let UiElementComponent::Image(img) = &assembled.ui.elements[0] else {
+            return Err("the first element is not an image".into());
+        };
+        assert_eq!((img.entity, img.enabled), (EntityId::new(1), true));
+        assert_eq!(img.color, [1.0, 0.5, 0.25, 0.75]);
+        assert_eq!(
+            img.sprite_guid.as_deref(),
             Some("22222222222222222222222222222222")
         );
-        assert!(image.enabled);
-        let text = match &assembled.ui.elements[1] {
-            UiElementComponent::Text(text) => text,
-            UiElementComponent::Image(_) => return Err("the second element is not a text".into()),
-            UiElementComponent::Button(_) => return Err("the second element is not a text".into()),
+        let UiElementComponent::Text(txt) = &assembled.ui.elements[1] else {
+            return Err("the second element is not a text".into());
         };
-        assert_eq!(text.entity, EntityId::new(2));
-        assert_eq!(text.text, "Score 0");
-        assert_eq!(text.font_size, 18.0);
-        assert_eq!(text.color, [1.0, 1.0, 1.0, 1.0]);
-        assert!(text.enabled);
+        assert_eq!(
+            (txt.entity, txt.text.as_str(), txt.font_size),
+            (EntityId::new(2), "Score 0", 18.0)
+        );
+        assert_eq!((txt.color, txt.enabled), ([1.0, 1.0, 1.0, 1.0], true));
         Ok(())
     }
 

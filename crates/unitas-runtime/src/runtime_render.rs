@@ -1,7 +1,10 @@
 use std::collections::HashMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use unitas_animation::CurveBindingTarget;
+use unitas_animation::curve::AssetReference;
+use unitas_asset::meta::GuidIndex;
 use unitas_asset::scene::{LightComponent, MeshRendererComponent, RenderBinding, SpriteDrawMode};
 use unitas_core::{EntityId, IDENTITY_ROTATION, SceneGraph, Transform, rotate_vector};
 use unitas_render::image::{Image, Rgba8};
@@ -13,6 +16,7 @@ use unitas_render::{
 };
 
 use super::{LoadedScene, Runtime};
+use crate::animation::is_sprite_renderer_sprite_binding;
 use crate::canvas::UiDrawItem;
 use crate::error::RenderError;
 use crate::presenter::{GpuCameraBinding, scene_gpu_meshes};
@@ -149,6 +153,8 @@ pub struct RenderWorld {
     lights: HashMap<u64, RenderLight>,
     ambient: [f32; 3],
     sprites: Vec<RenderSprite>,
+    sprite_asset_paths: HashMap<String, PathBuf>,
+    sprite_texture_cache: HashMap<PathBuf, Arc<Image>>,
     camera_defaults: HashMap<EntityId, RenderCameraParams>,
     light_defaults: HashMap<EntityId, RenderLight>,
     effect_mesh: Mesh,
@@ -166,6 +172,8 @@ impl Default for RenderWorld {
             lights: HashMap::new(),
             ambient: [0.0; 3],
             sprites: Vec::new(),
+            sprite_asset_paths: HashMap::new(),
+            sprite_texture_cache: HashMap::new(),
             camera_defaults: HashMap::new(),
             light_defaults: HashMap::new(),
             effect_mesh: cube(1.0),
@@ -442,7 +450,23 @@ impl Runtime {
         }
         for sprite in &binding.sprites {
             let entity = EntityId::new(entity_base + sprite.entity.as_u64());
-            let texture = load_texture_image(sprite.sprite_path.as_deref()).map(Arc::new);
+            if let (Some(guid), Some(path)) = (&sprite.sprite_guid, &sprite.sprite_path) {
+                self.register_sprite_asset_root(path);
+                self.render
+                    .sprite_asset_paths
+                    .insert(guid.to_ascii_lowercase(), path.clone());
+                self.animation.register_sprite_asset(guid, path);
+            }
+            let texture = self.load_cached_sprite_texture(sprite.sprite_path.as_deref());
+            if let (Some(path), Some(tex)) = (&sprite.sprite_path, &texture) {
+                self.render
+                    .sprite_texture_cache
+                    .insert(path.clone(), Arc::clone(tex));
+                if let Some(guid) = &sprite.sprite_guid {
+                    self.animation
+                        .register_sprite_texture(guid, path, Arc::clone(tex));
+                }
+            }
             if let Some(diagnostic) = &sprite.diagnostic {
                 diagnostics.push((entity, diagnostic.clone()));
             }
@@ -511,7 +535,10 @@ impl Runtime {
     }
 
     fn import_scene_mesh(&mut self, renderer: &MeshRendererComponent) -> Option<u64> {
-        let mesh_data = if let (Some(file_id), Some(guid)) =
+        let mesh_data = if let Some(path) = &renderer.mesh_path {
+            unitas_asset::model::load_or_cook_mesh(path)
+                .map(unitas_asset::model::CookedMesh::into_mesh)
+        } else if let (Some(file_id), Some(guid)) =
             (renderer.mesh_file_id, renderer.mesh_guid.as_deref())
         {
             let primitive = unitas_asset::primitive::builtin_primitive_by_identity(file_id, guid)?;
@@ -522,10 +549,6 @@ impl Runtime {
                 }
             }
             Some(data)
-        } else if let Some(path) = &renderer.mesh_path {
-            let bytes = std::fs::read(path).ok()?;
-            let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
-            unitas_asset::model::import_model(&bytes, name).ok()
         } else {
             None
         }?;
@@ -743,11 +766,17 @@ impl Runtime {
             .iter()
             .filter(|sprite| sprite.enabled)
             .filter_map(|sprite| {
-                let texture = sprite.texture.clone()?;
+                let texture = self.effective_sprite_texture(sprite)?;
+                let size = [
+                    texture.width as f32 / SPRITE_PIXELS_PER_UNIT,
+                    texture.height as f32 / SPRITE_PIXELS_PER_UNIT,
+                ];
                 let transform = self.entity_transform(sprite.entity)?;
+                let mut adjusted = sprite.clone();
+                adjusted.size = size;
                 Some(unitas_render::Sprite {
                     texture,
-                    model: sprite_model(&transform, sprite),
+                    model: sprite_model(&transform, &adjusted),
                     color: sprite.color,
                     sorting_layer: sprite.sorting_layer,
                     sorting_order: sprite.sorting_order,
@@ -769,7 +798,15 @@ impl Runtime {
         if entity.as_u64() == 0 {
             return false;
         }
-        let texture = load_texture_image(texture_path).map(Arc::new);
+        if let Some(path) = texture_path {
+            self.register_sprite_asset_root(path);
+        }
+        let texture = self.load_cached_sprite_texture(texture_path);
+        if let (Some(path), Some(tex)) = (texture_path, &texture) {
+            self.render
+                .sprite_texture_cache
+                .insert(path.to_path_buf(), Arc::clone(tex));
+        }
         if texture.is_none()
             && let Some(path) = texture_path
         {
@@ -877,6 +914,14 @@ impl Runtime {
             .sprites
             .iter()
             .find(|sprite| sprite.entity == entity)?;
+        let texture = self.effective_sprite_texture(sprite);
+        let size = match texture.as_ref() {
+            Some(image) => [
+                image.width as f32 / SPRITE_PIXELS_PER_UNIT,
+                image.height as f32 / SPRITE_PIXELS_PER_UNIT,
+            ],
+            None => sprite.size,
+        };
         Some([
             sprite.color[0],
             sprite.color[1],
@@ -887,10 +932,140 @@ impl Runtime {
             f32::from(u8::from(sprite.flip_x)),
             f32::from(u8::from(sprite.flip_y)),
             f32::from(u8::from(sprite.enabled)),
-            f32::from(u8::from(sprite.texture.is_some())),
-            sprite.size[0] * SPRITE_PIXELS_PER_UNIT,
-            sprite.size[1] * SPRITE_PIXELS_PER_UNIT,
+            f32::from(u8::from(texture.is_some())),
+            size[0] * SPRITE_PIXELS_PER_UNIT,
+            size[1] * SPRITE_PIXELS_PER_UNIT,
         ])
+    }
+
+    pub fn register_sprite_asset(&mut self, guid: &str, path: &Path) {
+        self.register_sprite_asset_root(path);
+        let lower = guid.trim().to_ascii_lowercase();
+        self.render
+            .sprite_asset_paths
+            .insert(lower.clone(), path.to_path_buf());
+        self.animation.register_sprite_asset(&lower, path);
+        if let Some(image) = load_texture_image(Some(path)).map(Arc::new) {
+            self.render
+                .sprite_texture_cache
+                .insert(path.to_path_buf(), Arc::clone(&image));
+            self.animation.register_sprite_texture(&lower, path, image);
+        }
+    }
+
+    fn register_sprite_asset_root(&mut self, asset_path: &Path) {
+        let Some(parent) = asset_path.parent() else {
+            return;
+        };
+        let mut index_root = parent.to_path_buf();
+        for ancestor in parent.ancestors() {
+            if ancestor.join("ProjectSettings").is_dir() {
+                let assets = ancestor.join("Assets");
+                index_root = if assets.is_dir() {
+                    assets
+                } else {
+                    ancestor.to_path_buf()
+                };
+                break;
+            }
+            if ancestor.file_name().and_then(|n| n.to_str()) == Some("Assets") {
+                index_root = ancestor.to_path_buf();
+                break;
+            }
+        }
+        if let Ok(index) = GuidIndex::build(&index_root) {
+            for (guid, path) in index.iter() {
+                let lower = guid.to_ascii_lowercase();
+                self.render
+                    .sprite_asset_paths
+                    .entry(lower.clone())
+                    .or_insert_with(|| path.to_path_buf());
+                self.animation.register_sprite_asset(&lower, path);
+            }
+        }
+    }
+
+    fn load_cached_sprite_texture(&self, path: Option<&Path>) -> Option<Arc<Image>> {
+        let path = path?;
+        if let Some(cached) = self.render.sprite_texture_cache.get(path) {
+            return Some(Arc::clone(cached));
+        }
+        load_texture_image(Some(path)).map(Arc::new)
+    }
+
+    fn resolve_sprite_reference_texture(&self, reference: AssetReference) -> Option<Arc<Image>> {
+        if reference.is_null() {
+            return None;
+        }
+        let guid = reference.guid_hex();
+        let path = self.render.sprite_asset_paths.get(&guid)?;
+        self.load_cached_sprite_texture(Some(path))
+    }
+
+    fn animated_sprite_reference_for(
+        &self,
+        sprite_entity: EntityId,
+    ) -> Option<(EntityId, CurveBindingTarget, AssetReference)> {
+        for anim_entity in self.animation.entities() {
+            for applied in self.animation.applied_object_references(anim_entity) {
+                if !is_sprite_renderer_sprite_binding(&applied.target) {
+                    continue;
+                }
+                let target_entity = if applied.target.object_path.is_empty() {
+                    Some(anim_entity)
+                } else {
+                    self.resolve_animated_child_entity(anim_entity, &applied.target.object_path)
+                };
+                if target_entity == Some(sprite_entity) {
+                    return Some((anim_entity, applied.target.clone(), applied.reference));
+                }
+            }
+        }
+        None
+    }
+
+    fn resolve_animated_child_entity(&self, root: EntityId, object_path: &str) -> Option<EntityId> {
+        for scene in &self.scenes {
+            if !scene.graph.contains(root) {
+                continue;
+            }
+            let mut current = root;
+            for segment in object_path.split('/') {
+                let trimmed = segment.trim();
+                if trimmed.is_empty() {
+                    continue;
+                }
+                let mut next = None;
+                for child_id in scene.graph.children(current) {
+                    if let Some(entity) = scene.graph.entity(*child_id)
+                        && entity.name == trimmed
+                    {
+                        next = Some(*child_id);
+                        break;
+                    }
+                }
+                current = next?;
+            }
+            return (current != root).then_some(current);
+        }
+        None
+    }
+
+    fn effective_sprite_texture(&self, sprite: &RenderSprite) -> Option<Arc<Image>> {
+        if let Some((anim_entity, target, reference)) =
+            self.animated_sprite_reference_for(sprite.entity)
+        {
+            if reference.is_null() {
+                return None;
+            }
+            if let Some(Some(texture)) = self.animation.resolved_sprite(anim_entity, &target) {
+                return Some(Arc::clone(texture));
+            }
+            if let Some(texture) = self.resolve_sprite_reference_texture(reference) {
+                return Some(texture);
+            }
+        }
+        sprite.texture.clone()
     }
 
     fn push_runtime_diagnostic(&mut self, entity: EntityId, message: String) {
@@ -1471,6 +1646,57 @@ SpriteRenderer:
     }
 
     #[test]
+    fn import_scene_mesh_reads_from_bundle_cooked_manifest_without_raw_source_file()
+    -> Result<(), Box<dyn std::error::Error>> {
+        use unitas_asset::model::{COOKED_MESH_DIR_NAME, cook_project_meshes};
+
+        let dir = std::env::temp_dir().join(format!(
+            "unitas_runtime_cooked_bundle_mesh_{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        let project_dir = dir.join("project");
+        let bundle_dir = dir.join("bundle");
+        let cache_dir = dir.join("cache");
+        std::fs::create_dir_all(project_dir.join("Assets/Models"))?;
+        std::fs::create_dir_all(bundle_dir.join("Assets/Models"))?;
+        std::fs::create_dir_all(bundle_dir.join("ProjectSettings"))?;
+
+        let obj = "o Hero\nv 0.0 0.0 0.0\nv 1.0 0.0 0.0\nv 0.0 1.0 0.0\nvn 0.0 0.0 1.0\nvt 0.0 0.0\nvt 1.0 0.0\nvt 0.0 1.0\nf 1/1/1 2/2/1 3/3/1\n";
+        std::fs::write(project_dir.join("Assets/Models/Hero.obj"), obj)?;
+        let meta = "fileFormatVersion: 2\nguid: dddddddddddddddddddddddddddddddd\n";
+        std::fs::write(project_dir.join("Assets/Models/Hero.obj.meta"), meta)?;
+        std::fs::write(bundle_dir.join("Assets/Models/Hero.obj.meta"), meta)?;
+        std::fs::write(bundle_dir.join("bundle.manifest"), "format_version=1\n")?;
+
+        let (manifest, report) = cook_project_meshes(
+            &project_dir,
+            &cache_dir,
+            &bundle_dir.join(COOKED_MESH_DIR_NAME),
+        )?;
+        assert_eq!(report.imported, 1);
+        assert_eq!(manifest.entries.len(), 1);
+
+        let staged_virtual_mesh_path = bundle_dir.join("Assets/Models/Hero.obj");
+        assert!(!staged_virtual_mesh_path.exists());
+
+        let scene_path = bundle_dir.join("Assets/MeshScene.unity");
+        let scene_yaml = "%YAML 1.1\n%TAG !u! tag:unity3d.com,2011:\n--- !u!1 &10\nGameObject:\n  m_Name: HeroMesh\n  m_Layer: 0\n--- !u!4 &11\nTransform:\n  m_GameObject: {fileID: 10}\n  m_LocalPosition: {x: 0, y: 0, z: 0}\n  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}\n  m_LocalScale: {x: 1, y: 1, z: 1}\n  m_Children: []\n  m_Father: {fileID: 0}\n--- !u!33 &12\nMeshFilter:\n  m_GameObject: {fileID: 10}\n  m_Mesh: {fileID: 4300000, guid: dddddddddddddddddddddddddddddddd, type: 3}\n--- !u!23 &13\nMeshRenderer:\n  m_GameObject: {fileID: 10}\n  m_Enabled: 1\n  m_Materials: []\n";
+        std::fs::write(&scene_path, scene_yaml)?;
+
+        let mut runtime = Runtime::new()?;
+        runtime.load_scene(&scene_path)?;
+        assert!(runtime.diagnostics().is_empty());
+        let renderables = runtime.scene_renderables();
+        assert_eq!(renderables.len(), 1);
+        assert_eq!(renderables[0].mesh.positions.len(), 3);
+        assert_eq!(renderables[0].mesh.indices.len(), 3);
+
+        let _ = std::fs::remove_dir_all(&dir);
+        Ok(())
+    }
+
+    #[test]
     fn point_and_spot_lights_are_collected_without_runtime_unsupported_diagnostics()
     -> Result<(), Box<dyn std::error::Error>> {
         let dir = std::env::temp_dir().join(format!(
@@ -1707,6 +1933,223 @@ MeshRenderer:
             .as_ref()
             .ok_or("expected URP _EmissionMap emissive texture")?;
         assert_eq!(emissive.pixels[0], [255, 255, 0]);
+        Ok(())
+    }
+
+    #[test]
+    fn ani_001_object_reference_curve_swaps_sprite_renderer_sprite_at_keyed_time()
+    -> Result<(), Box<dyn std::error::Error>> {
+        use unitas_animation::curve::{AssetReference, ObjectReferenceCurve, ObjectReferenceKey};
+        use unitas_animation::{
+            AnimationClip, AnimatorController, AnimatorState, CurveBinding, CurveBindingTarget,
+            PropertyCurve, StateMotion, WrapMode,
+        };
+
+        let dir = std::env::temp_dir().join(format!(
+            "unitas_runtime_sprite_swap_anim_{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        let assets_dir = dir.join("Assets");
+        std::fs::create_dir_all(&assets_dir)?;
+        std::fs::create_dir_all(dir.join("ProjectSettings"))?;
+
+        let guid_a = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        let guid_b = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+        let tex_a = assets_dir.join("SpriteA.tga");
+        write_test_tga(&tex_a, 100, 50, [255, 0, 0])?;
+        std::fs::write(
+            assets_dir.join("SpriteA.tga.meta"),
+            format!("fileFormatVersion: 2\nguid: {guid_a}\nTextureImporter:\n  sRGBTexture: 0\n"),
+        )?;
+        let tex_b = assets_dir.join("SpriteB.tga");
+        write_test_tga(&tex_b, 200, 80, [0, 255, 0])?;
+        std::fs::write(
+            assets_dir.join("SpriteB.tga.meta"),
+            format!("fileFormatVersion: 2\nguid: {guid_b}\nTextureImporter:\n  sRGBTexture: 0\n"),
+        )?;
+
+        let scene_path = assets_dir.join("SpriteSwapScene.unity");
+        let scene_yaml = format!(
+            "%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!1 &1
+GameObject:
+  m_Name: HeroSprite
+  m_Layer: 0
+--- !u!4 &2
+Transform:
+  m_GameObject: {{fileID: 1}}
+  m_LocalPosition: {{x: 0, y: 0, z: 0}}
+  m_LocalRotation: {{x: 0, y: 0, z: 0, w: 1}}
+  m_LocalScale: {{x: 1, y: 1, z: 1}}
+  m_Children: []
+  m_Father: {{fileID: 0}}
+--- !u!212 &3
+SpriteRenderer:
+  m_GameObject: {{fileID: 1}}
+  m_Enabled: 1
+  m_Sprite: {{fileID: 21300000, guid: {guid_a}, type: 3}}
+  m_Color: {{r: 1, g: 1, b: 1, a: 1}}
+  m_SortingLayerID: 0
+  m_SortingOrder: 0
+"
+        );
+        std::fs::write(&scene_path, scene_yaml)?;
+
+        let ref_a = AssetReference::from_hex(guid_a, 21300000).ok_or("invalid guid_a")?;
+        let ref_b = AssetReference::from_hex(guid_b, 21300000).ok_or("invalid guid_b")?;
+        let clip = AnimationClip::new(
+            "SwapSprites",
+            2.0,
+            60.0,
+            WrapMode::Loop,
+            vec![CurveBinding::new(
+                CurveBindingTarget::new("", "SpriteRenderer", "m_Sprite"),
+                PropertyCurve::ObjectReference(ObjectReferenceCurve::new(vec![
+                    ObjectReferenceKey::new(0.0, ref_a),
+                    ObjectReferenceKey::new(1.0, ref_b),
+                ])),
+            )],
+            Vec::new(),
+        );
+        let controller = AnimatorController::new(
+            "HeroController",
+            Vec::new(),
+            vec![AnimatorState::new("SwapSprites", StateMotion::Clip(clip))],
+            0,
+            Vec::new(),
+        );
+
+        let mut runtime = Runtime::new()?;
+        runtime.load_scene(&scene_path)?;
+        let entity = EntityId::new(1);
+        runtime.ensure_animator(entity.as_u64());
+        let handle = runtime.animation_mut().register_controller(controller);
+        runtime.set_animator_controller(entity, handle)?;
+
+        let initial_sprites = runtime.sprite_instances();
+        assert_eq!(initial_sprites.len(), 1);
+        assert_eq!(initial_sprites[0].texture.width, 100);
+        assert_eq!(initial_sprites[0].texture.height, 50);
+        assert_eq!(initial_sprites[0].texture.pixels[0], [255, 0, 0]);
+
+        runtime.tick(0.0)?;
+        runtime.tick(1.0)?;
+
+        let swapped_sprites = runtime.sprite_instances();
+        let _ = std::fs::remove_dir_all(&dir);
+        assert_eq!(swapped_sprites.len(), 1);
+        assert_eq!(swapped_sprites[0].texture.width, 200);
+        assert_eq!(swapped_sprites[0].texture.height, 80);
+        assert_eq!(swapped_sprites[0].texture.pixels[0], [0, 255, 0]);
+        assert!(
+            runtime.diagnostics().is_empty(),
+            "expected no diagnostics on valid sprite swap, got {:?}",
+            runtime.diagnostics()
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn ani_001_unresolvable_sprite_reference_produces_diagnostic_naming_asset_and_member_without_crash()
+    -> Result<(), Box<dyn std::error::Error>> {
+        use unitas_animation::curve::{AssetReference, ObjectReferenceCurve, ObjectReferenceKey};
+        use unitas_animation::{
+            AnimationClip, AnimatorController, AnimatorState, CurveBinding, CurveBindingTarget,
+            PropertyCurve, StateMotion, WrapMode,
+        };
+
+        let dir = std::env::temp_dir().join(format!(
+            "unitas_runtime_sprite_swap_missing_{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        let assets_dir = dir.join("Assets");
+        std::fs::create_dir_all(&assets_dir)?;
+        std::fs::create_dir_all(dir.join("ProjectSettings"))?;
+
+        let guid_a = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        let missing_guid = "deadbeefdeadbeefdeadbeefdeadbeef";
+        let tex_a = assets_dir.join("SpriteA.tga");
+        write_test_tga(&tex_a, 64, 64, [255, 0, 0])?;
+        std::fs::write(
+            assets_dir.join("SpriteA.tga.meta"),
+            format!("fileFormatVersion: 2\nguid: {guid_a}\nTextureImporter:\n  sRGBTexture: 0\n"),
+        )?;
+
+        let scene_path = assets_dir.join("MissingSpriteSwapScene.unity");
+        let scene_yaml = format!(
+            "%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!1 &1
+GameObject:
+  m_Name: HeroSprite
+  m_Layer: 0
+--- !u!4 &2
+Transform:
+  m_GameObject: {{fileID: 1}}
+  m_LocalPosition: {{x: 0, y: 0, z: 0}}
+  m_LocalRotation: {{x: 0, y: 0, z: 0, w: 1}}
+  m_LocalScale: {{x: 1, y: 1, z: 1}}
+  m_Children: []
+  m_Father: {{fileID: 0}}
+--- !u!212 &3
+SpriteRenderer:
+  m_GameObject: {{fileID: 1}}
+  m_Enabled: 1
+  m_Sprite: {{fileID: 21300000, guid: {guid_a}, type: 3}}
+  m_Color: {{r: 1, g: 1, b: 1, a: 1}}
+  m_SortingLayerID: 0
+  m_SortingOrder: 0
+"
+        );
+        std::fs::write(&scene_path, scene_yaml)?;
+
+        let ref_a = AssetReference::from_hex(guid_a, 21300000).ok_or("invalid guid_a")?;
+        let ref_missing =
+            AssetReference::from_hex(missing_guid, 21300099).ok_or("invalid missing_guid")?;
+        let clip = AnimationClip::new(
+            "BrokenSwap",
+            2.0,
+            60.0,
+            WrapMode::Once,
+            vec![CurveBinding::new(
+                CurveBindingTarget::new("", "SpriteRenderer", "m_Sprite"),
+                PropertyCurve::ObjectReference(ObjectReferenceCurve::new(vec![
+                    ObjectReferenceKey::new(0.0, ref_a),
+                    ObjectReferenceKey::new(1.0, ref_missing),
+                ])),
+            )],
+            Vec::new(),
+        );
+        let controller = AnimatorController::new(
+            "BrokenController",
+            Vec::new(),
+            vec![AnimatorState::new("BrokenSwap", StateMotion::Clip(clip))],
+            0,
+            Vec::new(),
+        );
+
+        let mut runtime = Runtime::new()?;
+        runtime.load_scene(&scene_path)?;
+        let entity = EntityId::new(1);
+        runtime.ensure_animator(entity.as_u64());
+        let handle = runtime.animation_mut().register_controller(controller);
+        runtime.set_animator_controller(entity, handle)?;
+        assert!(runtime.diagnostics().is_empty());
+
+        runtime.tick(0.0)?;
+        runtime.tick(1.0)?;
+        let _ = std::fs::remove_dir_all(&dir);
+
+        let diags = runtime.entity_diagnostics(entity);
+        assert!(
+            diags.iter().any(|msg| msg.contains(missing_guid)
+                && msg.contains("SpriteRenderer")
+                && msg.contains("m_Sprite")),
+            "expected diagnostic naming asset guid and SpriteRenderer.m_Sprite, got {diags:?}"
+        );
         Ok(())
     }
 }

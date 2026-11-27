@@ -1,4 +1,5 @@
 use std::collections::{BTreeMap, BTreeSet};
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use unitas_animation::curve::AssetReference;
@@ -11,6 +12,7 @@ use unitas_animation::{
 };
 use unitas_core::{EntityId, Transform, compose_world, normalize_rotation};
 use unitas_jobs::JobSystem;
+use unitas_render::image::Image;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum AnimationRuntimeDiagnostic {
@@ -24,6 +26,14 @@ pub enum AnimationRuntimeDiagnostic {
     UnresolvedChildPath {
         entity: EntityId,
         object_path: String,
+    },
+    UnresolvedObjectReference {
+        entity: EntityId,
+        object_path: String,
+        component: String,
+        property: String,
+        guid: String,
+        file_id: i64,
     },
     LegacyAnimation {
         entity: EntityId,
@@ -48,11 +58,28 @@ impl std::fmt::Display for AnimationRuntimeDiagnostic {
                 formatter,
                 "child object path '{object_path}' could not be resolved in scene graph"
             ),
+            Self::UnresolvedObjectReference {
+                entity,
+                object_path,
+                component,
+                property,
+                guid,
+                file_id,
+            } => write!(
+                formatter,
+                "{component}.{property} on entity {} (path '{object_path}') references sprite asset guid {guid} (fileID {file_id}) that could not be resolved",
+                entity.as_u64()
+            ),
             Self::LegacyAnimation { message, .. } => {
                 write!(formatter, "legacy animation: {message}")
             }
         }
     }
+}
+
+pub fn is_sprite_renderer_sprite_binding(target: &CurveBindingTarget) -> bool {
+    target.component == "SpriteRenderer"
+        && matches!(target.property.as_str(), "m_Sprite" | "sprite")
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -129,6 +156,9 @@ pub struct AnimationWorld {
     legacy: BTreeMap<EntityId, LegacyAnimationComponent>,
     animated: BTreeSet<EntityId>,
     pending_transform_writes: BTreeSet<EntityId>,
+    sprite_assets: BTreeMap<String, PathBuf>,
+    sprite_textures: BTreeMap<PathBuf, Arc<Image>>,
+    resolved_sprites: BTreeMap<(EntityId, CurveBindingTarget), Option<Arc<Image>>>,
     last_job_workers: usize,
 }
 
@@ -141,8 +171,42 @@ impl AnimationWorld {
             legacy: BTreeMap::new(),
             animated: BTreeSet::new(),
             pending_transform_writes: BTreeSet::new(),
+            sprite_assets: BTreeMap::new(),
+            sprite_textures: BTreeMap::new(),
+            resolved_sprites: BTreeMap::new(),
             last_job_workers: 0,
         }
+    }
+
+    pub fn register_sprite_asset(&mut self, guid: &str, path: &Path) {
+        let lower = guid.trim().to_ascii_lowercase();
+        self.sprite_assets.insert(lower, path.to_path_buf());
+    }
+
+    pub fn register_sprite_texture(&mut self, guid: &str, path: &Path, texture: Arc<Image>) {
+        let lower = guid.trim().to_ascii_lowercase();
+        self.sprite_assets.insert(lower, path.to_path_buf());
+        self.sprite_textures.insert(path.to_path_buf(), texture);
+    }
+
+    pub fn has_sprite_assets(&self) -> bool {
+        !self.sprite_assets.is_empty()
+    }
+
+    pub fn resolved_sprite(
+        &self,
+        entity: EntityId,
+        target: &CurveBindingTarget,
+    ) -> Option<Option<&Arc<Image>>> {
+        self.resolved_sprites
+            .get(&(entity, target.clone()))
+            .map(Option::as_ref)
+    }
+
+    pub fn clear_sprite_assets(&mut self) {
+        self.sprite_assets.clear();
+        self.sprite_textures.clear();
+        self.resolved_sprites.clear();
     }
 
     pub fn last_job_workers(&self) -> usize {
@@ -187,6 +251,8 @@ impl AnimationWorld {
     pub fn remove_animator(&mut self, entity: EntityId) -> bool {
         self.animated.remove(&entity);
         self.pending_transform_writes.remove(&entity);
+        self.resolved_sprites
+            .retain(|(owner, _), _| *owner != entity);
         self.entries.remove(&entity).is_some()
     }
 
@@ -284,6 +350,7 @@ impl AnimationWorld {
         entry.transform = transform;
         self.pending_transform_writes.insert(entity);
         default_children.extend(child_bindings);
+        self.resolve_entity_object_references(entity);
         Ok(default_children)
     }
 
@@ -550,6 +617,7 @@ impl AnimationWorld {
         }
         self.last_job_workers = usize::from(!self.animated.is_empty());
         self.tick_legacy(frame, &mut all_child_bindings);
+        self.resolve_all_object_references();
         all_child_bindings
     }
 
@@ -579,6 +647,7 @@ impl AnimationWorld {
         if task_count == 0 {
             self.last_job_workers = 0;
             self.tick_legacy(frame, &mut all_child_bindings);
+            self.resolve_all_object_references();
             return all_child_bindings;
         }
         let shared_tasks = Arc::new(tasks);
@@ -651,6 +720,7 @@ impl AnimationWorld {
         }
         self.last_job_workers = observed_threads.len();
         self.tick_legacy(frame, &mut all_child_bindings);
+        self.resolve_all_object_references();
         all_child_bindings
     }
 
@@ -827,6 +897,7 @@ impl AnimationWorld {
         apply_bindings_to_transform(entity, entry, &mut transform, &defaults);
         entry.transform = transform;
         self.pending_transform_writes.insert(entity);
+        self.resolve_entity_object_references(entity);
         Ok(())
     }
 
@@ -870,6 +941,88 @@ impl AnimationWorld {
     pub fn remove_legacy_animation(&mut self, entity: EntityId) -> bool {
         self.legacy.remove(&entity).is_some()
     }
+
+    fn resolve_all_object_references(&mut self) {
+        if self.sprite_assets.is_empty() {
+            return;
+        }
+        let entities: Vec<EntityId> = self.entries.keys().copied().collect();
+        for entity in entities {
+            self.resolve_entity_object_references(entity);
+        }
+    }
+
+    fn resolve_entity_object_references(&mut self, entity: EntityId) {
+        if self.sprite_assets.is_empty() {
+            return;
+        }
+        let Some(applied_list) = self
+            .entries
+            .get(&entity)
+            .map(|entry| entry.applied_object_references.clone())
+        else {
+            return;
+        };
+        for applied in applied_list {
+            if !is_sprite_renderer_sprite_binding(&applied.target) {
+                continue;
+            }
+            if applied.reference.is_null() {
+                self.resolved_sprites.insert((entity, applied.target), None);
+                continue;
+            }
+            let guid = applied.reference.guid_hex();
+            let path = self.sprite_assets.get(&guid).cloned();
+            let texture = match path {
+                Some(ref asset_path) => {
+                    if let Some(cached) = self.sprite_textures.get(asset_path) {
+                        Some(Arc::clone(cached))
+                    } else if let Some(loaded) = load_sprite_texture_image(asset_path) {
+                        let arc = Arc::new(loaded);
+                        self.sprite_textures
+                            .insert(asset_path.clone(), Arc::clone(&arc));
+                        Some(arc)
+                    } else {
+                        None
+                    }
+                }
+                None => None,
+            };
+            if let Some(tex) = texture {
+                self.resolved_sprites
+                    .insert((entity, applied.target), Some(tex));
+            } else if let Some(entry) = self.entries.get_mut(&entity) {
+                entry.push_diagnostic(AnimationRuntimeDiagnostic::UnresolvedObjectReference {
+                    entity,
+                    object_path: applied.target.object_path.clone(),
+                    component: applied.target.component.clone(),
+                    property: applied.target.property.clone(),
+                    guid,
+                    file_id: applied.reference.file_id,
+                });
+            }
+        }
+    }
+}
+
+fn load_sprite_texture_image(path: &Path) -> Option<Image> {
+    let cooked = unitas_asset::texture::load_or_cook_texture(path)?;
+    let mut image = Image::new(cooked.width, cooked.height);
+    for (index, pixel) in image.pixels.iter_mut().enumerate() {
+        let offset = index * 4;
+        pixel[0] = cooked.rgba.get(offset).copied().unwrap_or(0);
+        pixel[1] = cooked.rgba.get(offset + 1).copied().unwrap_or(0);
+        pixel[2] = cooked.rgba.get(offset + 2).copied().unwrap_or(0);
+    }
+    if cooked.srgb {
+        for pixel in &mut image.pixels {
+            for channel in pixel.iter_mut() {
+                let linear = unitas_asset::texture::import::srgb_to_linear(*channel);
+                *channel = (linear * 255.0).round() as u8;
+            }
+        }
+    }
+    Some(image)
 }
 
 fn current_state_index(entry: &EntityAnimatorEntry) -> usize {
@@ -2413,4 +2566,117 @@ fn conjugate_rotation(rotation: [f32; 4]) -> [f32; 4] {
 
 fn rotation_delta(previous: [f32; 4], current: [f32; 4]) -> [f32; 4] {
     unitas_core::multiply_rotation(current, conjugate_rotation(previous))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use unitas_animation::curve::{ObjectReferenceCurve, ObjectReferenceKey};
+    use unitas_animation::{AnimatorState, CurveBinding, PropertyCurve, StateMotion};
+
+    fn write_test_tga(path: &Path, width: u16, height: u16, rgb: [u8; 3]) -> std::io::Result<()> {
+        let mut bytes = vec![0u8; 18 + (width as usize) * (height as usize) * 3];
+        bytes[2] = 2;
+        bytes[12..14].copy_from_slice(&width.to_le_bytes());
+        bytes[14..16].copy_from_slice(&height.to_le_bytes());
+        bytes[16] = 24;
+        bytes[17] = 0x20;
+        for chunk in bytes[18..].chunks_exact_mut(3) {
+            chunk[0] = rgb[2];
+            chunk[1] = rgb[1];
+            chunk[2] = rgb[0];
+        }
+        std::fs::write(path, bytes)
+    }
+
+    #[test]
+    fn ani_001_animation_world_resolves_sprite_swap_and_records_missing_sprite_diagnostic()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let dir = std::env::temp_dir().join(format!(
+            "unitas_anim_world_sprite_swap_{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir)?;
+
+        let guid_a = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        let guid_b = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+        let missing_guid = "deadbeefdeadbeefdeadbeefdeadbeef";
+        let tex_a = dir.join("a.tga");
+        let tex_b = dir.join("b.tga");
+        write_test_tga(&tex_a, 16, 16, [255, 0, 0])?;
+        write_test_tga(&tex_b, 32, 32, [0, 255, 0])?;
+        std::fs::write(
+            dir.join("a.tga.meta"),
+            format!("fileFormatVersion: 2\nguid: {guid_a}\nTextureImporter:\n  sRGBTexture: 0\n"),
+        )?;
+        std::fs::write(
+            dir.join("b.tga.meta"),
+            format!("fileFormatVersion: 2\nguid: {guid_b}\nTextureImporter:\n  sRGBTexture: 0\n"),
+        )?;
+
+        let ref_a = AssetReference::from_hex(guid_a, 21300000).ok_or("invalid guid_a")?;
+        let ref_b = AssetReference::from_hex(guid_b, 21300000).ok_or("invalid guid_b")?;
+        let ref_missing =
+            AssetReference::from_hex(missing_guid, 21300099).ok_or("invalid missing_guid")?;
+        let target = CurveBindingTarget::new("", "SpriteRenderer", "m_Sprite");
+        let clip = AnimationClip::new(
+            "Swap",
+            3.0,
+            60.0,
+            WrapMode::Once,
+            vec![CurveBinding::new(
+                target.clone(),
+                PropertyCurve::ObjectReference(ObjectReferenceCurve::new(vec![
+                    ObjectReferenceKey::new(0.0, ref_a),
+                    ObjectReferenceKey::new(1.0, ref_b),
+                    ObjectReferenceKey::new(2.0, ref_missing),
+                ])),
+            )],
+            Vec::new(),
+        );
+        let controller = AnimatorController::new(
+            "SwapCtrl",
+            Vec::new(),
+            vec![AnimatorState::new("Swap", StateMotion::Clip(clip))],
+            0,
+            Vec::new(),
+        );
+
+        let mut world = AnimationWorld::new();
+        world.register_sprite_asset(guid_a, &tex_a);
+        world.register_sprite_asset(guid_b, &tex_b);
+        let entity = EntityId::new(1);
+        world.ensure_animator(entity, Transform::default());
+        let handle = world.register_controller(controller);
+        world.set_controller(entity, handle)?;
+
+        let tex0 = world
+            .resolved_sprite(entity, &target)
+            .flatten()
+            .ok_or("expected resolved sprite at t=0")?;
+        assert_eq!((tex0.width, tex0.height), (16, 16));
+        assert_eq!(world.diagnostic_count(entity), Some(0));
+
+        world.tick(1.0);
+        let tex1 = world
+            .resolved_sprite(entity, &target)
+            .flatten()
+            .ok_or("expected resolved sprite at t=1")?;
+        assert_eq!((tex1.width, tex1.height), (32, 32));
+        assert_eq!(world.diagnostic_count(entity), Some(0));
+
+        world.tick(1.0);
+        let _ = std::fs::remove_dir_all(&dir);
+        let diags = world
+            .diagnostics(entity)
+            .ok_or("expected diagnostics slice")?;
+        assert!(
+            diags.iter().any(|d| d.contains(missing_guid)
+                && d.contains("SpriteRenderer")
+                && d.contains("m_Sprite")),
+            "expected diagnostic naming asset and member, got {diags:?}"
+        );
+        Ok(())
+    }
 }
