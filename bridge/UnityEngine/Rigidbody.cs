@@ -441,7 +441,11 @@ namespace UnityEngine
             ulong entity = NativeEntityId;
             if (entity != 0)
             {
-                Physics.Provider?.TrySetBodyPosition(entity, position);
+                IPhysicsProvider? provider = Physics.Provider;
+                if (provider != null && (!_isKinematic || !provider.TryMoveBodyPosition(entity, position)))
+                {
+                    provider.TrySetBodyPosition(entity, position);
+                }
             }
 
             transform.SeedPositionFromNative(position);

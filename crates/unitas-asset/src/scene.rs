@@ -24,7 +24,7 @@ pub use scene_physics::parse_physic_material;
 #[path = "scene_audio.rs"]
 mod scene_audio;
 #[path = "scene_physics.rs"]
-mod scene_physics;
+pub mod scene_physics;
 
 pub const AUDIO_SOURCE_CLASS: u32 = 82;
 pub const AUDIO_CLIP_CLASS: u32 = 83;
@@ -2033,31 +2033,32 @@ fn document_body(document: &Document) -> Option<&Node> {
 }
 
 fn handled_component_class(class_id: u32) -> bool {
-    matches!(
-        class_id,
-        GAME_OBJECT_CLASS
-            | TRANSFORM_CLASS
-            | CAMERA_CLASS
-            | MESH_RENDERER_CLASS
-            | MESH_FILTER_CLASS
-            | LIGHT_CLASS
-            | RIGIDBODY_CLASS
-            | BOX_COLLIDER_CLASS
-            | SPHERE_COLLIDER_CLASS
-            | CAPSULE_COLLIDER_CLASS
-            | MESH_COLLIDER_CLASS
-            | CHARACTER_CONTROLLER_CLASS
-            | MONO_BEHAVIOUR_CLASS
-            | AUDIO_SOURCE_CLASS
-            | AUDIO_CLIP_CLASS
-            | PHYSIC_MATERIAL_CLASS
-            | PARTICLE_SYSTEM_CLASS
-            | TRAIL_RENDERER_CLASS
-            | PREFAB_INSTANCE_CLASS
-            | CANVAS_CLASS
-            | RECT_TRANSFORM_CLASS
-            | SPRITE_RENDERER_CLASS
-    )
+    scene_physics::scene_joints::is_joint_class(class_id)
+        || matches!(
+            class_id,
+            GAME_OBJECT_CLASS
+                | TRANSFORM_CLASS
+                | CAMERA_CLASS
+                | MESH_RENDERER_CLASS
+                | MESH_FILTER_CLASS
+                | LIGHT_CLASS
+                | RIGIDBODY_CLASS
+                | BOX_COLLIDER_CLASS
+                | SPHERE_COLLIDER_CLASS
+                | CAPSULE_COLLIDER_CLASS
+                | MESH_COLLIDER_CLASS
+                | CHARACTER_CONTROLLER_CLASS
+                | MONO_BEHAVIOUR_CLASS
+                | AUDIO_SOURCE_CLASS
+                | AUDIO_CLIP_CLASS
+                | PHYSIC_MATERIAL_CLASS
+                | PARTICLE_SYSTEM_CLASS
+                | TRAIL_RENDERER_CLASS
+                | PREFAB_INSTANCE_CLASS
+                | CANVAS_CLASS
+                | RECT_TRANSFORM_CLASS
+                | SPRITE_RENDERER_CLASS
+        )
 }
 
 fn camera_component(entity: EntityId, body: &Node) -> CameraComponent {

@@ -5,7 +5,9 @@ use unitas_physics::matrix::{
     CollisionMatrix, CollisionMessage, MessageDelivery, PhysicsObject, message_is_eligible,
     route_message,
 };
-use unitas_physics::two_d::body::{CollisionDetectionMode2D, RigidbodyInterpolation2D};
+use unitas_physics::two_d::body::{
+    CollisionDetectionMode2D, Joint2D, JointId2D, RigidbodyInterpolation2D,
+};
 use unitas_physics::two_d::effector::BuoyancyEffector2D;
 use unitas_physics::two_d::{
     AreaEffector2D, BodyDesc2D, BodyId2D, BodyType2D, ColliderDesc2D, ColliderId2D,
@@ -13,8 +15,8 @@ use unitas_physics::two_d::{
     RoutedMessage2D, Shape2D, SurfaceEffector2D, World2D,
 };
 use unitas_physics::{
-    BodyDesc, BodyRole, CollisionDetectionMode3D, CollisionEvent, Phase, PhysicsError, QueryHit,
-    SolverSettings, TriggerEvent, World,
+    BodyDesc, BodyRole, CollisionDetectionMode3D, CollisionEvent, Joint3D, JointId3D, Phase,
+    PhysicsError, QueryHit, SolverSettings, TriggerEvent, World,
 };
 
 const FREEZE_ROTATION_CONSTRAINT_2D: u32 = 4;
@@ -105,6 +107,9 @@ pub struct PhysicsRuntimeWorld {
     interpolation_alpha_3d: f64,
     bodies_2d: HashMap<EntityId, BodyId2D>,
     colliders_2d: HashMap<EntityId, Vec<ColliderId2D>>,
+    joints_3d: HashMap<(EntityId, u32), JointId3D>,
+    joints_2d: HashMap<(EntityId, u32), JointId2D>,
+    world_anchor_2d: Option<BodyId2D>,
 }
 
 impl PhysicsRuntimeWorld {
@@ -115,6 +120,9 @@ impl PhysicsRuntimeWorld {
             interpolation_alpha_3d: 0.0,
             bodies_2d: HashMap::new(),
             colliders_2d: HashMap::new(),
+            joints_3d: HashMap::new(),
+            joints_2d: HashMap::new(),
+            world_anchor_2d: None,
         }
     }
 
@@ -138,6 +146,60 @@ impl PhysicsRuntimeWorld {
         self.world_2d.clear_entities();
         self.bodies_2d.clear();
         self.colliders_2d.clear();
+        self.joints_2d.clear();
+        self.world_anchor_2d = None;
+    }
+
+    pub fn set_joint_3d(
+        &mut self,
+        entity: EntityId,
+        slot: u32,
+        joint: Joint3D,
+    ) -> Result<JointId3D, PhysicsError> {
+        if let Some(prev) = self.joints_3d.remove(&(entity, slot)) {
+            self.world_3d.remove_joint_3d(prev);
+        }
+        let id = self.world_3d.add_joint_3d(joint)?;
+        self.joints_3d.insert((entity, slot), id);
+        Ok(id)
+    }
+
+    pub fn remove_joint_3d(&mut self, entity: EntityId, slot: u32) -> bool {
+        self.joints_3d
+            .remove(&(entity, slot))
+            .is_some_and(|id| self.world_3d.remove_joint_3d(id))
+    }
+
+    pub fn joint_id_3d(&self, entity: EntityId, slot: u32) -> Option<JointId3D> {
+        self.joints_3d.get(&(entity, slot)).copied()
+    }
+
+    pub fn set_joint_2d(&mut self, entity: EntityId, slot: u32, joint: Joint2D) -> JointId2D {
+        if let Some(prev) = self.joints_2d.remove(&(entity, slot)) {
+            self.world_2d.remove_joint(prev);
+        }
+        let id = self.world_2d.add_joint(joint);
+        self.joints_2d.insert((entity, slot), id);
+        id
+    }
+
+    pub fn remove_joint_2d(&mut self, entity: EntityId, slot: u32) -> bool {
+        self.joints_2d
+            .remove(&(entity, slot))
+            .is_some_and(|id| self.world_2d.remove_joint(id))
+    }
+
+    pub fn ensure_world_anchor_2d(&mut self) -> BodyId2D {
+        if let Some(id) = self.world_anchor_2d
+            && self.world_2d.body(id).is_some()
+        {
+            return id;
+        }
+        let id = self
+            .world_2d
+            .add_body(BodyDesc2D::static_body(EntityId::new(u64::MAX), [0.0, 0.0]));
+        self.world_anchor_2d = Some(id);
+        id
     }
 
     pub fn summary(&self) -> PhysicsWorldSummary {

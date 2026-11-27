@@ -192,9 +192,9 @@ pub struct Callbacks {
 }
 
 pub(crate) struct PhysicsMessages {
-    events: Vec<CollisionEvent>,
-    trigger_events: Vec<TriggerEvent>,
-    contacts_2d: Vec<ContactEvent>,
+    pub(crate) events: Vec<CollisionEvent>,
+    pub(crate) trigger_events: Vec<TriggerEvent>,
+    pub(crate) contacts_2d: Vec<ContactEvent>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -1477,23 +1477,10 @@ impl Runtime {
                 self.input.begin_frame(scaled_delta);
             }
             BuiltinWork::PhysicsFixedUpdate => {
-                let fixed_step = self.fixed_timestep;
-                self.sync_kinematic_transforms();
-                self.physics.world_3d_mut().step(fixed_step)?;
-                self.write_back_dynamic_transforms();
-                let events = self.physics.world_3d_mut().drain_events();
-                let trigger_events = self.physics.world_3d_mut().drain_trigger_events();
-                self.pending_physics_messages = Some(PhysicsMessages {
-                    events,
-                    trigger_events,
-                    contacts_2d: Vec::new(),
-                });
+                self.run_physics_fixed_update_3d()?;
             }
             BuiltinWork::Physics2DFixedUpdate => {
-                let contacts_2d = self.physics.step_2d_contacts(self.fixed_timestep as f32);
-                if let Some(messages) = &mut self.pending_physics_messages {
-                    messages.contacts_2d = contacts_2d;
-                }
+                self.run_physics_fixed_update_2d();
             }
             BuiltinWork::ScriptRunBehaviourFixedUpdate => {
                 let fixed_step = self.fixed_timestep;
@@ -1559,7 +1546,7 @@ impl Runtime {
         Ok(())
     }
 
-    fn dispatch_physics_messages<H>(&mut self, hook: &mut H)
+    pub(crate) fn dispatch_physics_messages<H>(&mut self, hook: &mut H)
     where
         H: FnMut(&mut Self, &mut dyn FnMut()),
     {
@@ -2180,7 +2167,7 @@ impl Runtime {
         }
     }
 
-    fn sync_kinematic_transforms(&mut self) {
+    pub(crate) fn sync_kinematic_transforms(&mut self) {
         for scene in &self.scenes {
             for (entity, offset) in &scene.body_offsets {
                 if self.physics.world_3d().body_role(*entity) != Some(BodyRole::Kinematic) {
@@ -2285,7 +2272,7 @@ impl Runtime {
         }
     }
 
-    fn write_back_dynamic_transforms(&mut self) {
+    pub(crate) fn write_back_dynamic_transforms(&mut self) {
         for scene in &mut self.scenes {
             for (entity, offset) in &scene.body_offsets {
                 if self.physics.world_3d().body_role(*entity) != Some(BodyRole::Dynamic) {

@@ -111,6 +111,11 @@ SCENARIOS: tuple[tuple[str, str, tuple[str, ...], bool], ...] = (
     ("s8_results_gold_checkpoint", "s8_results_gold_checkpoint.scenario.json", (), False),
     ("s8_quality_sweep", "s8_quality_sweep.scenario.json", (), False),
     ("arenas_2_3", "arenas_2_3.json", ("--repeat", "2"), False),
+    ("boost_pad", "boost_pad.json", ("--repeat", "2"), False),
+    ("arena_sweeper", "arena_sweeper.json", ("--repeat", "2"), False),
+    ("nested_prefab", "nested_prefab.json", ("--repeat", "2"), False),
+    ("speed_trail", "speed_trail.json", ("--repeat", "2"), False),
+    ("attract_ghost", "attract_ghost.json", ("--repeat", "2"), False),
 )
 
 LANE_METADATA: tuple[tuple[str, str], ...] = (

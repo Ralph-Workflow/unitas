@@ -29,7 +29,6 @@ struct SurfaceTarget<'a> {
     scale: f32,
 }
 
-#[derive(Clone, Copy)]
 struct SurfaceOverlays<'a> {
     overlay: &'a [TextOverlayItem],
     canvas_rects: &'a [CanvasRect],

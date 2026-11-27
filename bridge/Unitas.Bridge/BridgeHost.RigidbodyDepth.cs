@@ -82,6 +82,11 @@ namespace Unitas.Bridge
                 return false;
             }
 
+            if (_entityGameObjects.TryGetValue(entity, out GameObject? go) && go != null && !go.IsDestroyed)
+            {
+                return TryAddForce(entity, go.transform.rotation * force, mode);
+            }
+
             ulong buffer = (ulong)RuntimeInterop.unitas_runtime_path_buffer(_runtimeHandle, 32).ToInt64();
             if (buffer == 0)
             {
@@ -100,6 +105,11 @@ namespace Unitas.Bridge
                 return false;
             }
 
+            if (_entityGameObjects.TryGetValue(entity, out GameObject? go) && go != null && !go.IsDestroyed)
+            {
+                return TryAddBodyTorque(entity, go.transform.rotation * torque, mode);
+            }
+
             ulong buffer = (ulong)RuntimeInterop.unitas_runtime_path_buffer(_runtimeHandle, 32).ToInt64();
             if (buffer == 0)
             {
@@ -116,6 +126,11 @@ namespace Unitas.Bridge
             if (_isDisposed || _runtimeHandle == 0 || entity == 0)
             {
                 return false;
+            }
+
+            if (_entityGameObjects.TryGetValue(entity, out GameObject? go) && go != null && !go.IsDestroyed)
+            {
+                TrySetBodyPosition(entity, go.transform.position);
             }
 
             ulong buffer = (ulong)RuntimeInterop.unitas_runtime_path_buffer(_runtimeHandle, 56).ToInt64();
@@ -149,6 +164,11 @@ namespace Unitas.Bridge
             if (_isDisposed || _runtimeHandle == 0 || entity == 0)
             {
                 return false;
+            }
+
+            if (_entityGameObjects.TryGetValue(entity, out GameObject? go) && go != null && !go.IsDestroyed)
+            {
+                TrySetBodyPosition(entity, go.transform.position);
             }
 
             ulong buffer = (ulong)RuntimeInterop.unitas_runtime_path_buffer(_runtimeHandle, 56).ToInt64();

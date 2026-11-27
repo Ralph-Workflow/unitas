@@ -7,19 +7,35 @@ reported with its real state, never hidden.
 
 ## What the sample contains
 
+- One title scene, `Assets/Scenes/Title.unity`, carrying the title-screen menu
+  and settings canvas alongside `AttractGhost` (`MeshFilter`, `MeshRenderer`,
+  `TrailRenderer`, and `GhostReplay` with `attractMode: 1`), which loops an
+  attract-mode route across the title scene (`Scenarios/attract_ghost.json`).
 - One gameplay scene, `Assets/Scenes/RollABall.unity`: the first arena (a 12 x 12
-  unit floor with four walls), one marble (`PlayerBall`, radius 0.5), a pickup
-  sensor, a directional light and one camera (`Main Camera`). The pickups are
-  partly authored as prefab instances (`Assets/Prefabs/Pickup.prefab`,
-  `PickupGold.prefab`) under the `Pickups` root, next to four authored pickup
-  objects, and the scene also carries an authored prop (`ArenaProp`), a
-  collect burst, a landing dust effect and the collect chime.
+  unit floor with four walls), one marble (`PlayerBall`, radius 0.5,
+  `m_CollisionDetection: 1`, with a `TrailRenderer` speed trail gated by
+  `PlayerController` at `10 m/s`), a trigger boost pad (`BoostPad` with
+  `Assets/Materials/BoostPad.mat`, accelerating the marble to `16.0 m/s`), a
+  pickup sensor, a directional light and one camera (`Main Camera`). The
+  pickups are partly authored as prefab instances
+  (`Assets/Prefabs/Pickup.prefab`, `PickupGold.prefab`) under the `Pickups`
+  root, next to four authored pickup objects, and the scene also carries an
+  authored prop (`ArenaProp`), a collect burst, a landing dust effect and the
+  collect chime.
 - Two more arena scenes, `Assets/Scenes/Arena2.unity` (the Clockwork arena) and
-  `Assets/Scenes/Arena3.unity` (the Sky Garden arena), each carrying the
-  `ArenaController` script that lays that arena's twelve pickups on the arena's
-  own layout and drives the Sky Garden's moving blocks. Their scenario
-  `Scenarios/arenas_2_3.json` passes 11 of 11 checkpoints with `--repeat 2`
-  and runs in the `make verify-samples` scenario list.
+  `Assets/Scenes/Arena3.unity` (the Sky Garden arena), each carrying
+  `PlayerBall` with `m_CollisionDetection: 1`, kinematic moving blocks and
+  sweepers (`m_IsKinematic: 1`), and the `ArenaController` script that lays
+  that arena's twelve pickups on the arena's own layout and drives the Sky
+  Garden's moving blocks with `Rigidbody.MovePosition` in `FixedUpdate`.
+  `Assets/Scenes/Arena3.unity` also carries a nested prefab instance of
+  `Assets/Prefabs/NestedPickupCluster.prefab` (which itself nests a
+  `Pickup.prefab` instance and overrides its name and local Y position) with
+  scene-level overrides (`NestedPickupCluster` at `(-4.5, 0, 4.5)` and inner
+  child name `NestedPickupStar`). Their scenario `Scenarios/arenas_2_3.json`
+  passes 11 of 11 checkpoints with `--repeat 2` and runs in the
+  `make verify-samples` scenario list, alongside `Scenarios/arena_sweeper.json`
+  and `Scenarios/nested_prefab.json`.
 - One physics-probe scene, `Assets/Scenes/PhysicsLab.unity`, used by the
   physics scenarios; it is not an arena and carries no game scripts. It now
   also carries the bodies the S11 scenarios need: the `EdgeMarble` (a 2 kg
@@ -33,9 +49,11 @@ reported with its real state, never hidden.
   objects the mesh-and-compound scenario needs: a GameObject whose
   `MeshCollider` names the concave frame mesh under `Assets/Models/`, and a
   GameObject that carries a `BoxCollider` and an offset `SphereCollider`.
-- Eight scripts under `Assets/Scripts/`: `PlayerController`, `ScoreManager`,
-  `RecordsStore`, `Rotator`, `PhysicsLabProbe`, `Pickup`, `GoldPickupMarker`,
-  `HudController`.
+- Fourteen scripts under `Assets/Scripts/`: `ArenaController`,
+  `GameFlowController`, `GhostReplay`, `GoldPickupMarker`, `HudController`,
+  `PhysicsLabProbe`, `Pickup`, `PlayerController`, `RecordsStore`,
+  `ReducedMotion`, `Rotator`, `SavedState`, `ScoreManager`,
+  `SettingsController`.
   Every script file has its `.meta` file, `RecordsStore.cs.meta` included
   (GUID `6f708192a3b4c5d6e7f8091a2b3c4d5e`), so the GUID hygiene gap is
   closed.
@@ -69,18 +87,18 @@ reported with its real state, never hidden.
 
 The specification's "Engine Behavior This Game Depends On" section lists the
 engine capabilities this game needs. Every bullet in its "Project and
-content" and "Simulation" sections is exercised somewhere in the tree, but the
-sample proves three of them only in its physics-probe scene or only in the
-engine's own tests.
+content" and "Simulation" sections is exercised in the tree and backed by the
+sample's own content and scenarios (with remaining runtime gaps noted in the
+table below).
 
 | Engine behavior | State | Evidence |
 |---|---|---|
 | The project opens without a converted copy, and reopening an unchanged project produces the same identities | demonstrated | `Scenarios/s1_open_and_inspect.scenario.json` loads `Assets/Scenes/RollABall.unity` twice and pins `Pickup_1` at the same serialized spot after both opens, and `crates/unitas-asset/tests/serialization_roundtrip_tests.rs` round-trips the same files byte-exactly |
 | The prefab variant applies its overrides to every instance of it | demonstrated | `Assets/Prefabs/PickupGold.prefab` is a prefab variant whose overrides (`m_Name`, `scoreValue`, the material and the local position) reach the instance, and `Scenarios/s1_open_and_inspect.scenario.json` pins that applied override in `the_open_resolves_the_prefab_variant_through_its_guid`; the sample carries one gold instance |
-| Nested prefab instances keep their overrides | engine half demonstrated | `crates/unitas-asset/tests/prefab_load_overrides_tests.rs` resolves a nested instance's override at load; the sample carries no nested prefab instance, so no sample scenario pins the clause |
+| Nested prefab instances keep their overrides | demonstrated | `crates/unitas-asset/tests/prefab_load_overrides_tests.rs` resolves a nested instance's override at load in the native asset assembly, and the sample carries `Assets/Prefabs/NestedPickupCluster.prefab` (nesting `Assets/Prefabs/Pickup.prefab` with overrides `m_Name: NestedPickupMember` and `m_LocalPosition.y: 0.75`) instantiated in `Assets/Scenes/Arena3.unity` with scene-level overrides (`NestedPickupCluster` at `(-4.5, 0, 4.5)` and nested child `m_Name: NestedPickupStar`); `Scenarios/nested_prefab.json` passes 3 of 3 checkpoints (`--repeat 2`), pinning `nested_cluster_instance_exists` at `(-4.5, 0, 4.5)` and `nested_child_override_applied` on `NestedPickupStar` at `(-4.5, 0.75, 4.5)` |
 | The marble's `AddForce` motion, dash impulses, rolling, friction and bounce follow the project's physics settings and physic materials, and bumper restitution is greater than 1 and produces a larger outgoing speed | demonstrated | `PlayerController` dashes with `Rigidbody.AddForce(..., ForceMode.Impulse)` and drives the rolling motion through the body's velocity, `Assets/Materials/Bumper.physicMaterial` carries `m_Bounciness: 1.5` and `Assets/Materials/Frictionless.physicMaterial` zero friction, `Scenarios/bumper_restitution.json` pins `restitution gained`, `Scenarios/collision_edge.json` pins the same at the arena bumper, and `Scenarios/dash_cooldown.json` pins the dash and its cooldown |
-| Kinematic platforms and sweepers move the marble through contact, and a rotating platform carries the marble around with it | partly demonstrated | the probe scene proves both halves: `Scenarios/collision_payload.json` pins the kinematic `Pusher`'s non-zero contact impulse on `PushedMarble`, and `Scenarios/bumper_restitution.json` pins `PlatformMarble platform carried` on the kinematic `RotatingPlatform`. The arenas' own moving blocks are dynamic bodies (`m_IsKinematic: 0`, `m_Mass: 200`), so no arena scenario shows a sweeper moving the marble through contact |
-| Continuous collision detection keeps the marble inside the arenas at 30, 60, 144 and 240 frames per second, with a fixed time step of 0.02 s or 0.01 s, and at boost speed | partly demonstrated | the probe scene's `CorridorMarble` runs at `m_CollisionDetection: 1` (continuous, `crates/unitas-asset/src/scene_physics.rs:216`) and 30 m/s, and `Scenarios/ccd_containment.json` pins `containment held` at a 0.02 s and a 0.01 s fixed step, while `Scenarios/frame_independence.json` sweeps 30, 60, 144 and 240 fps. The arenas' `PlayerBall` carries `m_CollisionDetection: 0` (discrete) and the sample ships no boost pad, so neither the arena marble nor the specification's 16 m/s boost speed is covered |
+| Kinematic platforms and sweepers move the marble through contact, and a rotating platform carries the marble around with it | demonstrated | the probe scene proves both halves (`Scenarios/collision_payload.json` pins the kinematic `Pusher`'s non-zero contact impulse on `PushedMarble`, and `Scenarios/bumper_restitution.json` pins `PlatformMarble platform carried` on the kinematic `RotatingPlatform`), and the arenas (`Assets/Scenes/Arena2.unity`, `Assets/Scenes/Arena3.unity`) author their moving blocks and sweepers as kinematic bodies (`m_IsKinematic: 1`) driven via `Rigidbody.MovePosition` in `ArenaController.FixedUpdate`, with `PlayerController` reporting `PlayerBall moved by kinematic sweeper <name>` on contact (`Scenarios/arena_sweeper.json` passes 3 of 3 checkpoints with `--repeat 2`, pinning `marble_positioned_in_sweeper_lane`, `kinematic_sweeper_contact_logged` for `MovingBlock_1`, and `marble_displaced_by_kinematic_sweeper`) |
+| Continuous collision detection keeps the marble inside the arenas at 30, 60, 144 and 240 frames per second, with a fixed time step of 0.02 s or 0.01 s, and at boost speed | demonstrated | the probe scene's `CorridorMarble` runs at `m_CollisionDetection: 1` (continuous, `crates/unitas-asset/src/scene_physics.rs:216`) and 30 m/s (`Scenarios/ccd_containment.json` pins `containment held` at 0.02 s and 0.01 s fixed steps), `Scenarios/frame_independence.json` sweeps 30, 60, 144 and 240 fps, and all three arenas (`RollABall.unity`, `Arena2.unity`, `Arena3.unity`) now set `m_CollisionDetection: 1` on `PlayerBall`. `Assets/Scenes/RollABall.unity` carries the `BoostPad` trigger (`Assets/Materials/BoostPad.mat`), `PlayerController.OnTriggerEnter` accelerates the marble to `16.0 m/s`, and `Scenarios/boost_pad.json` passes 5 of 5 checkpoints (`--repeat 2`), pinning `Boost pad triggered speed 16.0 m/s` and `PlayerBall boost containment held` at both the coarse (0.02 s) and fine (0.01 s) fixed steps |
 | Physics with fixed time steps is deterministic for the same inputs, and replaying a recorded input sequence reproduces the run's pickup order and time | demonstrated | `Scenarios/ghost_replay.scenario.json` replays the recorded route on the ghost object within 1 cm at every fixed step and finishes Arena 1 in 796 frames, `Scenarios/frame_independence.json` pins the same pickup order at all four frame rates, and `crates/unitas-physics/tests/replay_equivalence_tests.rs` pins bit-identical body states for identical replay inputs |
 
 ## S8 visual checkpoints — what is demonstrated and what is not
@@ -122,10 +140,21 @@ cannot show).
   separate re-approval for them.
 - The specification's checkpoints are a title screen with an attract ghost,
   every arena at its countdown, Arena 1 at x5 with its speed trail, and a
-  results panel with the gold medal. This sample has **no** title screen, **no**
-  attract ghost, **no** speed trail, **no** results panel and **no** gold-medal
-  display: the four captures are Arena 1 at four moments of play, and the
-  title-screen capture is the arena at startup, not a title screen.
+  results panel with the gold medal. The sample now ships the dedicated title
+  scene `Assets/Scenes/Title.unity` with `AttractGhost` (`MeshFilter`,
+  `MeshRenderer`, `TrailRenderer`, and `Assets/Scripts/GhostReplay.cs` with
+  `attractMode: 1`, verified by `Scenarios/attract_ghost.json` passing 4 of 4
+  checkpoints with `--repeat 2`), the speed trail on `PlayerBall` gated by
+  `PlayerController` above `10 m/s` (verified by `Scenarios/speed_trail.json`
+  passing 5 of 5 checkpoints with `--repeat 2`), and the `ResultsPanel` in
+  `Assets/Scenes/RollABall.unity`. However, `Scenarios/s8_title_checkpoint.scenario.json`
+  still loads `Assets/Scenes/RollABall.unity` at startup rather than
+  `Assets/Scenes/Title.unity`, so its approved reference image
+  `References/s8_title_checkpoint.bmp` records Arena 1 with the title panel
+  overlay rather than `Title.unity`'s `AttractGhost`, and the speed-trail and
+  attract-ghost behaviors are pinned by `Scenarios/speed_trail.json` and
+  `Scenarios/attract_ghost.json` rather than by S8 `render_capture`
+  checkpoints.
 - The sample now **carries on-screen text in the scene and shows it in the
   captures**. `Assets/Scenes/RollABall.unity` carries a legacy uGUI `Canvas`
   (`HudCanvas`) with a `CanvasScaler` at an 800x600 reference resolution,
@@ -202,10 +231,11 @@ cannot show).
   `References/` are compared at `tolerance: 0.005` (0 differing pixels on the
   machine that produced them; the tolerance only absorbs rasterizer
   floating-point differences between processors and stays far below the 3.1 %
-  the old draw order produced). What the references still cannot show is the
-  specification's title screen, attract ghost, speed trail and results panel:
-  this sample has no such scene content, so the references record the arena,
-  not the specification's screens.
+  the old draw order produced). What the four Arena 1 references still do not
+  show is `Assets/Scenes/Title.unity`'s `AttractGhost` (which is verified by
+  `Scenarios/attract_ghost.json` in `Title.unity` while
+  `s8_title_checkpoint.scenario.json` captures `RollABall.unity` at startup)
+  or a dedicated gold-medal icon on the results panel.
 
 - **The captures now show the arena's authored materials, through the real
   scene path.** The material contract carries the whole material: the asset

@@ -250,6 +250,7 @@ namespace Unitas.Bridge
             state.CurrentUiMatchWidthOrHeight = 0.5f;
             state.CurrentPrefabInstance = null;
             state.CurrentModificationTarget = string.Empty;
+            state.CurrentModificationTargetGuid = string.Empty;
             state.CurrentModificationProperty = null;
             if (state.CurrentClassId == PREFAB_INSTANCE_CLASS)
             {
@@ -861,6 +862,7 @@ namespace Unitas.Bridge
             else if (line.StartsWith("- target:", StringComparison.Ordinal))
             {
                 state.CurrentModificationTarget = ExtractFileId(line);
+                state.CurrentModificationTargetGuid = ExtractGuidValue(line);
                 state.CurrentModificationProperty = null;
             }
             else if (line.StartsWith("propertyPath:", StringComparison.Ordinal))
@@ -871,6 +873,7 @@ namespace Unitas.Bridge
             {
                 instance.Modifications.Add(new PrefabModification(
                     state.CurrentModificationTarget,
+                    state.CurrentModificationTargetGuid,
                     state.CurrentModificationProperty,
                     ParseStringValue(line)));
                 state.CurrentModificationProperty = null;
@@ -1366,7 +1369,13 @@ namespace Unitas.Bridge
                 _sceneParentEntities[_nextSceneEntityBase + childLocal] = _nextSceneEntityBase + parentLocal;
             }
 
+            ulong lastBase = _nextSceneEntityBase;
             SeedPrefabInstanceTransforms(scenePath, state.PrefabInstances, state.GameObjectEntities, transformGameObjects);
+            if (_nextSceneEntityBase > lastBase + state.LocalEntityIndex)
+            {
+                state.LocalEntityIndex = _nextSceneEntityBase - lastBase;
+                _nextSceneEntityBase = lastBase;
+            }
         }
 
         private void ApplySceneCameraRecords(SceneDocumentParseState state)
@@ -1427,322 +1436,6 @@ namespace Unitas.Bridge
                         record.Mute,
                         record.Enabled);
                 }
-            }
-        }
-
-        private void SeedPrefabInstanceTransforms(
-            string scenePath,
-            List<PrefabInstanceInfo> instances,
-            Dictionary<string, ulong> gameObjectEntities,
-            Dictionary<string, string> transformGameObjects)
-        {
-            if (instances.Count == 0)
-            {
-                return;
-            }
-
-            PrefabGuidIndex guidIndex = PrefabGuidIndex.Build(scenePath);
-            ulong nextEntity = _nextSceneEntityBase + (ulong)gameObjectEntities.Count;
-            for (int index = 0; index < instances.Count; index++)
-            {
-                PrefabInstanceInfo instance = instances[index];
-                string? prefabPath = guidIndex.Resolve(instance.SourceGuid);
-                if (prefabPath == null)
-                {
-                    continue;
-                }
-
-                PrefabRootResolution resolution = ResolvePrefabRoot(prefabPath, guidIndex, 0);
-                Vector3 position = resolution.Position;
-                Quaternion rotation = resolution.Rotation;
-                Vector3 scale = resolution.Scale;
-                ApplyPrefabModifications(
-                    ref position,
-                    ref rotation,
-                    ref scale,
-                    instance.Modifications,
-                    resolution.RootTransformFileId);
-                _sceneTransforms[nextEntity] = new SceneTransformMetadata(position, rotation, scale);
-                if (instance.TransformParentFileId.Length > 0
-                    && transformGameObjects.TryGetValue(instance.TransformParentFileId, out string? parentGameObjectFileId)
-                    && gameObjectEntities.TryGetValue(parentGameObjectFileId, out ulong parentLocalEntity))
-                {
-                    _sceneParentEntities[nextEntity] = _nextSceneEntityBase + parentLocalEntity;
-                }
-
-                nextEntity += (ulong)resolution.EntityCount + (ulong)instance.AddedGameObjectFileIds.Count;
-            }
-        }
-
-        private static PrefabRootResolution ResolvePrefabRoot(string prefabPath, PrefabGuidIndex guidIndex, int depth)
-        {
-            PrefabFileInfo file = ParsePrefabFile(prefabPath);
-            if (file.Instances.Count == 1 && depth < MaxPrefabInstanceDepth)
-            {
-                PrefabInstanceInfo variant = file.Instances[0];
-                string? sourcePath = guidIndex.Resolve(variant.SourceGuid);
-                if (sourcePath != null)
-                {
-                    PrefabRootResolution inner = ResolvePrefabRoot(sourcePath, guidIndex, depth + 1);
-                    Vector3 position = inner.Position;
-                    Quaternion rotation = inner.Rotation;
-                    Vector3 scale = inner.Scale;
-                    ApplyPrefabModifications(
-                        ref position,
-                        ref rotation,
-                        ref scale,
-                        variant.Modifications,
-                        inner.RootTransformFileId);
-                    return new PrefabRootResolution(
-                        position,
-                        rotation,
-                        scale,
-                        inner.EntityCount + variant.AddedGameObjectFileIds.Count,
-                        inner.RootTransformFileId);
-                }
-            }
-
-            return new PrefabRootResolution(
-                file.RootLocalPosition,
-                file.RootLocalRotation,
-                file.RootLocalScale,
-                file.OwnEntityCount,
-                file.RootTransformFileId);
-        }
-
-        private static void ApplyPrefabModifications(
-            ref Vector3 position,
-            ref Quaternion rotation,
-            ref Vector3 scale,
-            List<PrefabModification> modifications,
-            string rootTransformFileId)
-        {
-            for (int index = 0; index < modifications.Count; index++)
-            {
-                PrefabModification modification = modifications[index];
-                if (!string.Equals(modification.TargetFileId, rootTransformFileId, StringComparison.Ordinal))
-                {
-                    continue;
-                }
-
-                string propertyPath = modification.PropertyPath;
-                if (!propertyPath.StartsWith("m_LocalPosition.", StringComparison.Ordinal)
-                    && !propertyPath.StartsWith("m_LocalRotation.", StringComparison.Ordinal)
-                    && !propertyPath.StartsWith("m_LocalScale.", StringComparison.Ordinal))
-                {
-                    continue;
-                }
-
-                if (!float.TryParse(modification.Value, NumberStyles.Float, CultureInfo.InvariantCulture, out float value))
-                {
-                    continue;
-                }
-
-                string axis = propertyPath.Substring(propertyPath.LastIndexOf('.') + 1);
-                if (propertyPath.StartsWith("m_LocalPosition.", StringComparison.Ordinal))
-                {
-                    position = axis switch
-                    {
-                        "x" => new Vector3(value, position.y, position.z),
-                        "y" => new Vector3(position.x, value, position.z),
-                        "z" => new Vector3(position.x, position.y, value),
-                        _ => position,
-                    };
-                }
-                else if (propertyPath.StartsWith("m_LocalRotation.", StringComparison.Ordinal))
-                {
-                    rotation = axis switch
-                    {
-                        "x" => new Quaternion(value, rotation.y, rotation.z, rotation.w),
-                        "y" => new Quaternion(rotation.x, value, rotation.z, rotation.w),
-                        "z" => new Quaternion(rotation.x, rotation.y, value, rotation.w),
-                        "w" => new Quaternion(rotation.x, rotation.y, rotation.z, value),
-                        _ => rotation,
-                    };
-                }
-                else
-                {
-                    scale = axis switch
-                    {
-                        "x" => new Vector3(value, scale.y, scale.z),
-                        "y" => new Vector3(scale.x, value, scale.z),
-                        "z" => new Vector3(scale.x, scale.y, value),
-                        _ => scale,
-                    };
-                }
-            }
-        }
-
-        private static PrefabFileInfo ParsePrefabFile(string path)
-        {
-            PrefabFileInfo info = new PrefabFileInfo();
-            string[] lines = File.ReadAllLines(path);
-            int classId = 0;
-            string fileId = string.Empty;
-            string gameObjectFileId = string.Empty;
-            string fatherFileId = string.Empty;
-            string prefabInstanceOwner = string.Empty;
-            Vector3 localPosition = Vector3.zero;
-            Quaternion localRotation = Quaternion.identity;
-            Vector3 localScale = Vector3.one;
-            PrefabInstanceInfo? instance = null;
-            string modificationTarget = string.Empty;
-            string? modificationProperty = null;
-
-            for (int index = 0; index < lines.Length; index++)
-            {
-                string line = lines[index].Trim();
-                if (line.StartsWith("--- !u!", StringComparison.Ordinal))
-                {
-                    FlushPrefabDocument(
-                        info,
-                        classId,
-                        fileId,
-                        gameObjectFileId,
-                        fatherFileId,
-                        prefabInstanceOwner,
-                        localPosition,
-                        localRotation,
-                        localScale);
-                    ParseDocumentHeader(line, out classId, out fileId);
-                    gameObjectFileId = string.Empty;
-                    fatherFileId = string.Empty;
-                    prefabInstanceOwner = string.Empty;
-                    localPosition = Vector3.zero;
-                    localRotation = Quaternion.identity;
-                    localScale = Vector3.one;
-                    instance = null;
-                    modificationTarget = string.Empty;
-                    modificationProperty = null;
-                    if (classId == PREFAB_INSTANCE_CLASS)
-                    {
-                        instance = new PrefabInstanceInfo { FileId = fileId };
-                        info.Instances.Add(instance);
-                    }
-                    continue;
-                }
-
-                if (classId == GAME_OBJECT_CLASS)
-                {
-                    if (line.StartsWith("m_PrefabInstance:", StringComparison.Ordinal))
-                    {
-                        prefabInstanceOwner = ExtractFileId(line);
-                    }
-                }
-                else if (classId == TRANSFORM_CLASS)
-                {
-                    if (line.StartsWith("m_GameObject:", StringComparison.Ordinal))
-                    {
-                        gameObjectFileId = ExtractFileId(line);
-                    }
-                    else if (line.StartsWith("m_Father:", StringComparison.Ordinal))
-                    {
-                        fatherFileId = ExtractFileId(line);
-                    }
-                    else if (line.StartsWith("m_LocalPosition:", StringComparison.Ordinal))
-                    {
-                        localPosition = ParseVector3Value(line, Vector3.zero);
-                    }
-                    else if (line.StartsWith("m_LocalRotation:", StringComparison.Ordinal))
-                    {
-                        localRotation = ParseQuaternionValue(line, Quaternion.identity);
-                    }
-                    else if (line.StartsWith("m_LocalScale:", StringComparison.Ordinal))
-                    {
-                        localScale = ParseVector3Value(line, Vector3.one);
-                    }
-                }
-                else if (classId == PREFAB_INSTANCE_CLASS && instance != null)
-                {
-                    if (line.StartsWith("m_SourcePrefab:", StringComparison.Ordinal))
-                    {
-                        instance.SourceGuid = ExtractGuidValue(line);
-                    }
-                    else if (line.StartsWith("m_TransformParent:", StringComparison.Ordinal))
-                    {
-                        instance.TransformParentFileId = ExtractFileId(line);
-                    }
-                    else if (line.StartsWith("- target:", StringComparison.Ordinal))
-                    {
-                        modificationTarget = ExtractFileId(line);
-                        modificationProperty = null;
-                    }
-                    else if (line.StartsWith("propertyPath:", StringComparison.Ordinal))
-                    {
-                        modificationProperty = ParseStringValue(line);
-                    }
-                    else if (line.StartsWith("value:", StringComparison.Ordinal) && modificationProperty != null)
-                    {
-                        instance.Modifications.Add(new PrefabModification(
-                            modificationTarget,
-                            modificationProperty,
-                            ParseStringValue(line)));
-                        modificationProperty = null;
-                    }
-                    else if (line.StartsWith("addedObject:", StringComparison.Ordinal))
-                    {
-                        string addedFileId = ExtractFileId(line);
-                        if (addedFileId.Length > 0)
-                        {
-                            instance.AddedGameObjectFileIds.Add(addedFileId);
-                        }
-                    }
-                }
-            }
-
-            FlushPrefabDocument(
-                info,
-                classId,
-                fileId,
-                gameObjectFileId,
-                fatherFileId,
-                prefabInstanceOwner,
-                localPosition,
-                localRotation,
-                localScale);
-
-            foreach (PrefabInstanceInfo prefabInstance in info.Instances)
-            {
-                foreach (string addedFileId in prefabInstance.AddedGameObjectFileIds)
-                {
-                    info.AddedGameObjectFileIds.Add(addedFileId);
-                }
-            }
-
-            return info;
-        }
-
-        private static void FlushPrefabDocument(
-            PrefabFileInfo info,
-            int classId,
-            string fileId,
-            string gameObjectFileId,
-            string fatherFileId,
-            string prefabInstanceOwner,
-            Vector3 localPosition,
-            Quaternion localRotation,
-            Vector3 localScale)
-        {
-            if (classId == GAME_OBJECT_CLASS && fileId.Length > 0)
-            {
-                info.GameObjectFileIds.Add(fileId);
-                if (prefabInstanceOwner.Length > 0 && prefabInstanceOwner != "0")
-                {
-                    info.GameObjectPrefabInstanceFileIds[fileId] = prefabInstanceOwner;
-                }
-            }
-            else if (classId == TRANSFORM_CLASS && fileId.Length > 0)
-            {
-                if (fatherFileId.Length > 0 && fatherFileId != "0")
-                {
-                    return;
-                }
-
-                info.RootTransformFileId = fileId;
-                info.RootGameObjectFileId = gameObjectFileId;
-                info.RootLocalPosition = localPosition;
-                info.RootLocalRotation = localRotation;
-                info.RootLocalScale = localScale;
             }
         }
 
@@ -2124,14 +1817,17 @@ namespace Unitas.Bridge
 
         private readonly struct PrefabModification
         {
-            public PrefabModification(string targetFileId, string propertyPath, string value)
+            public PrefabModification(string targetFileId, string targetGuid, string propertyPath, string value)
             {
                 TargetFileId = targetFileId;
+                TargetGuid = targetGuid;
                 PropertyPath = propertyPath;
                 Value = value;
             }
 
             public string TargetFileId { get; }
+
+            public string TargetGuid { get; }
 
             public string PropertyPath { get; }
 
@@ -2142,15 +1838,27 @@ namespace Unitas.Bridge
         {
             public List<string> GameObjectFileIds { get; } = new List<string>();
 
+            public Dictionary<string, string> GameObjectNames { get; } = new Dictionary<string, string>(StringComparer.Ordinal);
+
+            public List<ParsedTransformRecord> Transforms { get; } = new List<ParsedTransformRecord>();
+
+            public List<ParsedRigidbodyRecord> Rigidbodies { get; } = new List<ParsedRigidbodyRecord>();
+
+            public List<ParsedSphereColliderRecord> SphereColliders { get; } = new List<ParsedSphereColliderRecord>();
+
+            public List<ParsedBoxColliderRecord> BoxColliders { get; } = new List<ParsedBoxColliderRecord>();
+
+            public List<ParsedCapsuleColliderRecord> CapsuleColliders { get; } = new List<ParsedCapsuleColliderRecord>();
+
             public Dictionary<string, string> GameObjectPrefabInstanceFileIds { get; } = new Dictionary<string, string>(StringComparer.Ordinal);
 
             public HashSet<string> AddedGameObjectFileIds { get; } = new HashSet<string>(StringComparer.Ordinal);
 
             public List<PrefabInstanceInfo> Instances { get; } = new List<PrefabInstanceInfo>();
 
-            public string RootTransformFileId { get; set; } = string.Empty;
+            public string RootTransformFileId { get; } = string.Empty;
 
-            public string RootGameObjectFileId { get; set; } = string.Empty;
+            public string RootGameObjectFileId { get; } = string.Empty;
 
             public Vector3 RootLocalPosition { get; set; } = Vector3.zero;
 
@@ -2158,30 +1866,20 @@ namespace Unitas.Bridge
 
             public Vector3 RootLocalScale { get; set; } = Vector3.one;
 
-            public int OwnEntityCount
+            public bool IsOwnGameObject(string fileId)
             {
-                get
+                if (AddedGameObjectFileIds.Contains(fileId))
                 {
-                    int count = 0;
-                    for (int index = 0; index < GameObjectFileIds.Count; index++)
-                    {
-                        string fileId = GameObjectFileIds[index];
-                        if (AddedGameObjectFileIds.Contains(fileId))
-                        {
-                            continue;
-                        }
-
-                        if (GameObjectPrefabInstanceFileIds.TryGetValue(fileId, out string? ownerFileId)
-                            && IsInstanceDocument(ownerFileId))
-                        {
-                            continue;
-                        }
-
-                        count++;
-                    }
-
-                    return count;
+                    return false;
                 }
+
+                if (GameObjectPrefabInstanceFileIds.TryGetValue(fileId, out string? ownerFileId)
+                    && IsInstanceDocument(ownerFileId))
+                {
+                    return false;
+                }
+
+                return true;
             }
 
             private bool IsInstanceDocument(string fileId)
@@ -2196,33 +1894,6 @@ namespace Unitas.Bridge
 
                 return false;
             }
-        }
-
-        private readonly struct PrefabRootResolution
-        {
-            public PrefabRootResolution(
-                Vector3 position,
-                Quaternion rotation,
-                Vector3 scale,
-                int entityCount,
-                string rootTransformFileId)
-            {
-                Position = position;
-                Rotation = rotation;
-                Scale = scale;
-                EntityCount = entityCount;
-                RootTransformFileId = rootTransformFileId;
-            }
-
-            public Vector3 Position { get; }
-
-            public Quaternion Rotation { get; }
-
-            public Vector3 Scale { get; }
-
-            public int EntityCount { get; }
-
-            public string RootTransformFileId { get; }
         }
 
         private sealed class PrefabGuidIndex
@@ -2882,6 +2553,7 @@ namespace Unitas.Bridge
             public List<PrefabInstanceInfo> PrefabInstances = new List<PrefabInstanceInfo>();
             public PrefabInstanceInfo? CurrentPrefabInstance;
             public string CurrentModificationTarget = string.Empty;
+            public string CurrentModificationTargetGuid = string.Empty;
             public string? CurrentModificationProperty;
             public string CurrentFatherFileId = string.Empty;
             public Vector3 CurrentLocalPosition = Vector3.zero;

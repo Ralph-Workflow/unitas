@@ -143,16 +143,12 @@ fn script_sprite_draws_in_the_same_sorted_pass_as_the_scene_sprites()
     let sprites = runtime.sprite_instances();
     assert!((sprites[1].model.get(1, 1) + 0.5).abs() < 1e-6);
 
-    assert!(
-        runtime
-            .set_runtime_object_transform(
-                entity,
-                [0.0, 0.0, 0.0],
-                [0.0, 0.0, 0.0, 1.0],
-                [4.0, 4.0, 1.0],
-            )
-            .is_ok()
-    );
+    runtime.set_runtime_object_transform(
+        entity,
+        [0.0, 0.0, 0.0],
+        [0.0, 0.0, 0.0, 1.0],
+        [4.0, 4.0, 1.0],
+    )?;
     assert!(runtime.set_runtime_sprite_color(entity, [0.0, 1.0, 0.0, 1.0]));
     assert!(runtime.set_runtime_sprite_sorting(entity, 0, 10));
     let front_frame = runtime.capture_scene_frame(64, 64)?;

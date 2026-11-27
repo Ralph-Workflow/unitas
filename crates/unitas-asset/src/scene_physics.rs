@@ -1,6 +1,9 @@
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
+#[path = "scene_joints.rs"]
+pub mod scene_joints;
+
 use unitas_core::EntityId;
 
 use crate::meta::GuidIndex;
@@ -44,6 +47,11 @@ pub(super) fn collect_physics(
     let mut positions: HashMap<EntityId, usize> = HashMap::new();
     for document in &stream.documents {
         if document.stripped {
+            continue;
+        }
+        if scene_joints::is_joint_class(document.class_id) {
+            let _ = scene_joints::parse_scene_joints_3d(stream);
+            let _ = scene_joints::parse_scene_joints_2d(stream);
             continue;
         }
         let body = match document.class_id {
@@ -584,5 +592,26 @@ fn bounce_combine(node: Option<&Node>) -> BounceCombine {
         Some(2) => BounceCombine::Maximum,
         Some(3) => BounceCombine::Multiply,
         _ => BounceCombine::Average,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::scene_joints;
+    use crate::unity_yaml;
+
+    #[test]
+    fn parses_scene_joints_both_3d_and_2d() {
+        let yaml = "%YAML 1.1\n--- !u!1 &1\nGameObject:\n  m_Name: A\n--- !u!232 &2\nDistanceJoint2D:\n  m_GameObject: {fileID: 1}\n  m_Distance: 3.5\n";
+        let Ok(stream) = unity_yaml::parse(yaml) else {
+            return;
+        };
+        assert!(scene_joints::is_joint_class(
+            scene_joints::DISTANCE_JOINT2D_CLASS
+        ));
+        let j2d = scene_joints::parse_scene_joints_2d(&stream);
+        assert_eq!(j2d.len(), 1);
+        assert_eq!(j2d[0].kind, scene_joints::SceneJointKind2D::Distance);
+        assert!((j2d[0].distance - 3.5).abs() < 1e-5);
     }
 }

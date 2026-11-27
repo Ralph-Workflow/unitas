@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using UnityEngine;
 
 namespace Unitas.Samples.RollABall
@@ -9,6 +10,7 @@ namespace Unitas.Samples.RollABall
         private const float DefaultBoostMultiplier = 1.65f;
         private const float BoostPadSpeed = 16f;
         private const float BoostCoastSeconds = 0.5f;
+        private const float SweeperCoastSeconds = 0.04f;
         private const float CoarseStepThreshold = 0.015f;
         private const float ArenaContainmentBoundary = 6f;
         private const float DashImpulse = 8f;
@@ -34,8 +36,9 @@ namespace Unitas.Samples.RollABall
         private float _cameraYaw;
         private float _lastDashTime = float.NegativeInfinity;
         private float _lastBoostTime = float.NegativeInfinity;
+        private float _lastSweeperTime = float.NegativeInfinity;
         private bool _boostContainmentPending;
-        private bool _sweeperContactLogged;
+        private readonly HashSet<string> _loggedSweepers = new HashSet<string>(StringComparer.Ordinal);
         private string _stepLabel = "coarse";
         private int _dashCount;
         private bool _reducedMotionTrailOff;
@@ -87,7 +90,9 @@ namespace Unitas.Samples.RollABall
                 return;
             }
 
-            if (Time.time - _lastDashTime >= DashCoastSeconds && Time.time - _lastBoostTime >= BoostCoastSeconds)
+            if (Time.time - _lastDashTime >= DashCoastSeconds
+                && Time.time - _lastBoostTime >= BoostCoastSeconds
+                && (directionX != 0f || directionZ != 0f || Time.time - _lastSweeperTime >= SweeperCoastSeconds))
             {
                 if (_boostContainmentPending)
                 {
@@ -223,13 +228,14 @@ namespace Unitas.Samples.RollABall
 
         private void ReportKinematicSweeperContact(Collision collision, string otherName)
         {
-            if (_sweeperContactLogged)
+            if (!otherName.StartsWith("Sweeper", StringComparison.Ordinal)
+                && !otherName.StartsWith("MovingBlock", StringComparison.Ordinal))
             {
                 return;
             }
 
-            if (!otherName.StartsWith("Sweeper", StringComparison.Ordinal)
-                && !otherName.StartsWith("MovingBlock", StringComparison.Ordinal))
+            _lastSweeperTime = Time.time;
+            if (_loggedSweepers.Contains(otherName))
             {
                 return;
             }
@@ -238,7 +244,7 @@ namespace Unitas.Samples.RollABall
             float speed = body != null ? body.velocity.magnitude : 0f;
             if (collision.impulse > 0f || speed > 0.1f)
             {
-                _sweeperContactLogged = true;
+                _loggedSweepers.Add(otherName);
                 Debug.Log($"PlayerBall moved by kinematic sweeper {otherName}");
             }
         }
@@ -298,8 +304,9 @@ namespace Unitas.Samples.RollABall
             _cameraYaw = 0f;
             _lastDashTime = float.NegativeInfinity;
             _lastBoostTime = float.NegativeInfinity;
+            _lastSweeperTime = float.NegativeInfinity;
             _boostContainmentPending = false;
-            _sweeperContactLogged = false;
+            _loggedSweepers.Clear();
             _dashCount = 0;
             _shakeTime = 0f;
             _shakeCount = 0;
