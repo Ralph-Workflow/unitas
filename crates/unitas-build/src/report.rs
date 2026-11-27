@@ -1454,11 +1454,7 @@ mod tests {
     #[test]
     fn succeeded_report_stamps_build_identifier_and_assets_from_the_staged_manifest(
     ) -> Result<(), Box<dyn std::error::Error>> {
-        let root = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .parent()
-            .and_then(Path::parent)
-            .ok_or("the crate directory has no repository root")?;
-        let output_dir = root.join("target").join(format!(
+        let output_dir = std::env::temp_dir().join(format!(
             "unitas-build-report-tests/stamped_report_{}",
             std::process::id()
         ));
@@ -1515,6 +1511,7 @@ mod tests {
         }
         let round_tripped = BuildReport::from_json(&json)?;
         assert_eq!(round_tripped, report);
+        let _ = std::fs::remove_dir_all(&output_dir);
         Ok(())
     }
 

@@ -418,10 +418,11 @@ The lane also runs a **native scripted launch** (`unitas-player --sample
 process through the CoreCLR host and reports `script_host=coreclr` and
 `frames_stepped=120`. That path is green.
 
-**Current lane state (honest).** The lane runs 54 steps: the 39
+**Current lane state (honest).** The lane runs 55 steps: the 40
 scripting scenarios (including `frame_independence`, `pointer_ui`,
-`restart_recovery`, `combo_timing_sweep`, the arena scenario `arenas_2_3`,
-the four `s8_*` visual checkpoints,
+`restart_recovery`, `combo_timing_sweep`, `pause_resume`, `settings_rows`,
+`camera_shake`, the arena scenario `arenas_2_3`,
+the seven `s8_*` visual checkpoints,
 the four persistence scenarios `persist_write`, `persist_read`,
 `persist_state_write` and `persist_state_read`, the ghost-replay scenario
 `ghost_replay` and the four physics scenarios `collision_edge`,

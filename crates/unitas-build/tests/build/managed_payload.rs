@@ -26,12 +26,7 @@ const PLAYER_HOST_PAYLOAD_FILENAMES: [&str; 3] = [
 type TestResult = Result<(), Box<dyn Error>>;
 
 fn test_output_dir(label: &str) -> Result<PathBuf, Box<dyn Error>> {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .and_then(Path::parent)
-        .ok_or("the crate directory has no repository root")?;
-    let directory = root
-        .join("target")
+    let directory = std::env::temp_dir()
         .join("unitas-build-tests")
         .join(format!("{label}_{}", std::process::id()));
     if directory.exists() {
@@ -230,5 +225,6 @@ fn packaged_app_contains_managed_payload_and_build_report() -> TestResult {
     let legacy = BuildReport::from_json(&legacy_json)?;
     assert!(legacy.build_identifier.is_empty());
 
+    let _ = fs::remove_dir_all(&output_dir);
     Ok(())
 }

@@ -15,12 +15,7 @@ use unitas_runtime::Runtime;
 type TestResult = Result<(), Box<dyn Error>>;
 
 fn test_output_dir(label: &str) -> Result<PathBuf, Box<dyn Error>> {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .and_then(Path::parent)
-        .ok_or("the crate directory has no repository root")?;
-    let directory = root
-        .join("target")
+    let directory = std::env::temp_dir()
         .join("unitas-build-tests")
         .join(format!("{label}_{}", std::process::id()));
     if directory.exists() {
@@ -68,6 +63,7 @@ fn bundled_player_carries_project_quality_settings() -> TestResult {
     );
     assert!(shadows.soft);
     assert_eq!(shadows.resolution_index, 2);
+    let _ = fs::remove_dir_all(&output_dir);
     Ok(())
 }
 
@@ -99,6 +95,7 @@ fn packaged_player_carries_project_quality_settings() -> TestResult {
     let mut runtime = Runtime::new()?;
     runtime.load_scene(&startup_scene)?;
     assert!(shadow_settings_for_runtime(&runtime).enabled);
+    let _ = fs::remove_dir_all(&output_dir);
     Ok(())
 }
 
@@ -132,5 +129,6 @@ fn bundle_without_project_settings_keeps_the_shadow_fallback() -> TestResult {
         shadow_settings_for_runtime(&runtime),
         ShadowSettings::disabled()
     );
+    let _ = fs::remove_dir_all(&output_dir);
     Ok(())
 }

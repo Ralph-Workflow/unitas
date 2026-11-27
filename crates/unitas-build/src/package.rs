@@ -765,12 +765,7 @@ mod tests {
     use crate::targets::BuildTarget;
 
     fn test_output_dir(label: &str) -> Result<PathBuf, Box<dyn Error>> {
-        let root = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .parent()
-            .and_then(Path::parent)
-            .ok_or("the crate directory has no repository root")?;
-        let directory = root
-            .join("target")
+        let directory = std::env::temp_dir()
             .join("unitas-build-tests")
             .join(format!("{label}_{}", std::process::id()));
         if directory.exists() {
@@ -889,6 +884,7 @@ mod tests {
                 String::from_utf8_lossy(&launcher_run.stderr)
             );
         }
+        let _ = fs::remove_dir_all(&output_dir);
         Ok(())
     }
 
@@ -949,6 +945,7 @@ mod tests {
             .data_dir
             .join(THIRD_PARTY_NOTICES_FILENAME)
             .is_file());
+        let _ = fs::remove_dir_all(&output_dir);
         Ok(())
     }
 
@@ -999,6 +996,7 @@ mod tests {
             .data_dir
             .join(THIRD_PARTY_NOTICES_FILENAME)
             .is_file());
+        let _ = fs::remove_dir_all(&output_dir);
         Ok(())
     }
 
@@ -1059,6 +1057,7 @@ mod tests {
             .warnings
             .iter()
             .any(|warning| warning.code == "package.not_launched"));
+        let _ = fs::remove_dir_all(&output_dir);
         Ok(())
     }
 
@@ -1098,6 +1097,7 @@ mod tests {
                 Err(PackageError::MissingPlayerBinary { .. })
             ));
         }
+        let _ = fs::remove_dir_all(&output_dir);
         Ok(())
     }
 
@@ -1128,6 +1128,7 @@ mod tests {
             "the packaged app has no valid code signature: {}",
             String::from_utf8_lossy(&verify.stderr)
         );
+        let _ = fs::remove_dir_all(&output_dir);
         Ok(())
     }
 
@@ -1156,6 +1157,7 @@ mod tests {
             result,
             Err(PackageError::MissingPlayerBinary { .. })
         ));
+        let _ = fs::remove_dir_all(&output_dir);
         Ok(())
     }
 }

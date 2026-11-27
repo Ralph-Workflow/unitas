@@ -13,6 +13,8 @@ namespace Unitas.Bridge.Tests
         private static readonly string ProcessSuffix =
             Environment.ProcessId.ToString(CultureInfo.InvariantCulture) + "_";
 
+        private static int _projectCounter;
+
         public static void TestStory15EditModeAndPlayModeTestsWithCategoryFilterAndNUnit3Xml()
         {
             string tempProject = CreateTempTestProject("shared_a");
@@ -640,7 +642,10 @@ namespace Unitas.Bridge.Tests
             // The process id keeps concurrent gate runs from sibling worktrees
             // (which share the machine temp dir) from deleting this run's
             // project mid-compile.
-            string root = Path.Combine(Path.GetTempPath(), "unitas_utf_test_" + ProcessSuffix + label);
+            int id = Interlocked.Increment(ref _projectCounter);
+            string root = Path.Combine(
+                Path.GetTempPath(),
+                "unitas_utf_test_" + ProcessSuffix + label + "_" + id.ToString(CultureInfo.InvariantCulture));
             if (Directory.Exists(root))
             {
                 Directory.Delete(root, true);
