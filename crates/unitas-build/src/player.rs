@@ -51,6 +51,9 @@ pub const STARTUP_FAILURE_EXIT_CODE: u8 = 1;
 pub const STARTUP_MEASUREMENT_TIMEOUT_SECONDS: u64 = 20;
 /// The separator the player's one-line report joins the canvas texts with.
 pub const CANVAS_TEXT_SEPARATOR: &str = " | ";
+/// The device handoff must hold the whole capture the lane injects: half a
+/// second of silence and a quarter second of chime.
+const DEVICE_CAPTURE_CAPACITY_FRAMES: usize = 48_000;
 
 /// The code-execution capabilities the trust store grants this project.
 pub fn project_capabilities(bundle_dir: &Path) -> Option<ProjectCapabilities> {
@@ -906,7 +909,7 @@ pub fn run_device_verification(
         })?;
     runtime.load_scene(&startup_scene_path).map_err(|error| {
         PlayerStartupError::SceneLoadFailed {
-            scene_path: startup_scene_path,
+            scene_path: startup_scene_path.clone(),
             message: error.to_string(),
         }
     })?;
@@ -961,49 +964,11 @@ pub fn run_device_verification(
     };
 
     let windowed_result = launch_bundle_windowed(&temp_bundle_dir, &options)?;
-    let _ = fs::remove_dir_all(&temp_bundle_dir);
-
-    let mut audio_runtime =
-        unitas_runtime::Runtime::new().map_err(|error| PlayerStartupError::RuntimeInit {
-            message: error.to_string(),
-        })?;
-    audio_runtime
-        .load_scene(&startup_scene_path)
-        .map_err(|error| PlayerStartupError::SceneLoadFailed {
-            scene_path: startup_scene_path.clone(),
-            message: error.to_string(),
-        })?;
-    let chime_entity = audio_runtime
-        .find_entity_by_name("CollectChime")
-        .ok_or_else(|| PlayerStartupError::VerificationFailed {
-            message: String::from("the staged scene carries no CollectChime audio source"),
-        })?;
-
-    let audio_capture = unitas_audio::output::arm_capture(8);
-    let mut audio_output = unitas_audio::output::DeviceOutput::start().map_err(|error| {
-        PlayerStartupError::VerificationFailed {
-            message: error.to_string(),
-        }
-    })?;
-    let sample_rate = f64::from(audio_output.sample_rate());
-    // the lane injects the collect chime after 0.5 s of silence and lets it ring
-    // for 0.25 s; tools/verify_device.py measures the window after that point.
-    let lead_in_frames = (sample_rate * 0.5).round() as usize;
-    let chime_frames = (sample_rate * 0.25).round() as usize;
-    audio_output.pump_world(audio_runtime.audio_mut(), lead_in_frames);
-    audio_runtime.audio_mut().play(chime_entity, true);
-    audio_output.pump_world(audio_runtime.audio_mut(), chime_frames);
-    drop(audio_output);
 
     let audio_capture_path = Path::new("target/device-lane/device_audio.wav");
-    audio_capture
-        .write_wav(audio_capture_path)
-        .map_err(|error| PlayerStartupError::VerificationFailed {
-            message: format!(
-                "failed to write the device audio capture '{}': {error}",
-                audio_capture_path.display()
-            ),
-        })?;
+    let audio_result = capture_device_chime(&startup_scene_path, audio_capture_path);
+    let _ = fs::remove_dir_all(&temp_bundle_dir);
+    audio_result?;
 
     Ok(DeviceVerifyReport {
         width,
@@ -1021,6 +986,52 @@ pub fn run_device_verification(
         shadow: windowed_result.shadow,
         reference_path: reference_bmp_path.to_path_buf(),
     })
+}
+
+fn capture_device_chime(
+    startup_scene_path: &Path,
+    audio_capture_path: &Path,
+) -> Result<(), PlayerStartupError> {
+    let mut audio_runtime =
+        unitas_runtime::Runtime::new().map_err(|error| PlayerStartupError::RuntimeInit {
+            message: error.to_string(),
+        })?;
+    audio_runtime
+        .load_scene(startup_scene_path)
+        .map_err(|error| PlayerStartupError::SceneLoadFailed {
+            scene_path: startup_scene_path.to_path_buf(),
+            message: error.to_string(),
+        })?;
+    let chime_entity = audio_runtime
+        .find_entity_by_name("CollectChime")
+        .ok_or_else(|| PlayerStartupError::VerificationFailed {
+            message: String::from("the staged scene carries no CollectChime audio source"),
+        })?;
+
+    let audio_capture = unitas_audio::output::arm_capture(8);
+    let audio_output =
+        unitas_audio::output::DeviceOutput::start_with_capacity(DEVICE_CAPTURE_CAPACITY_FRAMES)
+            .map_err(|error| PlayerStartupError::VerificationFailed {
+                message: error.to_string(),
+            })?;
+    let sample_rate = f64::from(audio_output.sample_rate());
+    // the lane injects the collect chime after 0.5 s of silence and lets it ring
+    // for 0.25 s; tools/verify_device.py measures the window after that point.
+    let lead_in_frames = (sample_rate * 0.5).round() as usize;
+    let chime_frames = (sample_rate * 0.25).round() as usize;
+    audio_output.pump_world(audio_runtime.audio_mut(), lead_in_frames);
+    audio_runtime.audio_mut().play(chime_entity, true);
+    audio_output.pump_world(audio_runtime.audio_mut(), chime_frames);
+    drop(audio_output);
+
+    audio_capture
+        .write_wav(audio_capture_path)
+        .map_err(|error| PlayerStartupError::VerificationFailed {
+            message: format!(
+                "failed to write the device audio capture '{}': {error}",
+                audio_capture_path.display()
+            ),
+        })
 }
 
 /// Measures the time from launching a packaged player until it answers its

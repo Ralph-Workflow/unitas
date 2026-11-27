@@ -220,9 +220,10 @@ fn sample_opens_as_a_unity_2022_project() -> TestResult {
 fn scene_scripts_resolve_to_sample_sources_through_the_script_index() -> TestResult {
     let runtime = loaded_scene()?;
     let index = ProjectScriptIndex::build(&sample_root())?;
-    // Ten sample scripts: the nine the sample shipped with, plus the ghost
-    // replay component the S14 cross-attempt replay needs.
-    assert_eq!(index.script_count(), 10);
+    // Eleven sample scripts: the nine the sample shipped with, plus the ghost
+    // replay component the S14 cross-attempt replay needs and the reduced
+    // motion preference helper the trails feature reads.
+    assert_eq!(index.script_count(), 11);
     let root = sample_root();
 
     for script in runtime.scripts() {

@@ -5203,7 +5203,7 @@ pub extern "C" fn unitas_runtime_trail_get_emitting(handle: u64, entity: u64) ->
         }
         let emitting = state.runtime.trails().emitting(entity);
         state.clear_error();
-        if emitting { 1 } else { 0 }
+        i32::from(emitting)
     }) {
         Ok(code) => code,
         Err(code) => code,

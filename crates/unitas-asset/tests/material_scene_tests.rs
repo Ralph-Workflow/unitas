@@ -11,6 +11,7 @@ const SAMPLE_SCENE: &str = "Assets/Scenes/RollABall.unity";
 const SAMPLE_PICKUP_MATERIAL: &str = "Assets/Materials/Pickup.mat";
 const SAMPLE_PICKUP_TEXTURE: &str = "Assets/Textures/Pickup.png";
 const SAMPLE_PICKUP_NORMAL_TEXTURE: &str = "Assets/Textures/PickupNormal.png";
+const SAMPLE_PICKUP_EMISSION_TEXTURE: &str = "Assets/Textures/PickupEmission.png";
 
 fn sample_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(SAMPLE_ROOT)
@@ -47,10 +48,13 @@ fn scene_renderer_carries_the_resolved_material_properties() -> TestResult {
         renderer.normal_tex_path.as_deref(),
         Some(root.join(SAMPLE_PICKUP_NORMAL_TEXTURE).as_path())
     );
-    assert_eq!(renderer.emission_tex_path, None);
+    assert_eq!(
+        renderer.emission_tex_path.as_deref(),
+        Some(root.join(SAMPLE_PICKUP_EMISSION_TEXTURE).as_path())
+    );
     assert_eq!(renderer.metallic, Some(0.0));
     assert_eq!(renderer.smoothness, Some(0.6));
-    assert_eq!(renderer.emission_color, None);
+    assert_eq!(renderer.emission_color, Some([0.25, 1.0, 0.9, 1.0]));
     assert_eq!(renderer.material_color, [0.18, 0.77, 0.71]);
     Ok(())
 }

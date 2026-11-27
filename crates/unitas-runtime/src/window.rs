@@ -1125,8 +1125,10 @@ mod tests {
         unitas_runtime_display_reset();
         assert!(!should_exit_window_loop(&runtime, &config, 1));
 
-        let mut limited = WindowConfig::default();
-        limited.max_frames = Some(3);
+        let limited = WindowConfig {
+            max_frames: Some(3),
+            ..WindowConfig::default()
+        };
         assert!(!should_exit_window_loop(&runtime, &limited, 2));
         assert!(should_exit_window_loop(&runtime, &limited, 3));
 

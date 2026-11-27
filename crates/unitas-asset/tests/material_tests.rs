@@ -71,8 +71,10 @@ const SAMPLE_PICKUP_MATERIAL: &str = "Assets/Materials/Pickup.mat";
 const SAMPLE_GOLD_MATERIAL: &str = "Assets/Materials/Gold.mat";
 const SAMPLE_PICKUP_TEXTURE_META: &str = "Assets/Textures/Pickup.png.meta";
 const SAMPLE_PICKUP_NORMAL_META: &str = "Assets/Textures/PickupNormal.png.meta";
+const SAMPLE_PICKUP_EMISSION_META: &str = "Assets/Textures/PickupEmission.png.meta";
 const SAMPLE_PICKUP_TEXTURE: &str = "Assets/Textures/Pickup.png";
 const SAMPLE_PICKUP_NORMAL_TEXTURE: &str = "Assets/Textures/PickupNormal.png";
+const SAMPLE_PICKUP_EMISSION_TEXTURE: &str = "Assets/Textures/PickupEmission.png";
 
 type TestResult = Result<(), Box<dyn Error>>;
 
@@ -107,16 +109,20 @@ fn sample_pickup_material_carries_albedo_bump_and_surface_properties() -> TestRe
     let material = parse_material(&root.join(SAMPLE_PICKUP_MATERIAL))?;
     let albedo_guid = meta::parse_meta_file(&root.join(SAMPLE_PICKUP_TEXTURE_META))?;
     let bump_guid = meta::parse_meta_file(&root.join(SAMPLE_PICKUP_NORMAL_META))?;
+    let emission_guid = meta::parse_meta_file(&root.join(SAMPLE_PICKUP_EMISSION_META))?;
 
     assert_eq!(
         material.main_tex_guid.as_deref(),
         Some(albedo_guid.as_str())
     );
     assert_eq!(material.bump_tex_guid.as_deref(), Some(bump_guid.as_str()));
-    assert_eq!(material.emission_tex_guid, None);
+    assert_eq!(
+        material.emission_tex_guid.as_deref(),
+        Some(emission_guid.as_str())
+    );
     assert_eq!(material.glossiness, Some(0.6));
     assert_eq!(material.metallic, Some(0.0));
-    assert_eq!(material.emission_color, None);
+    assert_eq!(material.emission_color, Some([0.25, 1.0, 0.9, 1.0]));
     assert_eq!(material.color, [0.18, 0.77, 0.71, 1.0]);
 
     let index = GuidIndex::build(&root)?;
@@ -127,6 +133,10 @@ fn sample_pickup_material_carries_albedo_bump_and_surface_properties() -> TestRe
     assert_eq!(
         index.get(&bump_guid),
         Some(root.join(SAMPLE_PICKUP_NORMAL_TEXTURE).as_path())
+    );
+    assert_eq!(
+        index.get(&emission_guid),
+        Some(root.join(SAMPLE_PICKUP_EMISSION_TEXTURE).as_path())
     );
     Ok(())
 }

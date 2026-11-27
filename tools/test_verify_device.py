@@ -1,11 +1,15 @@
 from __future__ import annotations
 
+import math
+import struct
+import wave
 from typing import TYPE_CHECKING
 
 from tools import verify_device
 
 if TYPE_CHECKING:
     from collections.abc import Callable
+    from pathlib import Path
 
 DEVICE_LINE = (
     "device_verify=ok reference=tools/approved_gpu_reference.bmp size=320x240 "
@@ -15,6 +19,33 @@ DEVICE_LINE = (
 )
 GAME_SCORE = 2
 CONTROL_FRAMES = 30
+CHIME_SAMPLE_RATE = 48_000
+CHIME_LEAD_IN_SECONDS = 0.5
+CHIME_TONE_SECONDS = 0.25
+CHIME_TEST_SECONDS = 1.0
+CHIME_TONE_AMPLITUDE = 0.5
+
+
+def write_capture(
+    path: Path,
+    tone_hz: float | None,
+    lead_in: float = CHIME_LEAD_IN_SECONDS,
+    tone_seconds: float = CHIME_TONE_SECONDS,
+) -> None:
+    count = int(CHIME_SAMPLE_RATE * CHIME_TEST_SECONDS)
+    samples = [0.0] * count
+    if tone_hz is not None:
+        start = round(lead_in * CHIME_SAMPLE_RATE)
+        window = round(tone_seconds * CHIME_SAMPLE_RATE)
+        for index in range(start, start + window):
+            phase = 2.0 * math.pi * tone_hz * index / CHIME_SAMPLE_RATE
+            samples[index] = CHIME_TONE_AMPLITUDE * math.sin(phase)
+    frames = struct.pack(f"<{count}h", *(int(value * 32767) for value in samples))
+    with wave.open(str(path), "wb") as handle:
+        handle.setnchannels(1)
+        handle.setsampwidth(2)
+        handle.setframerate(CHIME_SAMPLE_RATE)
+        handle.writeframes(frames)
 
 
 def assert_control_check_error(action: Callable[[], object], fragment: str) -> None:
@@ -36,6 +67,44 @@ def test_the_device_report_carries_the_generic_canvas_facts() -> None:
     assert "score" not in report
     assert "won" not in report
     assert "hud" not in report
+
+
+def test_the_collected_chime_frame_is_read_from_the_player_log() -> None:
+    lines = ["collect chime played pickup_frame=42", "unrelated output"]
+    assert verify_device.pickup_frames(lines) == [42]
+    assert verify_device.pickup_frames(["nothing here"]) == []
+
+
+def test_a_silent_capture_fails_the_chime_check(tmp_path: Path) -> None:
+    capture = tmp_path / "silent.wav"
+    write_capture(capture, None)
+    reason, summary = verify_device.chime_capture_reason(capture)
+    assert reason is not None
+    assert "no collect chime" in reason
+    assert summary == ""
+
+
+def test_a_capture_carrying_the_chime_band_passes_the_chime_check(tmp_path: Path) -> None:
+    capture = tmp_path / "chime.wav"
+    write_capture(capture, verify_device.CHIME_FREQUENCY_HZ)
+    reason, summary = verify_device.chime_capture_reason(capture)
+    assert reason is None
+    assert "audio energy in the window" in summary
+
+
+def test_a_capture_that_carries_the_band_before_the_injection_fails(tmp_path: Path) -> None:
+    capture = tmp_path / "early.wav"
+    write_capture(capture, verify_device.CHIME_FREQUENCY_HZ, lead_in=0.0, tone_seconds=0.75)
+    reason, _summary = verify_device.chime_capture_reason(capture)
+    assert reason is not None
+    assert "carries audio before the injected" in reason
+
+
+def test_a_missing_capture_fails_the_chime_check(tmp_path: Path) -> None:
+    reason, summary = verify_device.chime_capture_reason(tmp_path / "absent.wav")
+    assert reason is not None
+    assert "wrote no audio capture" in reason
+    assert summary == ""
 
 
 def test_the_canvas_texts_split_on_the_reported_separator() -> None:

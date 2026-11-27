@@ -416,7 +416,7 @@ namespace Unitas.Bridge
                 return default;
             }
 
-            IntPtr buffer = new IntPtr(unchecked((long)unitas_runtime_player_loop_buffer(runtime, length)));
+            IntPtr buffer = new IntPtr((long)unitas_runtime_player_loop_buffer(runtime, length));
             if (buffer == IntPtr.Zero)
             {
                 return default;

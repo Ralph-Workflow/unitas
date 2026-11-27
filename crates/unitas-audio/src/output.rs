@@ -528,7 +528,7 @@ mod tests {
                 ..CaptureState::default()
             })),
         };
-        handoff.enable_capture(capture.clone(), 1);
+        handoff.enable_capture(capture.clone(), 2);
         handoff.push(&[0.1, 0.1, 0.2, 0.2]);
         handoff.push(&[0.3, 0.3, 0.4, 0.4]);
         assert_eq!(capture.mono_samples(), vec![0.3, 0.4]);

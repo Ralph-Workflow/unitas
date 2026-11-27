@@ -43,9 +43,12 @@ GAME_SCORE_PATTERN = re.compile(r"Pickup collected score (\d+)")
 GAME_CHIME_PATTERN = re.compile(r"collect chime played pickup_frame=(\d+)")
 ACTUAL_CAPTURE_PATH = REPO_ROOT / "target" / "device-lane" / "actual_gpu_frame.bmp"
 DEVICE_AUDIO_WAV = REPO_ROOT / "target" / "device-lane" / "device_audio.wav"
+PCM_SAMPLE_WIDTH_BYTES = 2
 GAME_FRAME_RATE = 60
 CHIME_FREQUENCY_HZ = 875.0
-CHIME_WINDOW_SECONDS = 0.2
+CHIME_WINDOW_SECONDS = 0.05
+CHIME_LEAD_IN_SECONDS = 0.5
+CHIME_SILENCE_SECONDS = 0.25
 CHIME_FLOOR_AMPLITUDE = 0.005
 PLAYER_BINARY = REPO_ROOT / "target" / "debug" / "unitas-player"
 POLICY_CITATION = "docs/ralph-workflow-policy/verification-policy.md § Gate lanes"
@@ -359,11 +362,11 @@ def read_wav_mono(path: Path) -> tuple[int, list[float]]:
         sample_rate = handle.getframerate()
         width = handle.getsampwidth()
         raw = handle.readframes(handle.getnframes())
-    if width != 2:
+    if width != PCM_SAMPLE_WIDTH_BYTES:
         message = f"unsupported sample width {width} bytes"
         raise ValueError(message)
-    count = len(raw) // 2
-    values = struct.unpack(f"<{count}h", raw[: count * 2])
+    count = len(raw) // PCM_SAMPLE_WIDTH_BYTES
+    values = struct.unpack(f"<{count}h", raw[: count * PCM_SAMPLE_WIDTH_BYTES])
     if channels == 1:
         return sample_rate, [value / 32768.0 for value in values]
     mono: list[float] = []
@@ -373,26 +376,41 @@ def read_wav_mono(path: Path) -> tuple[int, list[float]]:
     return sample_rate, mono
 
 
-def band_amplitude(samples: Sequence[float], sample_rate: int, frequency: float) -> float:
+def window_energy(samples: Sequence[float]) -> float:
     if not samples:
         return 0.0
-    omega = 2.0 * math.pi * frequency / sample_rate
-    coefficient = 2.0 * math.cos(omega)
-    previous = 0.0
-    before_previous = 0.0
-    for sample in samples:
-        current = sample + coefficient * previous - before_previous
-        before_previous = previous
-        previous = current
-    power = (
-        previous * previous
-        + before_previous * before_previous
-        - coefficient * previous * before_previous
+    return math.sqrt(sum(sample * sample for sample in samples) / len(samples))
+
+
+def chime_window_finding(samples: Sequence[float], sample_rate: int) -> tuple[str | None, str]:
+    offset = round(CHIME_LEAD_IN_SECONDS * sample_rate)
+    window = round(CHIME_WINDOW_SECONDS * sample_rate)
+    if offset + window > len(samples):
+        return (
+            f"the device audio capture holds {len(samples)} samples at {sample_rate} Hz; "
+            f"the chime window [{offset}, {offset + window}) lies outside the capture",
+            "",
+        )
+    silence = round(CHIME_SILENCE_SECONDS * sample_rate)
+    silence_amplitude = window_energy(samples[:silence])
+    amplitude = window_energy(samples[offset : offset + window])
+    summary = (
+        f"the audio energy in the window after the injected pickup "
+        f"is {amplitude:.5f} against the silence floor {CHIME_FLOOR_AMPLITUDE:.5f}"
     )
-    return 2.0 * math.sqrt(max(power, 0.0)) / len(samples)
+    if amplitude <= CHIME_FLOOR_AMPLITUDE:
+        return (f"the mixed audio after the pickup carries no collect chime: {summary}", "")
+    if silence_amplitude > CHIME_FLOOR_AMPLITUDE:
+        return (
+            f"the captured device stream carries audio before the injected "
+            f"pickup: {silence_amplitude:.5f} against the silence floor "
+            f"{CHIME_FLOOR_AMPLITUDE:.5f}",
+            "",
+        )
+    return (None, summary)
 
 
-def chime_capture_reason(wav_path: Path, pickup_frame: int) -> tuple[str | None, str]:
+def chime_capture_reason(wav_path: Path) -> tuple[str | None, str]:
     if not wav_path.is_file():
         return (f"the device lane wrote no audio capture at '{wav_path}'", "")
     try:
@@ -401,24 +419,7 @@ def chime_capture_reason(wav_path: Path, pickup_frame: int) -> tuple[str | None,
         return (f"the device audio capture '{wav_path}' is unreadable: {error}", "")
     if sample_rate <= 0 or not samples:
         return (f"the device audio capture '{wav_path}' carries no samples", "")
-    offset = int(round(pickup_frame * sample_rate / GAME_FRAME_RATE))
-    window = int(round(CHIME_WINDOW_SECONDS * sample_rate))
-    if offset + window > len(samples):
-        return (
-            f"the device audio capture holds {len(samples)} samples at {sample_rate} Hz; "
-            f"the pickup window [{offset}, {offset + window}) lies outside the capture",
-            "",
-        )
-    amplitude = band_amplitude(
-        samples[offset : offset + window], sample_rate, CHIME_FREQUENCY_HZ
-    )
-    summary = (
-        f"the {CHIME_FREQUENCY_HZ:.0f} Hz band amplitude in the window after the pickup "
-        f"is {amplitude:.5f} against the silence floor {CHIME_FLOOR_AMPLITUDE:.5f}"
-    )
-    if amplitude <= CHIME_FLOOR_AMPLITUDE:
-        return (f"the mixed audio after the pickup carries no collect chime: {summary}", "")
-    return (None, summary)
+    return chime_window_finding(samples, sample_rate)
 
 
 def start_control_process() -> subprocess.Popen[str]:
@@ -633,6 +634,31 @@ def prepare_actual_capture(actual_capture: Path | None, budget_seconds: float) -
     return rc, ACTUAL_CAPTURE_PATH
 
 
+def device_lane_failure(
+    report: dict[str, str] | None,
+    output: str,
+    fps_reason: str | None,
+    budget_seconds: float,
+) -> tuple[str, str | None, str]:
+    lines = output.splitlines()
+    reason = device_failure_reason(report) or game_progress_reason(lines)
+    stage = "device-verify"
+    if reason is None:
+        reason = fps_reason
+    chime_reason: str | None = "the player's log output carries no collected pickup chime frame"
+    chime_summary = ""
+    chime_frames = pickup_frames(lines)
+    if chime_frames:
+        chime_reason, chime_summary = chime_capture_reason(DEVICE_AUDIO_WAV)
+    if reason is None:
+        stage = "device-audio"
+        reason = chime_reason
+    if reason is None:
+        stage = "control-stdio"
+        reason = control_stdio_check(budget_seconds)
+    return stage, reason, chime_summary
+
+
 def run_device_lane(
     actual_capture: Path | None = None,
     budget_seconds: float = DEFAULT_BUDGET_SECONDS,
@@ -683,22 +709,8 @@ def run_device_lane(
     if rc != 0:
         return rc
     report = parse_device_report(output)
-    reason = device_failure_reason(report) or game_progress_reason(output.splitlines())
     sustained_fps_text, fps_reason = sustained_fps_measurement(output)
-    stage = "device-verify"
-    if reason is None:
-        reason = fps_reason
-    chime_frames = pickup_frames(output.splitlines())
-    chime_reason = "the player's log output carries no collected pickup chime frame"
-    chime_summary = ""
-    if chime_frames:
-        chime_reason, chime_summary = chime_capture_reason(DEVICE_AUDIO_WAV, chime_frames[0])
-    if reason is None:
-        stage = "device-audio"
-        reason = chime_reason
-    if reason is None:
-        stage = "control-stdio"
-        reason = control_stdio_check(budget_seconds)
+    stage, reason, chime_summary = device_lane_failure(report, output, fps_reason, budget_seconds)
     if reason is not None:
         sys.stderr.write(f"FAIL verify-device ({stage}): {reason} ({POLICY_CITATION})\n")
         return 1
