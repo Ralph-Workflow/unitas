@@ -96,6 +96,8 @@ namespace Unitas.Editor.Mcp
                     ["displayName"] = definition.Name,
                     ["description"] = definition.Description,
                     ["requiredScope"] = Scopes.AsString(definition.RequiredScope),
+                    ["reversibility"] = definition.EffectiveReversibility,
+                    ["reversible"] = definition.IsReversible,
                     ["available"] = available,
                     ["disabledReason"] = disabledReason,
                 });

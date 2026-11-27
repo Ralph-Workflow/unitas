@@ -10,6 +10,28 @@ use unitas_runtime::{
 
 const SCENE_YAML: &str = "%YAML 1.1
 %TAG !u! tag:unity3d.com,2011:
+--- !u!1 &100
+GameObject:
+  m_Name: Main Camera
+  m_Layer: 0
+  m_IsActive: 1
+--- !u!4 &101
+Transform:
+  m_GameObject: {fileID: 100}
+  m_LocalPosition: {x: 0, y: 0, z: -2}
+  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_Children: []
+  m_Father: {fileID: 0}
+--- !u!20 &102
+Camera:
+  m_GameObject: {fileID: 100}
+  orthographic: 1
+  orthographic size: 2
+  field of view: 60
+  near clip plane: 0.1
+  far clip plane: 100
+  m_BackGroundColor: {r: 0, g: 0, b: 0, a: 1}
 --- !u!1 &1
 GameObject:
   m_Name: SceneSprite
@@ -68,7 +90,7 @@ fn script_sprite_draws_in_the_same_sorted_pass_as_the_scene_sprites()
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir)?;
     let texture = dir.join("sprite.tga");
-    write_test_tga(&texture, 100, 50, [255, 0, 0])?;
+    write_test_tga(&texture, 100, 50, [255, 255, 255])?;
     write_scene(&dir, &texture)?;
 
     let mut runtime = Runtime::new()?;
@@ -127,10 +149,34 @@ fn script_sprite_draws_in_the_same_sorted_pass_as_the_scene_sprites()
     let front_frame = runtime.capture_scene_frame(64, 64)?;
     let center_idx = ((32 * 64 + 32) * 3) as usize;
     let front_pixel = &front_frame.image.pixels[center_idx..center_idx + 3];
+    {
+        let mut seen: std::collections::BTreeMap<Vec<u8>, usize> = Default::default();
+        for chunk in front_frame.image.pixels.chunks_exact(4) {
+            *seen.entry(chunk.to_vec()).or_default() += 1;
+        }
+        println!("FRONTCOLORS {seen:?}");
+    }
+    for (index, sprite) in runtime.sprite_instances().iter().enumerate() {
+        println!(
+            "SPRITE{index} tex {}x{} first {:?} last {:?} model {:?}",
+            sprite.texture.width,
+            sprite.texture.height,
+            sprite.texture.pixels.first(),
+            sprite.texture.pixels.last(),
+            sprite.model,
+        );
+    }
 
     assert!(runtime.set_runtime_sprite_color(entity, [0.0, 0.0, 1.0, 1.0]));
     let recolored_frame = runtime.capture_scene_frame(64, 64)?;
     let recolored_pixel = &recolored_frame.image.pixels[center_idx..center_idx + 3];
+    {
+        let mut seen: std::collections::BTreeMap<Vec<u8>, usize> = Default::default();
+        for chunk in recolored_frame.image.pixels.chunks_exact(4) {
+            *seen.entry(chunk.to_vec()).or_default() += 1;
+        }
+        println!("RECOLOREDCOLORS {seen:?}");
+    }
     assert_ne!(front_pixel, recolored_pixel);
 
     let _ = std::fs::remove_dir_all(&dir);

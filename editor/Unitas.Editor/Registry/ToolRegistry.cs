@@ -6,8 +6,17 @@ namespace Unitas.Editor.Mcp
 {
     public delegate ToolOutput ToolHandler(JsonNode arguments);
 
-    public sealed record ToolDefinition(string Name, string Description, JsonNode InputSchema, Scope RequiredScope)
+    public sealed record ToolDefinition(
+        string Name,
+        string Description,
+        JsonNode InputSchema,
+        Scope RequiredScope,
+        string? Reversibility = null)
     {
+        public string EffectiveReversibility => Reversibility ?? ClassifyReversibility(Name, RequiredScope);
+
+        public bool IsReversible => !string.Equals(EffectiveReversibility, "irreversible", StringComparison.Ordinal);
+
         public JsonNode ToValue()
         {
             return new JsonObject
@@ -16,7 +25,81 @@ namespace Unitas.Editor.Mcp
                 ["description"] = Description,
                 ["inputSchema"] = InputSchema.DeepClone(),
                 ["requiredScope"] = Scopes.AsString(RequiredScope),
+                ["reversibility"] = EffectiveReversibility,
+                ["reversible"] = IsReversible,
             };
+        }
+
+        private static string ClassifyReversibility(string name, Scope requiredScope)
+        {
+            if (IsIrreversibleTool(name))
+            {
+                return "irreversible";
+            }
+
+            if (IsReversibleDebugTool(name))
+            {
+                return "reversible";
+            }
+
+            if (requiredScope == Scope.ReadProject || IsReadOnlyDebugTool(name))
+            {
+                return "read-only";
+            }
+
+            return "reversible";
+        }
+
+        private static bool IsIrreversibleTool(string name)
+        {
+            switch (name)
+            {
+                case "scene.save":
+                case "build.player":
+                case "scripts.compile":
+                case "scripts.diagnose":
+                case "tests.run":
+                case "scenario.run":
+                case "editor.execute_method":
+                case "editor.invoke_command":
+                case "debug.evaluate":
+                case "permissions.request_grant":
+                case "permissions.person_grant":
+                case "audit.delete":
+                case "audit.clear":
+                case "audit.alter":
+                    return true;
+                default:
+                    return false;
+            }
+        }
+
+        private static bool IsReversibleDebugTool(string name)
+        {
+            switch (name)
+            {
+                case "debug.set_breakpoints":
+                case "debug.continue":
+                case "debug.step":
+                case "changes.approve":
+                case "changes.reject":
+                    return true;
+                default:
+                    return false;
+            }
+        }
+
+        private static bool IsReadOnlyDebugTool(string name)
+        {
+            switch (name)
+            {
+                case "debug.stack":
+                case "debug.locals":
+                case "debug.wait_stopped":
+                    return true;
+                default:
+                    return false;
+            }
         }
     }
 

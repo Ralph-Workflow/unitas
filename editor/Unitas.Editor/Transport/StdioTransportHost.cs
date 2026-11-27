@@ -184,6 +184,8 @@ namespace Unitas.Editor.Mcp
                     Meta = new JsonObject
                     {
                         ["requiredScope"] = Scopes.AsString(definition.RequiredScope),
+                        ["reversibility"] = definition.EffectiveReversibility,
+                        ["reversible"] = definition.IsReversible,
                     },
                 });
             }

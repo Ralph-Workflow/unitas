@@ -1,5 +1,6 @@
 macro_rules! ffi_export {
-    (pub extern "C" fn $name:ident($($arg:ident : $arg_ty:ty),* $(,)?) $(-> $ret:ty)? $body:block) => {
+    ($(#[$meta:meta])* pub extern "C" fn $name:ident($($arg:ident : $arg_ty:ty),* $(,)?) $(-> $ret:ty)? $body:block) => {
+        $(#[$meta])*
         #[unsafe(export_name = stringify!($name))]
         pub extern "C" fn $name($($arg : $arg_ty),*) $(-> $ret)? {
             #[used]
@@ -11,10 +12,13 @@ macro_rules! ffi_export {
 
 use crate::descriptor::{Scope, ToolDescriptor};
 use crate::dispatch::{AbiError, DispatchTable, error_json};
+use crate::shell::shell_run_impl;
 use serde_json::json;
 use std::collections::HashMap;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::{Mutex, OnceLock, RwLock};
+
+pub type ShellEventCallback = extern "C" fn(usize) -> usize;
 
 static TABLE: RwLock<Option<DispatchTable>> = RwLock::new(None);
 static STRINGS: OnceLock<Mutex<HashMap<usize, Box<[u8]>>>> = OnceLock::new();
@@ -92,7 +96,7 @@ pub fn allocate_c_string(text: &str) -> usize {
     address
 }
 
-fn read_c_string(address: usize) -> Option<Result<String, ()>> {
+pub fn read_c_string(address: usize) -> Option<Result<String, ()>> {
     if address == 0 {
         return None;
     }
@@ -109,7 +113,15 @@ fn read_c_string(address: usize) -> Option<Result<String, ()>> {
     )
 }
 
-fn panic_error() -> usize {
+pub fn free_c_string(ptr: usize) {
+    if ptr != 0
+        && let Ok(mut map) = string_registry().lock()
+    {
+        map.remove(&ptr);
+    }
+}
+
+pub(crate) fn panic_error() -> usize {
     allocate_c_string(&error_json("internal", None, PANIC_MESSAGE).to_string())
 }
 
@@ -229,11 +241,30 @@ pub extern "C" fn unitas_editor_tool_invoke(name: usize, args_json: usize) -> us
 ffi_export! {
 pub extern "C" fn unitas_editor_string_free(ptr: usize) {
     let _ = catch_unwind(AssertUnwindSafe(|| {
-        if ptr != 0
-            && let Ok(mut map) = string_registry().lock() {
-                map.remove(&ptr);
-            }
+        free_c_string(ptr);
     }));
+}
+}
+
+ffi_export! {
+/// Run the editor workspace shell loop for the shell project at `shell_project_path`
+/// using `options_json` and dispatching events through `callback`.
+///
+/// # Safety
+/// `shell_project_path` and `options_json` must be valid string buffer addresses
+/// allocated via `unitas_editor_allocate_string` (or 0), and `callback` must be a
+/// valid C-ABI function pointer returning an allocated string buffer address (or 0).
+pub extern "C" fn unitas_editor_run_shell(
+    shell_project_path: usize,
+    options_json: usize,
+    callback: Option<extern "C" fn(usize) -> usize>,
+) -> usize {
+    match catch_unwind(AssertUnwindSafe(|| {
+        shell_run_impl(shell_project_path, options_json, callback)
+    })) {
+        Ok(ptr) => ptr,
+        Err(_) => panic_error(),
+    }
 }
 }
 

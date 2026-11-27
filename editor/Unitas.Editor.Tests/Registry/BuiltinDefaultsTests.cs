@@ -36,22 +36,30 @@ namespace Unitas.Editor.Tests
                 tools[0].RequiredScope == Scope.ReadProject);
 
             IReadOnlyList<ResourceDefinition> resources = host.ListResources();
-            Check.Equal("builtin: one default resource registered", 1, resources.Count);
+            Check.Equal("builtin: three default knowledge resources registered", 3, resources.Count);
             Check.Equal(
-                "builtin: default resource uri is unitas://knowledge/scopes",
-                "unitas://knowledge/scopes",
+                "builtin: resource 0 uri is unitas://knowledge/docs",
+                "unitas://knowledge/docs",
                 resources[0].Uri);
             Check.Equal(
-                "builtin: default resource name",
-                "AUT-007 Permission Scopes",
-                resources[0].Name);
+                "builtin: resource 1 uri is unitas://knowledge/grants",
+                "unitas://knowledge/grants",
+                resources[1].Uri);
             Check.Equal(
-                "builtin: default resource mimeType",
+                "builtin: resource 2 uri is unitas://knowledge/scopes",
+                "unitas://knowledge/scopes",
+                resources[2].Uri);
+            Check.Equal(
+                "builtin: scopes resource name",
+                "AUT-007 Permission Scopes",
+                resources[2].Name);
+            Check.Equal(
+                "builtin: scopes resource mimeType",
                 "application/json",
-                resources[0].MimeType);
+                resources[2].MimeType);
             Check.That(
-                "builtin: default resource requires ReadProject",
-                resources[0].RequiredScope == Scope.ReadProject);
+                "builtin: scopes resource requires ReadProject",
+                resources[2].RequiredScope == Scope.ReadProject);
         }
 
         private static void BuiltinDefaultsAreReadProjectScopedAndUntrusted()

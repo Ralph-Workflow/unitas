@@ -1,7 +1,7 @@
 export DOTNET_ROOT := $(dir $(realpath $(shell command -v dotnet)))
 export PATH := $(DOTNET_ROOT):$(PATH)
 
-.PHONY: verify verify-gates verify-scan-gates verify-static-gates verify-test-gates verify-dotnet-gates verify-device verify-unsafe verify-samples verify-benchmark verify-perf test test-steps lint typecheck policy-validate bypass-audit banned-constructs comment-audit secret-scan deps runtime-build dotnet-build dotnet-format dotnet-test dotnet-test-run zone-gate size-gate
+.PHONY: verify verify-gates verify-scan-gates verify-static-gates verify-test-gates verify-dotnet-gates verify-device verify-unsafe verify-samples verify-benchmark verify-perf test test-steps lint typecheck policy-validate bypass-audit banned-constructs comment-audit secret-scan deps runtime-build dotnet-build dotnet-format dotnet-test dotnet-test-run zone-gate size-gate editor-shell-run
 
 VERIFY_BUDGET_SECONDS := 124
 SUITE_BUDGET_SECONDS := 61
@@ -13,7 +13,7 @@ EDITOR_TEST_SHARD_FANOUT := 12
 BRIDGE_TEST_SHARD_COUNT := 12
 BRIDGE_TEST_SHARDS := 1,2,3,4,5,6,7,8,9,10,11,12
 CLIPPY_TARGET_DIR := $(CURDIR)/target/clippy
-EDITOR_TEST_SHARDS := AuditTests,BuildToolsTests,BuiltinDefaultsTests,ChangeReviewTests,ClockTests,HeadlessCliTests,NativeToolBridgeTests,OperationStoreTests,OperationToolsTests,RegistryTests,ScopeTests,SessionTests,UntrustedContentTests \
+EDITOR_TEST_SHARDS := AuditTests,BuildToolsTests,BuiltinDefaultsTests,ChangeReviewTests,ClockTests,HeadlessCliTests,KnowledgeResourceTests,NativeToolBridgeTests,OperationStoreTests,OperationToolsTests,RegistryTests,ScopeTests,SessionTests,ShellWorkspaceTests,ShellPlayTests,UntrustedContentTests \
 	ExecuteMethodToolsTests,ScenarioGlueDiscoveryTests \
 	HttpTransportTests \
 	ScenarioToolsTests \
@@ -170,6 +170,9 @@ editor-test-shards:
 	done; \
 	for pid in $$pids; do wait $$pid || rc=1; done; \
 	exit $$rc
+
+editor-shell-run: dotnet-build
+	@UNITAS_RUNTIME_LIBRARY="$(CURDIR)/target/debug/libunitas_runtime.dylib" UNITAS_EDITOR_ABI_LIBRARY="$(CURDIR)/target/debug/libunitas_editor_abi.dylib" dotnet editor/Unitas.Editor/bin/Release/net8.0/Unitas.Editor.dll --shell --project "$(CURDIR)/samples/roll-a-ball"
 
 verify-unsafe:
 	@echo "owner: editor and engine proof"

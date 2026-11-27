@@ -2692,6 +2692,8 @@ dependencies = [
  "unitas-asset",
  "unitas-build",
  "unitas-core",
+ "unitas-render",
+ "unitas-runtime",
 ]
 
 [[package]]

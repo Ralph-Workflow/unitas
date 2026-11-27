@@ -33,49 +33,39 @@ fn temp_dir(name: &str) -> std::io::Result<PathBuf> {
     Ok(path)
 }
 
-fn staged_bundle() -> Option<PathBuf> {
-    let bundle = repository_root()?.join("target").join("editor-test-bundle");
-    if !bundle
-        .join(MANAGED_DIR_NAME)
-        .join(PLAYER_HOST_ASSEMBLY_FILENAME)
-        .is_file()
-    {
-        eprintln!(
-            "skipping: the staged bundle at '{}' carries no managed player host payload",
-            bundle.display()
-        );
-        return None;
-    }
-    if BundleManifest::load_from_dir(&bundle).is_err() {
-        let _ = unitas_build::sample::stage_roll_a_ball_bundle(&bundle);
-    }
-    Some(bundle)
-}
-
-fn copy_tree(source: &Path, destination: &Path) -> std::io::Result<()> {
-    fs::create_dir_all(destination)?;
-    for entry in fs::read_dir(source)? {
-        let entry = entry?;
-        let path = entry.path();
-        let target = destination.join(entry.file_name());
-        if path.is_dir() {
-            copy_tree(&path, &target)?;
-        } else {
-            fs::copy(&path, &target)?;
-        }
-    }
-    Ok(())
-}
-
-/// The gate re-stages the shared bundle while the Rust tests run, so every
-/// test works on its own copy of it.
-fn private_bundle(name: &str) -> Result<Option<(PathBuf, PathBuf)>, Box<dyn Error>> {
-    let Some(source) = staged_bundle() else {
-        return Ok(None);
+fn has_managed_host() -> bool {
+    let Some(root) = repository_root() else {
+        return false;
     };
+    let host_dll = root
+        .join("bridge")
+        .join("Unitas.PlayerHost")
+        .join("bin")
+        .join("Release")
+        .join("net8.0")
+        .join(PLAYER_HOST_ASSEMBLY_FILENAME);
+    let staged_dll = root
+        .join("target")
+        .join("editor-test-bundle")
+        .join(MANAGED_DIR_NAME)
+        .join(PLAYER_HOST_ASSEMBLY_FILENAME);
+    if !host_dll.is_file() && !staged_dll.is_file() {
+        eprintln!(
+            "skipping: no managed player host payload at '{}'",
+            host_dll.display()
+        );
+        return false;
+    }
+    true
+}
+
+fn private_bundle(name: &str) -> Result<Option<(PathBuf, PathBuf)>, Box<dyn Error>> {
+    if !has_managed_host() {
+        return Ok(None);
+    }
     let root = temp_dir(name)?;
     let bundle = root.join("bundle");
-    copy_tree(&source, &bundle)?;
+    unitas_build::sample::stage_roll_a_ball_bundle(&bundle)?;
     Ok(Some((root, bundle)))
 }
 

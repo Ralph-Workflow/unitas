@@ -460,7 +460,14 @@ mod tests {
             image: &mut image_a,
             ids: None,
         };
-        painter_a.paint(&mut target_a, "Score 0", 16.0, 12.0, 18.0, [1.0, 1.0, 1.0, 1.0]);
+        painter_a.paint(
+            &mut target_a,
+            "Score 0",
+            16.0,
+            12.0,
+            18.0,
+            [1.0, 1.0, 1.0, 1.0],
+        );
 
         let mut painter_b = GlyphTextPainter::new();
         let mut image_b = Rgba8::new(160, 48);
@@ -525,12 +532,10 @@ mod tests {
             Some(&mut painter),
         );
 
-        let has_ink_below_32_unclipped = (33..80).any(|y| {
-            (0..160).any(|x| unclipped.get_pixel(x, y)[3] > 0)
-        });
-        let has_ink_below_32_clipped = (33..80).any(|y| {
-            (0..160).any(|x| clipped.get_pixel(x, y)[3] > 0)
-        });
+        let has_ink_below_32_unclipped =
+            (33..80).any(|y| (0..160).any(|x| unclipped.get_pixel(x, y)[3] > 0));
+        let has_ink_below_32_clipped =
+            (33..80).any(|y| (0..160).any(|x| clipped.get_pixel(x, y)[3] > 0));
         assert!(has_ink_below_32_unclipped);
         assert!(!has_ink_below_32_clipped);
     }

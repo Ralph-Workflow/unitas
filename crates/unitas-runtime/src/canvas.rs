@@ -412,9 +412,9 @@ impl CanvasState {
                     let color = state.map_or(text.color, |state| state.color);
                     let font_size = state.map_or(text.font_size, |state| state.font_size);
                     let text_layout = state.map_or_else(TextLayoutConfig::default, |s| s.layout);
-                    let text_clip_rect =
-                        (text_layout.vertical_overflow == VerticalWrapMode::Truncate)
-                            .then_some(rect_px);
+                    let text_clip_rect = (text_layout.vertical_overflow
+                        == VerticalWrapMode::Truncate)
+                        .then_some(rect_px);
                     items.push(UiDrawItem {
                         rect_px,
                         color,

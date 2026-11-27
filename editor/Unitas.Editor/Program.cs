@@ -1,7 +1,9 @@
 using System;
 using System.Globalization;
+using System.Text.Json.Nodes;
 using System.Threading.Tasks;
 using Unitas.Editor.Mcp;
+using Unitas.Editor.Shell;
 
 namespace Unitas.Editor
 {
@@ -14,6 +16,11 @@ namespace Unitas.Editor
                 using EditorRuntime runtime = BuiltinDefaults.CreateStartupRuntime();
                 await new StdioTransportHost(runtime.Host).RunConsoleAsync().ConfigureAwait(false);
                 return 0;
+            }
+
+            if (CliArgs.IsShellInvocation(args))
+            {
+                return RunShellMode(args);
             }
 
             if (HeadlessCli.IsCliInvocation(args))
@@ -65,6 +72,124 @@ namespace Unitas.Editor
             }
 
             return 2;
+        }
+
+        private static int RunShellMode(string[] args)
+        {
+            if (!TryParseShellOptions(args, out ShellRunOptions options))
+            {
+                return 2;
+            }
+
+            using EditorRuntime runtime = BuiltinDefaults.CreateStartupRuntime(args);
+            try
+            {
+                ShellHost shellHost = new ShellHost(runtime.Host);
+                JsonObject result = shellHost.Run(options);
+                Console.Out.WriteLine(result.ToJsonString());
+                return 0;
+            }
+            catch (McpError error)
+            {
+                Console.Error.WriteLine("[unitas-shell] " + error.Message);
+                return 1;
+            }
+        }
+
+        private static bool TryParseShellOptions(string[] args, out ShellRunOptions options)
+        {
+            options = new ShellRunOptions();
+            int index = 0;
+            while (index < args.Length)
+            {
+                string current = args[index] ?? string.Empty;
+                if (string.Equals(current, CliArgs.ShellFlag, StringComparison.Ordinal))
+                {
+                    index++;
+                }
+                else if (string.Equals(current, CliArgs.HeadlessFlag, StringComparison.Ordinal))
+                {
+                    options.Headless = true;
+                    index++;
+                }
+                else if (!TryConsumeShellOptionValue(args, ref index, current, options))
+                {
+                    return false;
+                }
+            }
+
+            return true;
+        }
+
+        private static bool TryConsumeShellOptionValue(
+            string[] args,
+            ref int index,
+            string current,
+            ShellRunOptions options)
+        {
+            if (string.Equals(current, CliArgs.ProjectOption, StringComparison.Ordinal)
+                || string.Equals(current, CliArgs.ProjectPathOption, StringComparison.Ordinal))
+            {
+                if (index + 1 >= args.Length)
+                {
+                    return false;
+                }
+
+                options.TargetProjectPath = args[index + 1];
+                index += 2;
+                return true;
+            }
+
+            if (string.Equals(current, CliArgs.ShellProjectOption, StringComparison.Ordinal))
+            {
+                if (index + 1 >= args.Length)
+                {
+                    return false;
+                }
+
+                options.ShellProjectPath = args[index + 1];
+                index += 2;
+                return true;
+            }
+
+            if (string.Equals(current, CliArgs.CaptureOutOption, StringComparison.Ordinal))
+            {
+                if (index + 1 >= args.Length)
+                {
+                    return false;
+                }
+
+                options.CaptureOut = args[index + 1];
+                index += 2;
+                return true;
+            }
+
+            if (string.Equals(current, CliArgs.FramesOption, StringComparison.Ordinal))
+            {
+                if (index + 1 >= args.Length
+                    || !long.TryParse(
+                        args[index + 1],
+                        NumberStyles.Integer,
+                        CultureInfo.InvariantCulture,
+                        out long frames)
+                    || frames <= 0)
+                {
+                    return false;
+                }
+
+                options.MaxFrames = frames;
+                index += 2;
+                return true;
+            }
+
+            if (!current.StartsWith('-') && string.IsNullOrEmpty(options.TargetProjectPath))
+            {
+                options.TargetProjectPath = current;
+                index++;
+                return true;
+            }
+
+            return false;
         }
     }
 }

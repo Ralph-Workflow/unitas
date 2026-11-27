@@ -29,7 +29,8 @@ struct SurfaceTarget<'a> {
     scale: f32,
 }
 
-struct OverlayLayers<'a> {
+#[derive(Clone, Copy)]
+struct SurfaceOverlays<'a> {
     overlay: &'a [TextOverlayItem],
     canvas_rects: &'a [CanvasRect],
     canvas_texts: &'a [TextOverlayItem],
@@ -279,7 +280,7 @@ impl Renderer {
             },
             &items,
             scene,
-            OverlayLayers {
+            SurfaceOverlays {
                 overlay,
                 canvas_rects,
                 canvas_texts,
@@ -320,7 +321,7 @@ impl Renderer {
             },
             &items,
             frame.scene,
-            OverlayLayers {
+            SurfaceOverlays {
                 overlay: frame.overlay,
                 canvas_rects: frame.canvas_rects,
                 canvas_texts: frame.canvas_texts,
@@ -336,8 +337,13 @@ impl Renderer {
         target: SurfaceTarget<'_>,
         items: &[DrawItem<'_>],
         scene: RenderScene<'_>,
-        layers: OverlayLayers<'_>,
+        overlays: SurfaceOverlays<'_>,
     ) -> Result<(), RenderError> {
+        let SurfaceOverlays {
+            overlay,
+            canvas_rects,
+            canvas_texts,
+        } = overlays;
         let SurfaceTarget {
             color_view,
             depth_view,
@@ -352,11 +358,6 @@ impl Renderer {
             light,
             background,
         } = scene;
-        let OverlayLayers {
-            overlay,
-            canvas_rects,
-            canvas_texts,
-        } = layers;
         let mut camera = *camera;
         camera.aspect = size.0 as f32 / size.1 as f32;
         let shadows_enabled = self.prepare_shadow_map(size.0.max(size.1));

@@ -270,10 +270,13 @@ scene in the runtime and checking the pickup's position.
 
 **Not demonstrated.**
 
-- The **person-facing half** of the editor is not shown: there is no scene
-  view, inspector or hierarchy window yet, so a person cannot yet edit a scene
-  by hand. The commands exist and are agent-facing; the windows that drive
-  them do not.
+- The **person-facing half** of the editor now has its milestone-1 workspace
+  shell (`unitas-editor --shell <projectPath>`), which opens a windowed unitas
+  project on the engine's canvas/UI stack, shows the live scene hierarchy
+  (`scene.hierarchy`) and selected object inspector (`scene.inspect_object`),
+  and enters/exits play mode (`play.enter`/`play.exit`), while scene-view
+  viewport gizmos, direct property editing widgets, and undo/redo UI controls
+  remain for later visual-editor milestones.
 - Multi-object selection, prefab variants and component templates are
   implemented in the command surface but are not covered by this scenario.
 

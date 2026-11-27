@@ -1275,11 +1275,16 @@ fn compile_project_scripts(
 
 /// The macOS application bundle a staged bundle is packaged as, when the
 /// target is macOS and a unitas player binary has been built.
+///
+/// Developing-mode stage-only builds (`stage_bundle_for_host`) run in place via
+/// `unitas-player <bundle_dir>` and skip duplicating the ~40 MB player binary
+/// and running `codesign` inside a nested `.app` bundle unless explicitly
+/// requested through `package_macos_app` or release mode.
 fn macos_application(
     manifest: &BundleManifest,
     output_dir: &Path,
 ) -> Result<Option<PackagedApp>, BundleError> {
-    if manifest.target.os != TargetOs::MacOs {
+    if manifest.target.os != TargetOs::MacOs || manifest.mode == BuildMode::Development {
         return Ok(None);
     }
     let Some(player_binary) = package::locate_player_binary() else {

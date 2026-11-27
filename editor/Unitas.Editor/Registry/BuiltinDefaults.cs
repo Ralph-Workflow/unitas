@@ -20,35 +20,42 @@ namespace Unitas.Editor.Mcp
                         ["properties"] = new JsonObject(),
                     },
                     Scope.ReadProject),
-                arguments =>
+                arguments => HandleProjectStatus(host, arguments));
+
+            RegisterKnowledgeResources(host);
+        }
+
+        private static ToolOutput HandleProjectStatus(McpHost host, JsonNode arguments)
+        {
+            string? projectPath = ProjectAccess.OptionalString(arguments, "projectPath");
+            if (projectPath != null)
+            {
+                host.OpenProject(projectPath);
+            }
+
+            string root = ProjectAccess.ResolveRoot(host, arguments, "project.status");
+            JsonArray scenes = new JsonArray();
+            int objectsTotal = 0;
+            foreach (JsonObject scene in ScanScenes(root))
+            {
+                objectsTotal += scene["objects"]?.GetValue<int>() ?? 0;
+                scenes.Add(scene);
+            }
+
+            return ToolOutput.Untrusted(
+                "unitas://project/status",
+                new JsonObject
                 {
-                    string? projectPath = ProjectAccess.OptionalString(arguments, "projectPath");
-                    if (projectPath != null)
-                    {
-                        host.OpenProject(projectPath);
-                    }
-
-                    string root = ProjectAccess.ResolveRoot(host, arguments, "project.status");
-                    JsonArray scenes = new JsonArray();
-                    int objectsTotal = 0;
-                    foreach (JsonObject scene in ScanScenes(root))
-                    {
-                        objectsTotal += scene["objects"]?.GetValue<int>() ?? 0;
-                        scenes.Add(scene);
-                    }
-
-                    return ToolOutput.Untrusted(
-                        "unitas://project/status",
-                        new JsonObject
-                        {
-                            ["state"] = "ready",
-                            ["projectPath"] = root,
-                            ["scenes"] = scenes,
-                            ["objectsTotal"] = objectsTotal,
-                            ["trust"] = TrustState(host),
-                        });
+                    ["state"] = "ready",
+                    ["projectPath"] = root,
+                    ["scenes"] = scenes,
+                    ["objectsTotal"] = objectsTotal,
+                    ["trust"] = TrustState(host),
                 });
+        }
 
+        private static void RegisterKnowledgeResources(McpHost host)
+        {
             host.RegisterResource(
                 new ResourceDefinition(
                     "unitas://knowledge/scopes",
@@ -56,21 +63,180 @@ namespace Unitas.Editor.Mcp
                     "Fixed permission scope catalog for unitas MCP sessions",
                     "application/json",
                     Scope.ReadProject),
-                () =>
-                {
-                    JsonArray scopes = new JsonArray();
-                    foreach (Scope scope in Scopes.All)
-                    {
-                        scopes.Add(Scopes.AsString(scope));
-                    }
+                () => ResourceContent.Untrusted("unitas://knowledge/scopes", BuildScopesPayload()));
 
-                    return ResourceContent.Untrusted(
-                        "unitas://knowledge/scopes",
-                        new JsonObject
-                        {
-                            ["scopes"] = scopes,
-                        });
-                });
+            host.RegisterResource(
+                new ResourceDefinition(
+                    "unitas://knowledge/grants",
+                    "AUT-007 Grant Prompt and Security Boundaries",
+                    "Mandatory grant-prompt disclosures, person-only actions, and security defaults for unitas MCP sessions",
+                    "application/json",
+                    Scope.ReadProject),
+                () => ResourceContent.Untrusted("unitas://knowledge/grants", BuildGrantsPayload()));
+
+            host.RegisterResource(
+                new ResourceDefinition(
+                    "unitas://knowledge/docs",
+                    "AUT-006 Unitas Product Knowledge",
+                    "Product documentation, API reference compatibility tiers, diagnostic explanations, and agent workflow guides",
+                    "application/json",
+                    Scope.ReadProject),
+                () => ResourceContent.Untrusted("unitas://knowledge/docs", BuildDocsPayload()));
+        }
+
+        private static JsonObject BuildScopesPayload()
+        {
+            JsonArray scopes = new JsonArray();
+            foreach (Scope scope in Scopes.All)
+            {
+                scopes.Add(Scopes.AsString(scope));
+            }
+
+            return new JsonObject
+            {
+                ["version"] = "0.1.0",
+                ["defaultScope"] = Scopes.AsString(Scope.ReadProject),
+                ["scopes"] = scopes,
+                ["descriptions"] = BuildScopeDescriptions(),
+            };
+        }
+
+        private static JsonObject BuildScopeDescriptions()
+        {
+            return new JsonObject
+            {
+                ["read-project"] = "Inspect project content, runtime state, logs, and evidence",
+                ["edit-content"] = "Change scenes, prefabs, assets, and their serialized values",
+                ["edit-scripts"] = "Create, change, and delete scripts and assembly definitions",
+                ["execute-project-code"] = "Enter play mode, run tests and scenarios, invoke editor methods, and run project-contributed commands",
+                ["import-external-files"] = "Bring files from outside the project folder into the project",
+                ["change-packages-and-settings"] = "Change package manifests and project settings",
+                ["build"] = "Create player and content builds",
+                ["sign"] = "Apply signing identities to builds",
+                ["deploy"] = "Install and run builds on connected devices",
+                ["external-network"] = "Have unitas make requests outside the local machine on the agent session's behalf",
+                ["review"] = "Accept, approve, reject, and revert change sets of other agent sessions",
+                ["edit-scenes"] = "Change scenes and their serialized hierarchy and component values",
+                ["edit-assets"] = "Create, import, move, duplicate, and delete project assets",
+                ["run-play-and-tests"] = "Run play sessions, project tests, and declared scenarios",
+                ["build-player"] = "Package scenes and assets into player bundles",
+                ["manage-packages-and-settings"] = "Update project settings and package manifests",
+            };
+        }
+
+        private static JsonObject BuildGrantsPayload()
+        {
+            return new JsonObject
+            {
+                ["version"] = "0.1.0",
+                ["grantDisclosures"] = new JsonArray(
+                    "Holding both the edit-scripts and execute-project-code scopes amounts to running arbitrary code with the privileges of the operating-system account running unitas.",
+                    "The execute-project-code scope allows project code that the agent session runs to read files marked secret.",
+                    "The MCP permission model constrains only what agents do through MCP; an agent that also has shell or file access as the same operating-system account can act outside it."),
+                ["personOnlyActions"] = new JsonArray(
+                    "permissions.person_grant",
+                    "audit.delete",
+                    "audit.clear",
+                    "audit.alter",
+                    "trust.approve",
+                    "credentials.write"),
+                ["defaults"] = new JsonObject
+                {
+                    ["reviewPolicy"] = "require-approval",
+                    ["httpOrigins"] = new JsonArray("loopback"),
+                    ["standingGrants"] = new JsonArray(),
+                    ["crashReportDestinations"] = new JsonArray(),
+                },
+            };
+        }
+
+        private static JsonObject BuildDocsPayload()
+        {
+            return new JsonObject
+            {
+                ["version"] = "0.1.0",
+                ["unityBaseline"] = "2022.3.62f1",
+                ["documents"] = BuildProductDocuments(),
+                ["apiReference"] = BuildApiReference(),
+                ["diagnostics"] = BuildDiagnosticGuides(),
+                ["guides"] = BuildWorkflowGuides(),
+            };
+        }
+
+        private static JsonArray BuildProductDocuments()
+        {
+            return new JsonArray(
+                DocEntry("automation-and-mcp", "MCP capability parity, discovery, structured inspection/editing, product knowledge, and permissions", "AUT-001..AUT-008"),
+                DocEntry("editor-and-authoring", "Workspace shell, scene authoring, undo history, and change-set review policy", "EDT-001..EDT-008"),
+                DocEntry("compatibility-contract", "Unity 2022.3.62f1 baseline, compatibility tiers, and schema versioning", "CMP-001..CMP-005"),
+                DocEntry("scripting-runtime", "C# compilation, MonoBehaviour lifecycle, hot reload, and deterministic frame stepping", "RUN-001..RUN-007"),
+                DocEntry("diagnostics-profiling-playtesting", "Structured diagnostics, debug adapter protocol, scenarios, tests, and captures", "DIA-001..DIA-003, TST-001..TST-003, PRF-001..PRF-002"),
+                DocEntry("build-and-distribution", "Player bundle packaging, headless CLI batch invocation, and licensing records", "BLD-001..BLD-002, LIC-001"));
+        }
+
+        private static JsonObject DocEntry(string id, string summary, string requirements)
+        {
+            return new JsonObject
+            {
+                ["id"] = id,
+                ["summary"] = summary,
+                ["requirements"] = requirements,
+            };
+        }
+
+        private static JsonObject BuildApiReference()
+        {
+            return new JsonObject
+            {
+                ["tiers"] = new JsonArray("Exact", "Semantic", "Familiar", "Native"),
+                ["namespaces"] = new JsonArray(
+                    "UnityEngine",
+                    "UnityEngine.SceneManagement",
+                    "UnityEngine.UI",
+                    "UnityEngine.InputSystem",
+                    "TMPro"),
+            };
+        }
+
+        private static JsonObject BuildDiagnosticGuides()
+        {
+            return new JsonObject
+            {
+                ["CS0103"] = DiagEntry("The name does not exist in the current context", "Compilation fails and the project continues running the last valid compilation", "Declare the missing symbol or add the required using directive and re-run scripts.compile"),
+                ["CS0029"] = DiagEntry("Cannot implicitly convert type", "Compilation fails and no new assembly is loaded", "Match the target type or add an explicit conversion and re-run scripts.compile"),
+                ["permission-denied"] = DiagEntry("The session lacks the required permission scope for the tool or resource", "The request is refused with -32001 and changes nothing", "Call permissions.request_grant or have a person grant the missing scope via permissions.person_grant"),
+                ["person-only-action"] = DiagEntry("The requested action requires an interactive person credential", "The request is refused and recorded in the audit log", "Present the request to a person to execute with a valid personCredential over a non-stdio transport"),
+                ["untrusted-project"] = DiagEntry("The project has not been trusted by a person (PRJ-008)", "Execution of project code is blocked while read-only inspection remains available", "Ask a person to grant project trust in the visual editor or interactive terminal"),
+            };
+        }
+
+        private static JsonObject DiagEntry(string meaning, string consequence, string remediation)
+        {
+            return new JsonObject
+            {
+                ["meaning"] = meaning,
+                ["consequence"] = consequence,
+                ["remediation"] = remediation,
+            };
+        }
+
+        private static JsonObject BuildWorkflowGuides()
+        {
+            return new JsonObject
+            {
+                ["scene-authoring-and-review"] = new JsonArray(
+                    "Open or inspect the scene with scene.open, scene.hierarchy, and scene.inspect_object.",
+                    "Apply reversible edits with scene.set_property, scene.create_object, or scene.duplicate_object.",
+                    "Inspect pending change sets with changes.list and changes.show; a person approves or rejects under require-approval."),
+                ["play-and-capture-verification"] = new JsonArray(
+                    "Start an isolated play session with play.enter after holding execute-project-code.",
+                    "Advance deterministically with play.step or inject input with play.inject_input.",
+                    "Capture visual and object-ID evidence with capture, then stop the worker with play.exit."),
+                ["script-edit-and-hot-reload"] = new JsonArray(
+                    "Write or update C# scripts with project.write_file or assets.import under edit-scripts.",
+                    "Run scripts.compile or scripts.diagnose and inspect structured diagnostics.",
+                    "Verify behavior with tests.run or a play session; note that shell/file access outside MCP is not constrained by MCP scopes (AUT-007)."),
+            };
         }
 
         private static IEnumerable<JsonObject> ScanScenes(string root)

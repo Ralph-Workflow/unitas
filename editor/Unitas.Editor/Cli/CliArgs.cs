@@ -16,6 +16,12 @@ namespace Unitas.Editor.Mcp
         public const string TestPlatformOption = "-testPlatform";
         public const string TestResultsOption = "-testResults";
         public const string RunScenarioOption = "-runScenario";
+        public const string ShellFlag = "--shell";
+        public const string ProjectOption = "--project";
+        public const string ShellProjectOption = "--shell-project";
+        public const string FramesOption = "--frames";
+        public const string CaptureOutOption = "--capture-out";
+        public const string HeadlessFlag = "--headless";
 
         public static readonly IReadOnlyList<string> KnownArguments = new[]
         {
@@ -31,6 +37,24 @@ namespace Unitas.Editor.Mcp
             TestResultsOption,
             RunScenarioOption,
         };
+
+        public static bool IsShellInvocation(string[]? args)
+        {
+            if (args == null || args.Length == 0)
+            {
+                return false;
+            }
+
+            foreach (string arg in args)
+            {
+                if (string.Equals(arg, ShellFlag, StringComparison.Ordinal))
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
 
         public CliArgs(
             bool batchMode,

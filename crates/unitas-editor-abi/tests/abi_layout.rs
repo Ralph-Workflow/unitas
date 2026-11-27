@@ -9,9 +9,13 @@
 //! and therefore agree by name rather than by memory layout.
 
 use std::mem::{align_of, size_of};
+use std::path::PathBuf;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
+use serde_json::{Value, json};
 use unitas_editor_abi::{
-    Scope, unitas_editor_allocate_string, unitas_editor_install_builtin_tools,
+    Scope, ShellEventCallback, allocate_c_string, free_c_string, read_c_string,
+    unitas_editor_allocate_string, unitas_editor_install_builtin_tools, unitas_editor_run_shell,
     unitas_editor_string_buffer, unitas_editor_string_free, unitas_editor_tool_invoke,
     unitas_editor_tools_describe,
 };
@@ -22,6 +26,11 @@ const _: extern "C" fn() -> i32 = unitas_editor_install_builtin_tools;
 const _: extern "C" fn() -> usize = unitas_editor_tools_describe;
 const _: extern "C" fn(name: usize, args_json: usize) -> usize = unitas_editor_tool_invoke;
 const _: extern "C" fn(ptr: usize) = unitas_editor_string_free;
+const _: extern "C" fn(
+    shell_project_path: usize,
+    options_json: usize,
+    callback: Option<ShellEventCallback>,
+) -> usize = unitas_editor_run_shell;
 
 const EDITOR_ABI_SCOPE_NAMES: [&str; 11] = [
     "read-project",
@@ -68,4 +77,80 @@ fn editor_abi_scope_names_match_the_managed_scope_table() {
         names, EDITOR_ABI_SCOPE_NAMES,
         "the editor ABI scope names must match the managed scope table"
     );
+}
+
+static CALLBACK_INVOCATIONS: AtomicUsize = AtomicUsize::new(0);
+
+extern "C" fn test_shell_callback(event_ptr: usize) -> usize {
+    CALLBACK_INVOCATIONS.fetch_add(1, Ordering::SeqCst);
+    let event_text = read_c_string(event_ptr)
+        .and_then(Result::ok)
+        .unwrap_or_default();
+    let parsed = serde_json::from_str::<Value>(&event_text).unwrap_or_else(|_| json!({}));
+    let event_type = parsed
+        .get("type")
+        .and_then(Value::as_str)
+        .unwrap_or("unknown");
+    let dto = json!({
+        "titleText": format!("unitas Editor — {event_type}"),
+        "hierarchyText": "- Main Camera (100)\n- PlayerBall (131)",
+        "inspectorText": "Main Camera [Active]\nTransform (0, 1, -10)",
+        "playStateText": "Play: Stopped",
+        "selectedObjectId": "100",
+        "selectedObjectName": "Main Camera",
+        "playMode": "stopped"
+    });
+    allocate_c_string(&dto.to_string())
+}
+
+#[test]
+fn editor_abi_run_shell_dispatches_reverse_callback_and_renders_offscreen_capture()
+-> Result<(), Box<dyn std::error::Error>> {
+    CALLBACK_INVOCATIONS.store(0, Ordering::SeqCst);
+    let shell_project =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../editor/shell-project");
+    let capture_path = std::env::temp_dir().join(format!(
+        "unitas_editor_abi_shell_test_{}.bmp",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_file(&capture_path);
+    let shell_ptr = allocate_c_string(&shell_project.to_string_lossy());
+    let options = json!({
+        "targetProjectPath": shell_project.to_string_lossy(),
+        "headless": true,
+        "maxFrames": 3,
+        "width": 320,
+        "height": 180,
+        "captureOut": capture_path.to_string_lossy(),
+        "events": [
+            {"type": "init"},
+            {"type": "select", "index": 0}
+        ]
+    });
+    let options_ptr = allocate_c_string(&options.to_string());
+    let result_ptr = unitas_editor_run_shell(shell_ptr, options_ptr, Some(test_shell_callback));
+    free_c_string(shell_ptr);
+    free_c_string(options_ptr);
+    assert_ne!(result_ptr, 0);
+    let result_text = read_c_string(result_ptr)
+        .and_then(Result::ok)
+        .ok_or("missing shell response string")?;
+    unitas_editor_string_free(result_ptr);
+    let payload: Value = serde_json::from_str(&result_text)?;
+    assert_eq!(payload["ok"], json!(true));
+    assert!(CALLBACK_INVOCATIONS.load(Ordering::SeqCst) >= 2);
+    assert!(payload["nonBackgroundPixels"].as_u64().unwrap_or(0) > 0);
+    let texts = payload["canvasTexts"]
+        .as_array()
+        .ok_or("missing canvasTexts array")?;
+    assert!(texts.iter().any(|t| {
+        t.as_str()
+            .is_some_and(|s| s.contains("unitas Editor — select"))
+    }));
+    assert!(capture_path.is_file());
+    let bmp_bytes = std::fs::read(&capture_path)?;
+    assert!(bmp_bytes.len() > 54);
+    assert_eq!(&bmp_bytes[0..2], b"BM");
+    let _ = std::fs::remove_file(&capture_path);
+    Ok(())
 }

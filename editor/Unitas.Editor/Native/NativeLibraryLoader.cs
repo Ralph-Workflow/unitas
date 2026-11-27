@@ -15,6 +15,9 @@ namespace Unitas.Editor.Mcp
         string InvokeJson(string name, string argsJson);
     }
 
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+    public delegate UIntPtr ShellCallbackDelegate(UIntPtr eventPtr);
+
     public enum NativeLoadStatus
     {
         Loaded,
@@ -88,11 +91,18 @@ namespace Unitas.Editor.Mcp
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
         private delegate IntPtr AllocateStringDelegate(IntPtr address, UIntPtr length);
 
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+        private delegate IntPtr RunShellDelegate(
+            IntPtr shellProjectPath,
+            IntPtr optionsJson,
+            ShellCallbackDelegate callback);
+
         private readonly DescribeToolsDelegate describeTools;
         private readonly InvokeToolDelegate invokeTool;
         private readonly FreeStringDelegate freeString;
         private readonly StringBufferDelegate stringBuffer;
         private readonly AllocateStringDelegate allocateString;
+        private readonly RunShellDelegate? runShell;
 
         private NativeLibraryLoader(
             string libraryPath,
@@ -100,7 +110,8 @@ namespace Unitas.Editor.Mcp
             InvokeToolDelegate invokeTool,
             FreeStringDelegate freeString,
             StringBufferDelegate stringBuffer,
-            AllocateStringDelegate allocateString)
+            AllocateStringDelegate allocateString,
+            RunShellDelegate? runShell = null)
         {
             LibraryPath = libraryPath;
             this.describeTools = describeTools;
@@ -108,6 +119,7 @@ namespace Unitas.Editor.Mcp
             this.freeString = freeString;
             this.stringBuffer = stringBuffer;
             this.allocateString = allocateString;
+            this.runShell = runShell;
         }
 
         public string LibraryPath { get; }
@@ -180,8 +192,13 @@ namespace Unitas.Editor.Mcp
                 Marshal.GetDelegateForFunctionPointer<StringBufferDelegate>(bufferAddr);
             AllocateStringDelegate alloc =
                 Marshal.GetDelegateForFunctionPointer<AllocateStringDelegate>(allocAddr);
+            RunShellDelegate? shell = null;
+            if (NativeLibrary.TryGetExport(loadedHandle, "unitas_editor_run_shell", out IntPtr runShellAddr))
+            {
+                shell = Marshal.GetDelegateForFunctionPointer<RunShellDelegate>(runShellAddr);
+            }
 
-            loader = new NativeLibraryLoader(resolvedPath, describe, invoke, free, buffer, alloc);
+            loader = new NativeLibraryLoader(resolvedPath, describe, invoke, free, buffer, alloc, shell);
             failureOutcome = NativeLoadOutcome.Loaded(resolvedPath, 0);
             return true;
         }
@@ -265,6 +282,52 @@ namespace Unitas.Editor.Mcp
                 if (namePtr != IntPtr.Zero)
                 {
                     freeString(namePtr);
+                }
+            }
+        }
+
+        public string RunShellJson(
+            string shellProjectPath,
+            string optionsJson,
+            Func<string, string> onEvent)
+        {
+            ArgumentNullException.ThrowIfNull(shellProjectPath);
+            ArgumentNullException.ThrowIfNull(optionsJson);
+            ArgumentNullException.ThrowIfNull(onEvent);
+
+            if (runShell == null)
+            {
+                throw new McpError.InvalidRequest(
+                    "unitas_editor_run_shell export is not available in " + LibraryPath);
+            }
+
+            IntPtr shellPathPtr = AllocateNativeString(shellProjectPath);
+            IntPtr optionsPtr = AllocateNativeString(optionsJson);
+            ShellCallbackDelegate callback = eventPtr =>
+            {
+                string eventJson = eventPtr == UIntPtr.Zero
+                    ? "{}"
+                    : (Marshal.PtrToStringUTF8(checked((IntPtr)(long)(ulong)eventPtr)) ?? "{}");
+                string responseJson = onEvent(eventJson) ?? "{}";
+                IntPtr responsePtr = AllocateNativeString(responseJson);
+                return checked((UIntPtr)(ulong)(long)responsePtr);
+            };
+            try
+            {
+                IntPtr resultPtr = runShell(shellPathPtr, optionsPtr, callback);
+                GC.KeepAlive(callback);
+                return ReadAndFreeOwnedString(resultPtr, "unitas_editor_run_shell");
+            }
+            finally
+            {
+                if (optionsPtr != IntPtr.Zero)
+                {
+                    freeString(optionsPtr);
+                }
+
+                if (shellPathPtr != IntPtr.Zero)
+                {
+                    freeString(shellPathPtr);
                 }
             }
         }

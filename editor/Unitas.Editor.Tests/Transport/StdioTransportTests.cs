@@ -103,10 +103,7 @@ namespace Unitas.Editor.Tests
                 Check.That(
                     "stdio: session is created and active",
                     !string.IsNullOrEmpty(transportHost.ActiveSessionId));
-                Check.Equal("stdio: tools/list includes builtin and registered tools", 3, tools.Count);
-                Check.Equal("stdio: tools/list tool 0 is project.status", "project.status", tools[0].Name);
-                Check.Equal("stdio: tools/list tool 1 is scene.edit", "scene.edit", tools[1].Name);
-                Check.Equal("stdio: tools/list tool 2 is scene.inspect", "scene.inspect", tools[2].Name);
+                VerifyStdioRegisteredToolsList(tools);
 
                 CallToolResult statusResult = await client.CallToolAsync(
                     new CallToolRequestParams { Name = "project.status" },
@@ -151,15 +148,23 @@ namespace Unitas.Editor.Tests
                 IList<McpClientResource> resources = await client.ListResourcesAsync(
                     (RequestOptions?)null,
                     RequestWindow(cts)).ConfigureAwait(false);
-                Check.Equal("stdio: resources/list includes builtin and registered resources", 2, resources.Count);
+                Check.Equal("stdio: resources/list includes builtin and registered resources", 4, resources.Count);
                 Check.Equal(
-                    "stdio: resources/list resource 0 is unitas://knowledge/scopes",
-                    "unitas://knowledge/scopes",
+                    "stdio: resources/list resource 0 is unitas://knowledge/docs",
+                    "unitas://knowledge/docs",
                     resources[0].Uri);
                 Check.Equal(
-                    "stdio: resources/list resource 1 is unitas://project/manifest",
-                    "unitas://project/manifest",
+                    "stdio: resources/list resource 1 is unitas://knowledge/grants",
+                    "unitas://knowledge/grants",
                     resources[1].Uri);
+                Check.Equal(
+                    "stdio: resources/list resource 2 is unitas://knowledge/scopes",
+                    "unitas://knowledge/scopes",
+                    resources[2].Uri);
+                Check.Equal(
+                    "stdio: resources/list resource 3 is unitas://project/manifest",
+                    "unitas://project/manifest",
+                    resources[3].Uri);
 
                 ReadResourceResult scopesRead = await client.ReadResourceAsync(
                     new Uri("unitas://knowledge/scopes"),
@@ -393,6 +398,7 @@ namespace Unitas.Editor.Tests
                 Check.That(
                     "stdio_production: tools/list exposes engine.abi_status",
                     HasTool(tools, "engine.abi_status"));
+                VerifyProductionToolsCarryReversibilityMeta(tools);
 
                 string sessionId = transportHost.ActiveSessionId ?? string.Empty;
                 Check.That(
@@ -527,6 +533,32 @@ namespace Unitas.Editor.Tests
             }
         }
 
+        private static void VerifyStdioRegisteredToolsList(IList<McpClientTool> tools)
+        {
+            Check.Equal("stdio: tools/list includes builtin and registered tools", 3, tools.Count);
+            Check.Equal("stdio: tools/list tool 0 is project.status", "project.status", tools[0].Name);
+            Check.Equal("stdio: tools/list tool 1 is scene.edit", "scene.edit", tools[1].Name);
+            Check.Equal("stdio: tools/list tool 2 is scene.inspect", "scene.inspect", tools[2].Name);
+            Check.Equal(
+                "stdio: project.status meta reversibility is read-only",
+                "read-only",
+                tools[0].ProtocolTool.Meta?["reversibility"]?.GetValue<string>() ?? string.Empty);
+            Check.That(
+                "stdio: project.status meta reversible is true",
+                tools[0].ProtocolTool.Meta?["reversible"]?.GetValue<bool>() == true);
+            Check.Equal(
+                "stdio: scene.edit meta reversibility is reversible",
+                "reversible",
+                tools[1].ProtocolTool.Meta?["reversibility"]?.GetValue<string>() ?? string.Empty);
+            Check.That(
+                "stdio: scene.edit meta reversible is true",
+                tools[1].ProtocolTool.Meta?["reversible"]?.GetValue<bool>() == true);
+            Check.Equal(
+                "stdio: scene.inspect meta reversibility is read-only",
+                "read-only",
+                tools[2].ProtocolTool.Meta?["reversibility"]?.GetValue<string>() ?? string.Empty);
+        }
+
         private static bool HasTool(IList<McpClientTool> tools, string name)
         {
             foreach (McpClientTool tool in tools)
@@ -538,6 +570,25 @@ namespace Unitas.Editor.Tests
             }
 
             return false;
+        }
+
+        private static void VerifyProductionToolsCarryReversibilityMeta(IList<McpClientTool> tools)
+        {
+            foreach (McpClientTool tool in tools)
+            {
+                string rev = tool.ProtocolTool.Meta?["reversibility"]?.GetValue<string>() ?? string.Empty;
+                bool valid = string.Equals(rev, "read-only", StringComparison.Ordinal)
+                    || string.Equals(rev, "reversible", StringComparison.Ordinal)
+                    || string.Equals(rev, "irreversible", StringComparison.Ordinal);
+                Check.That(
+                    "stdio_production: tool " + tool.Name + " meta carries valid reversibility",
+                    valid);
+                bool expectedReversible = !string.Equals(rev, "irreversible", StringComparison.Ordinal);
+                Check.Equal(
+                    "stdio_production: tool " + tool.Name + " meta reversible matches reversibility",
+                    expectedReversible,
+                    tool.ProtocolTool.Meta?["reversible"]?.GetValue<bool>() ?? !expectedReversible);
+            }
         }
 
         private static JsonElement JsonArg(string rawJson)

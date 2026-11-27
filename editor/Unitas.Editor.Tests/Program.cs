@@ -41,10 +41,13 @@ namespace Unitas.Editor.Tests
                 ("UntrustedContentTests", UntrustedContentTests.Run),
                 ("AuthoringToolsTests", AuthoringToolsTests.Run),
                 ("AssetToolsTests", AssetToolsTests.Run),
+                ("KnowledgeResourceTests", KnowledgeResourceTests.Run),
                 ("ScenarioGlueDiscoveryTests", ScenarioGlueDiscoveryTests.Run),
                 ("SceneTests", SceneTests.Run),
                 ("UndoHistoryTests", UndoHistoryTests.Run),
                 ("SceneToolsTests", SceneToolsTests.Run),
+                ("ShellWorkspaceTests", WorkspaceStateTests.Run),
+                ("ShellPlayTests", ShellPlayTests.Run),
             };
 
             if (args.Length == 0)
