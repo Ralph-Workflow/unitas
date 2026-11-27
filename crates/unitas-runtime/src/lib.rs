@@ -50,7 +50,7 @@ pub use presenter::{
     view_matrix_from_transform, with_display_settings,
 };
 pub use runtime::{
-    Callbacks, DEFAULT_MAXIMUM_DELTA_TIME, LoadSceneMode, LoadedScene, Runtime, ScriptInstance,
-    unitas_runtime_bind_destroy_channel, unitas_runtime_mark_destroyed,
+    CONTACT_PHASE_2D_FLAG, Callbacks, DEFAULT_MAXIMUM_DELTA_TIME, LoadSceneMode, LoadedScene,
+    Runtime, ScriptInstance, unitas_runtime_bind_destroy_channel, unitas_runtime_mark_destroyed,
 };
 pub use unitas_physics::BodyRole;

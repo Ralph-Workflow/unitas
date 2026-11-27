@@ -1,0 +1,96 @@
+{
+  "name": "s1-open-and-inspect",
+  "absent_logs": [
+    "unsupported",
+    "Unsupported"
+  ],
+  "steps": [
+    {
+      "load_scene": {
+        "path": "Assets/Scenes/RollABall.unity",
+        "mode": "single"
+      }
+    },
+    {
+      "tick": {
+        "frames": 2,
+        "delta_seconds": 0.016666666666666666
+      }
+    },
+    {
+      "load_scene": {
+        "path": "Assets/Scenes/RollABall.unity",
+        "mode": "single"
+      }
+    },
+    {
+      "tick": {
+        "frames": 2,
+        "delta_seconds": 0.016666666666666666
+      }
+    }
+  ],
+  "checkpoints": [
+    {
+      "id": "the_open_imports_the_pickup_at_its_serialized_spot",
+      "after_step": 1,
+      "kind": "transform_position",
+      "object": "Pickup_1",
+      "expected": [
+        3,
+        0.75,
+        3
+      ],
+      "tolerance": 0.001
+    },
+    {
+      "id": "the_open_leaves_the_player_ball_resting_on_the_arena_floor",
+      "after_step": 2,
+      "kind": "transform_position",
+      "object": "PlayerBall",
+      "expected": [
+        0,
+        0.5,
+        0
+      ],
+      "tolerance": 0.05
+    },
+    {
+      "id": "the_open_resolves_the_prefab_variant_through_its_guid",
+      "after_step": 2,
+      "kind": "log",
+      "severity": "log",
+      "contains": "[roll-a-ball] gold variant applied added=GoldAura value=PickupVisualGold"
+    },
+    {
+      "id": "the_reopen_yields_the_same_pickup_at_the_same_spot",
+      "after_step": 3,
+      "kind": "transform_position",
+      "object": "Pickup_1",
+      "expected": [
+        3,
+        0.75,
+        3
+      ],
+      "tolerance": 0.001
+    },
+    {
+      "id": "the_reopen_leaves_the_player_ball_resting_on_the_arena_floor",
+      "after_step": 4,
+      "kind": "transform_position",
+      "object": "PlayerBall",
+      "expected": [
+        0,
+        0.5,
+        0
+      ],
+      "tolerance": 0.05
+    },
+    {
+      "id": "frame_count_sanity",
+      "after_step": 4,
+      "kind": "frame_count",
+      "expected": 6
+    }
+  ]
+}

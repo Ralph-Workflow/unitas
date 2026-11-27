@@ -8,6 +8,7 @@ namespace Unitas.Bridge
         public const string LibraryName = "unitas_runtime";
 
         public const int QueryRecordSize = 64;
+        public const int QueryRecord2DSize = 32;
 
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
         public delegate ulong CreateScriptCallback(ulong entity, ulong guidHi, ulong guidLo);
@@ -328,6 +329,63 @@ namespace Unitas.Bridge
         [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
         public static extern int unitas_runtime_move_body_position(ulong entity, float x, float y, float z);
 
+        [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
+        public static extern int unitas_runtime_physics2d_clear(ulong runtime);
+
+        [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
+        public static extern int unitas_runtime_body2d_create(ulong runtime, ulong entity, float positionX, float positionY, float rotation, float mass, float gravityScale, uint bodyType, uint layer, uint simulated, uint interpolation, uint collisionDetectionMode);
+
+        [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
+        public static extern int unitas_runtime_collider2d_create(ulong runtime, ulong entity, ulong attachedBody, uint shape, float offsetX, float offsetY, float sizeX, float sizeY, float radius, uint isTrigger, uint layer);
+
+        [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
+        public static extern int unitas_runtime_body2d_velocity(ulong runtime, ulong entity, IntPtr outBuffer);
+
+        [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
+        public static extern int unitas_runtime_body2d_set_velocity(ulong runtime, ulong entity, float x, float y);
+
+        [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
+        public static extern int unitas_runtime_body2d_move_position(ulong runtime, ulong entity, float x, float y);
+
+        [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
+        public static extern int unitas_runtime_body2d_set_simulated(ulong runtime, ulong entity, int simulated);
+
+        [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
+        public static extern int unitas_runtime_body2d_set_body_type(ulong runtime, ulong entity, int bodyType);
+
+        [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
+        public static extern int unitas_runtime_body2d_set_interpolation(ulong runtime, ulong entity, int interpolation);
+
+        [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
+        public static extern int unitas_runtime_body2d_set_collision_detection_mode(ulong runtime, ulong entity, int mode);
+
+        [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
+        public static extern int unitas_runtime_collider2d_set_platform_effector(ulong runtime, ulong entity, int useOneWay, float surfaceArc, float rotationalOffset, float sideArc, int useSideFriction, int useSideBounce);
+
+        [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
+        public static extern int unitas_runtime_collider2d_set_surface_effector(ulong runtime, ulong entity, float speed, float forceScale, int useFriction, int useBounce);
+
+        [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
+        public static extern int unitas_runtime_raycast2d(ulong runtime, float originX, float originY, float directionX, float directionY, float maxDistance, uint layerMask, int includeTriggers);
+
+        [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
+        public static extern int unitas_runtime_overlap_point2d(ulong runtime, float x, float y, uint layerMask);
+
+        [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
+        public static extern int unitas_runtime_overlap_circle2d(ulong runtime, float x, float y, float radius, uint layerMask);
+
+        [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
+        public static extern int unitas_runtime_overlap_box2d(ulong runtime, float x, float y, float halfX, float halfY, float angle, uint layerMask);
+
+        [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
+        public static extern IntPtr unitas_runtime_query_buffer_2d(ulong runtime, uint capacity);
+
+        [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
+        public static extern int unitas_runtime_collision_summary_2d(ulong a, ulong b, out AbiCollisionSummary2D summary);
+
+        [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
+        public static extern int unitas_runtime_collision_contact_2d(ulong a, ulong b, uint index, out AbiCollisionContactPoint2D contact);
+
         [StructLayout(LayoutKind.Sequential)]
         public struct AbiCollisionSummary
         {
@@ -347,6 +405,24 @@ namespace Unitas.Bridge
             public double NormalX;
             public double NormalY;
             public double NormalZ;
+            public float Impulse;
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
+        public struct AbiCollisionSummary2D
+        {
+            public float Impulse;
+            public UnityEngine.Vector2 RelativeVelocity;
+            public uint ContactCount;
+            public UnityEngine.Vector2 Point;
+            public UnityEngine.Vector2 Normal;
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
+        public struct AbiCollisionContactPoint2D
+        {
+            public UnityEngine.Vector2 Point;
+            public UnityEngine.Vector2 Normal;
             public float Impulse;
         }
 
@@ -474,6 +550,41 @@ namespace Unitas.Bridge
             }
             return hits;
         }
+
+        public static QueryHit2D[] ReadQueryHits2D(IntPtr buffer, int count)
+        {
+            if (count <= 0)
+            {
+                return Array.Empty<QueryHit2D>();
+            }
+            byte[] bytes = new byte[count * QueryRecord2DSize];
+            Marshal.Copy(buffer, bytes, 0, bytes.Length);
+            QueryHit2D[] hits = new QueryHit2D[count];
+            for (int index = 0; index < count; index++)
+            {
+                int offset = index * QueryRecord2DSize;
+                hits[index] = new QueryHit2D
+                {
+                    Entity = BitConverter.ToUInt64(bytes, offset),
+                    Distance = BitConverter.ToSingle(bytes, offset + 8),
+                    X = BitConverter.ToSingle(bytes, offset + 12),
+                    Y = BitConverter.ToSingle(bytes, offset + 16),
+                    NX = BitConverter.ToSingle(bytes, offset + 20),
+                    NY = BitConverter.ToSingle(bytes, offset + 24),
+                };
+            }
+            return hits;
+        }
+    }
+
+    public struct QueryHit2D
+    {
+        public ulong Entity;
+        public float Distance;
+        public float X;
+        public float Y;
+        public float NX;
+        public float NY;
     }
 
     public struct QueryHit

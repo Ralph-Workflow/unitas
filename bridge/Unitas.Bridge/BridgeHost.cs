@@ -10,7 +10,7 @@ using UnityEngine.SceneManagement;
 
 namespace Unitas.Bridge
 {
-    public sealed class BridgeHost : IDisposable, IPhysicsProvider, ICharacterControllerProvider, IInputProvider, ISceneHost, IApplicationHost, IAudioProvider, IRuntimeObjectProvider
+    public sealed class BridgeHost : IDisposable, IPhysicsProvider, IPhysics2DProvider, ICharacterControllerProvider, IInputProvider, ISceneHost, IApplicationHost, IAudioProvider, IRuntimeObjectProvider
     {
         private const uint CollisionPhaseEnter = 0;
         private const int GAME_OBJECT_CLASS = 1;
@@ -25,6 +25,12 @@ namespace Unitas.Bridge
         private const uint InputStateDown = 1;
         private const uint InputStatePressed = 2;
         private const uint InputStateReleased = 4;
+        private const uint ContactPhase2DFlag = 0x100;
+        private const int RIGIDBODY2D_CLASS = 50;
+        private const int CIRCLE_COLLIDER2D_CLASS = 58;
+        private const int BOX_COLLIDER2D_CLASS = 61;
+        private const int PLATFORM_EFFECTOR2D_CLASS = 251;
+        private const int SURFACE_EFFECTOR2D_CLASS = 252;
 
         private readonly ulong _runtimeHandle;
         private readonly Dictionary<ulong, MonoBehaviour> _scripts = new Dictionary<ulong, MonoBehaviour>();
@@ -43,6 +49,12 @@ namespace Unitas.Bridge
         private readonly Dictionary<ulong, SceneBoxColliderMetadata> _sceneBoxColliders = new Dictionary<ulong, SceneBoxColliderMetadata>();
         private readonly Dictionary<ulong, SceneCapsuleColliderMetadata> _sceneCapsuleColliders = new Dictionary<ulong, SceneCapsuleColliderMetadata>();
         private readonly Dictionary<ulong, SceneMeshColliderMetadata> _sceneMeshColliders = new Dictionary<ulong, SceneMeshColliderMetadata>();
+        private readonly Dictionary<ulong, SceneRigidbody2DMetadata> _sceneRigidbodies2D = new Dictionary<ulong, SceneRigidbody2DMetadata>();
+        private readonly Dictionary<ulong, SceneBoxCollider2DMetadata> _sceneBoxColliders2D = new Dictionary<ulong, SceneBoxCollider2DMetadata>();
+        private readonly Dictionary<ulong, SceneCircleCollider2DMetadata> _sceneCircleColliders2D = new Dictionary<ulong, SceneCircleCollider2DMetadata>();
+        private readonly Dictionary<ulong, ScenePlatformEffector2DMetadata> _scenePlatformEffectors2D = new Dictionary<ulong, ScenePlatformEffector2DMetadata>();
+        private readonly Dictionary<ulong, SceneSurfaceEffector2DMetadata> _sceneSurfaceEffectors2D = new Dictionary<ulong, SceneSurfaceEffector2DMetadata>();
+        private readonly HashSet<ulong> _registeredBodies2D = new HashSet<ulong>();
         private readonly Dictionary<string, Mesh> _sceneMeshes = new Dictionary<string, Mesh>(StringComparer.Ordinal);
         private readonly Dictionary<ulong, SceneTransformMetadata> _sceneTransforms = new Dictionary<ulong, SceneTransformMetadata>();
         private readonly Dictionary<ulong, SceneCameraSettings> _sceneCameras = new Dictionary<ulong, SceneCameraSettings>();
@@ -154,6 +166,7 @@ namespace Unitas.Bridge
             }
 
             Physics.Provider = this;
+            Physics2D.Provider = this;
             CharacterController.Provider = this;
             Input.Provider = this;
             SceneManager.Host = this;
@@ -342,6 +355,8 @@ namespace Unitas.Bridge
             DropReplacedScripts();
             DestroyReplacedSceneObjects();
             ParseLoadedSceneRigidbodies(path, LoadSceneMode.Single);
+            RuntimeInterop.unitas_runtime_physics2d_clear(_runtimeHandle);
+            MaterializeScenePhysics2D();
             _defaultSceneProvider.SetSceneRoot(path);
             UpdateProjectMetadata(path);
             RegisterLoadedScene(path, LoadSceneMode.Single);
@@ -411,6 +426,11 @@ namespace Unitas.Bridge
             }
 
             ParseLoadedSceneRigidbodies(scenePath, mode);
+            if (mode == LoadSceneMode.Single)
+            {
+                RuntimeInterop.unitas_runtime_physics2d_clear(_runtimeHandle);
+            }
+            MaterializeScenePhysics2D();
             _defaultSceneProvider.SetSceneRoot(scenePath);
             UpdateProjectMetadata(scenePath);
             RegisterLoadedScene(scenePath, mode);
@@ -975,6 +995,10 @@ namespace Unitas.Bridge
                 {
                     Physics.Provider = null;
                 }
+                if (ReferenceEquals(Physics2D.Provider, this))
+                {
+                    Physics2D.Provider = null;
+                }
                 if (ReferenceEquals(CharacterController.Provider, this))
                 {
                     CharacterController.Provider = null;
@@ -1501,6 +1525,222 @@ namespace Unitas.Bridge
                 return false;
             }
             return RuntimeInterop.unitas_runtime_move_body_position(entity, position.x, position.y, position.z) == 0;
+        }
+
+        public bool Raycast2D(Vector2 origin, Vector2 direction, float maxDistance, int layerMask, bool includeTriggers, out RaycastHit2D hit)
+        {
+            hit = default;
+            int count = RuntimeInterop.unitas_runtime_raycast2d(
+                _runtimeHandle,
+                origin.x,
+                origin.y,
+                direction.x,
+                direction.y,
+                maxDistance,
+                (uint)layerMask,
+                includeTriggers ? 1 : 0);
+            if (count <= 0)
+            {
+                return false;
+            }
+            QueryHit2D[] hits = ReadQueryHits2D(count);
+            if (hits.Length == 0)
+            {
+                return false;
+            }
+            QueryHit2D nearest = hits[0];
+            hit.collider = ResolveCollider2DByEntity(nearest.Entity);
+            hit.point = new Vector2(nearest.X, nearest.Y);
+            hit.normal = new Vector2(nearest.NX, nearest.NY);
+            hit.distance = nearest.Distance;
+            hit.fraction = maxDistance > 0f ? nearest.Distance / maxDistance : 0f;
+            return true;
+        }
+
+        public Collider2D[] OverlapPoint2D(Vector2 position, int layerMask)
+        {
+            int count = RuntimeInterop.unitas_runtime_overlap_point2d(
+                _runtimeHandle,
+                position.x,
+                position.y,
+                (uint)layerMask);
+            return ReadCollider2DArray(count);
+        }
+
+        public Collider2D[] OverlapCircle2D(Vector2 position, float radius, int layerMask)
+        {
+            int count = RuntimeInterop.unitas_runtime_overlap_circle2d(
+                _runtimeHandle,
+                position.x,
+                position.y,
+                radius,
+                (uint)layerMask);
+            return ReadCollider2DArray(count);
+        }
+
+        public Collider2D[] OverlapBox2D(Vector2 position, Vector2 size, float angle, int layerMask)
+        {
+            int count = RuntimeInterop.unitas_runtime_overlap_box2d(
+                _runtimeHandle,
+                position.x,
+                position.y,
+                size.x / 2f,
+                size.y / 2f,
+                angle,
+                (uint)layerMask);
+            return ReadCollider2DArray(count);
+        }
+
+        public bool TryGetBodyVelocity2D(ulong entity, out Vector2 velocity)
+        {
+            velocity = default;
+            if (_isDisposed || entity == 0)
+            {
+                return false;
+            }
+            IntPtr buffer = RuntimeInterop.unitas_runtime_path_buffer(_runtimeHandle, 8);
+            if (buffer == IntPtr.Zero)
+            {
+                return false;
+            }
+            if (RuntimeInterop.unitas_runtime_body2d_velocity(_runtimeHandle, entity, buffer) != 0)
+            {
+                return false;
+            }
+            byte[] bytes = new byte[8];
+            Marshal.Copy(buffer, bytes, 0, bytes.Length);
+            velocity = new Vector2(BitConverter.ToSingle(bytes, 0), BitConverter.ToSingle(bytes, 4));
+            return true;
+        }
+
+        public bool TrySetBodyVelocity2D(ulong entity, Vector2 velocity)
+        {
+            if (_isDisposed || entity == 0)
+            {
+                return false;
+            }
+            return RuntimeInterop.unitas_runtime_body2d_set_velocity(_runtimeHandle, entity, velocity.x, velocity.y) == 0;
+        }
+
+        public bool TryMoveBodyPosition2D(ulong entity, Vector2 position)
+        {
+            if (_isDisposed || entity == 0)
+            {
+                return false;
+            }
+            return RuntimeInterop.unitas_runtime_body2d_move_position(_runtimeHandle, entity, position.x, position.y) == 0;
+        }
+
+        public bool TrySetBodySimulated2D(ulong entity, bool simulated)
+        {
+            if (_isDisposed || entity == 0)
+            {
+                return false;
+            }
+            return RuntimeInterop.unitas_runtime_body2d_set_simulated(_runtimeHandle, entity, simulated ? 1 : 0) == 0;
+        }
+
+        public bool TrySetBodyType2D(ulong entity, RigidbodyType2D bodyType)
+        {
+            if (_isDisposed || entity == 0)
+            {
+                return false;
+            }
+            return RuntimeInterop.unitas_runtime_body2d_set_body_type(_runtimeHandle, entity, (int)bodyType) == 0;
+        }
+
+        public bool TrySetBodyInterpolation2D(ulong entity, RigidbodyInterpolation2D interpolation)
+        {
+            if (_isDisposed || entity == 0)
+            {
+                return false;
+            }
+            return RuntimeInterop.unitas_runtime_body2d_set_interpolation(_runtimeHandle, entity, (int)interpolation) == 0;
+        }
+
+        public bool TrySetBodyCollisionDetectionMode2D(ulong entity, CollisionDetectionMode2D mode)
+        {
+            if (_isDisposed || entity == 0)
+            {
+                return false;
+            }
+            return RuntimeInterop.unitas_runtime_body2d_set_collision_detection_mode(_runtimeHandle, entity, (int)mode) == 0;
+        }
+
+        public bool TryGetCollisionSummary2D(ulong a, ulong b, out CollisionSummary2D summary)
+        {
+            summary = default;
+            if (_isDisposed || a == 0 || b == 0)
+            {
+                return false;
+            }
+            if (RuntimeInterop.unitas_runtime_collision_summary_2d(a, b, out RuntimeInterop.AbiCollisionSummary2D native) != 0)
+            {
+                return false;
+            }
+            summary = new CollisionSummary2D
+            {
+                impulse = native.Impulse,
+                relativeVelocity = native.RelativeVelocity,
+                contactCount = (int)native.ContactCount,
+                point = native.Point,
+                normal = native.Normal,
+            };
+            return true;
+        }
+
+        public bool TryGetCollisionContact2D(ulong a, ulong b, uint index, out ContactPoint2D contact)
+        {
+            contact = default;
+            if (_isDisposed || a == 0 || b == 0)
+            {
+                return false;
+            }
+            if (RuntimeInterop.unitas_runtime_collision_contact_2d(a, b, index, out RuntimeInterop.AbiCollisionContactPoint2D native) != 0)
+            {
+                return false;
+            }
+            contact = new ContactPoint2D
+            {
+                point = native.Point,
+                normal = native.Normal,
+                impulse = native.Impulse,
+            };
+            return true;
+        }
+
+        private Collider2D[] ReadCollider2DArray(int count)
+        {
+            if (count <= 0)
+            {
+                return Array.Empty<Collider2D>();
+            }
+            IntPtr buffer = RuntimeInterop.unitas_runtime_query_buffer_2d(
+                _runtimeHandle,
+                (uint)(count * RuntimeInterop.QueryRecord2DSize));
+            if (buffer == IntPtr.Zero)
+            {
+                return Array.Empty<Collider2D>();
+            }
+            QueryHit2D[] hits = RuntimeInterop.ReadQueryHits2D(buffer, count);
+            Collider2D[] colliders = new Collider2D[hits.Length];
+            for (int index = 0; index < hits.Length; index++)
+            {
+                colliders[index] = ResolveCollider2DByEntity(hits[index].Entity)!;
+            }
+            return colliders;
+        }
+
+        private QueryHit2D[] ReadQueryHits2D(int count)
+        {
+            IntPtr buffer = RuntimeInterop.unitas_runtime_query_buffer_2d(
+                _runtimeHandle,
+                (uint)(count * RuntimeInterop.QueryRecord2DSize));
+            if (buffer == IntPtr.Zero)
+            {
+                return Array.Empty<QueryHit2D>();
+            }
+            return RuntimeInterop.ReadQueryHits2D(buffer, count);
         }
 
         private bool TryReadCollisionSummary(ulong a, ulong b, out RuntimeInterop.AbiCollisionSummary native)
@@ -2494,6 +2734,11 @@ namespace Unitas.Bridge
             return ResolveGameObjectByEntity(entity)?.GetComponent<Collider>();
         }
 
+        private Collider2D? ResolveCollider2DByEntity(ulong entity)
+        {
+            return ResolveGameObjectByEntity(entity)?.GetComponent<Collider2D>();
+        }
+
         private bool IsSceneEntity(ulong entity)
         {
             return _sceneObjectNames.ContainsKey(entity)
@@ -2502,6 +2747,11 @@ namespace Unitas.Bridge
                 || _sceneBoxColliders.ContainsKey(entity)
                 || _sceneCapsuleColliders.ContainsKey(entity)
                 || _sceneMeshColliders.ContainsKey(entity)
+                || _sceneRigidbodies2D.ContainsKey(entity)
+                || _sceneBoxColliders2D.ContainsKey(entity)
+                || _sceneCircleColliders2D.ContainsKey(entity)
+                || _scenePlatformEffectors2D.ContainsKey(entity)
+                || _sceneSurfaceEffectors2D.ContainsKey(entity)
                 || _sceneAudioSources.ContainsKey(entity);
         }
 
@@ -2544,6 +2794,162 @@ namespace Unitas.Bridge
                 mesh.center = meshMeta.Center;
                 mesh.isTrigger = meshMeta.IsTrigger;
                 mesh.sharedMesh = ResolveSceneMesh(meshMeta.MeshGuid, meshMeta.MeshFileId);
+            }
+            ApplyScenePhysics2DComponents(entity, owner);
+        }
+
+        private void MaterializeScenePhysics2D()
+        {
+            foreach (ulong entity in _sceneRigidbodies2D.Keys)
+            {
+                ApplyScenePhysicsComponents(entity, EnsureSceneGameObject(entity));
+            }
+            foreach (ulong entity in _sceneBoxColliders2D.Keys)
+            {
+                ApplyScenePhysicsComponents(entity, EnsureSceneGameObject(entity));
+            }
+            foreach (ulong entity in _sceneCircleColliders2D.Keys)
+            {
+                ApplyScenePhysicsComponents(entity, EnsureSceneGameObject(entity));
+            }
+        }
+
+        private void ApplyScenePhysics2DComponents(ulong entity, GameObject owner)
+        {
+            if (_sceneRigidbodies2D.TryGetValue(entity, out SceneRigidbody2DMetadata rigidbodyMeta))
+            {
+                Rigidbody2D body = owner.GetComponent<Rigidbody2D>() ?? owner.AddComponent<Rigidbody2D>();
+                body.mass = rigidbodyMeta.Mass;
+                body.gravityScale = rigidbodyMeta.GravityScale;
+            }
+            if (_sceneBoxColliders2D.TryGetValue(entity, out SceneBoxCollider2DMetadata boxMeta))
+            {
+                BoxCollider2D box = owner.GetComponent<BoxCollider2D>() ?? owner.AddComponent<BoxCollider2D>();
+                box.size = boxMeta.Size;
+                box.offset = boxMeta.Offset;
+                box.isTrigger = boxMeta.IsTrigger;
+            }
+            if (_sceneCircleColliders2D.TryGetValue(entity, out SceneCircleCollider2DMetadata circleMeta))
+            {
+                CircleCollider2D circle = owner.GetComponent<CircleCollider2D>() ?? owner.AddComponent<CircleCollider2D>();
+                circle.radius = circleMeta.Radius;
+                circle.offset = circleMeta.Offset;
+                circle.isTrigger = circleMeta.IsTrigger;
+            }
+            if (_scenePlatformEffectors2D.TryGetValue(entity, out ScenePlatformEffector2DMetadata platformMeta))
+            {
+                PlatformEffector2D platform = owner.GetComponent<PlatformEffector2D>() ?? owner.AddComponent<PlatformEffector2D>();
+                platform.useOneWay = platformMeta.UseOneWay;
+                platform.surfaceArc = platformMeta.SurfaceArc;
+                platform.rotationalOffset = platformMeta.RotationalOffset;
+                platform.sideArc = platformMeta.SideArc;
+                platform.useSideFriction = platformMeta.UseSideFriction;
+                platform.useSideBounce = platformMeta.UseSideBounce;
+            }
+            if (_sceneSurfaceEffectors2D.TryGetValue(entity, out SceneSurfaceEffector2DMetadata surfaceMeta))
+            {
+                SurfaceEffector2D surface = owner.GetComponent<SurfaceEffector2D>() ?? owner.AddComponent<SurfaceEffector2D>();
+                surface.speed = surfaceMeta.Speed;
+                surface.forceScale = surfaceMeta.ForceScale;
+                surface.useFriction = surfaceMeta.UseFriction;
+                surface.useBounce = surfaceMeta.UseBounce;
+            }
+            RegisterScenePhysics2D(entity, owner);
+            if (_sceneRigidbodies2D.TryGetValue(entity, out SceneRigidbody2DMetadata bodyMeta))
+            {
+                Rigidbody2D body = owner.GetComponent<Rigidbody2D>()!;
+                body.bodyType = bodyMeta.BodyType;
+                body.simulated = bodyMeta.Simulated;
+                body.interpolation = bodyMeta.Interpolation;
+                body.collisionDetectionMode = bodyMeta.CollisionDetectionMode;
+            }
+        }
+
+        private void RegisterScenePhysics2D(ulong entity, GameObject owner)
+        {
+            bool hasBody = _sceneRigidbodies2D.ContainsKey(entity);
+            bool hasBox = _sceneBoxColliders2D.ContainsKey(entity);
+            bool hasCircle = _sceneCircleColliders2D.ContainsKey(entity);
+            if (!hasBody && !hasBox && !hasCircle)
+            {
+                return;
+            }
+            if (_registeredBodies2D.Contains(entity))
+            {
+                return;
+            }
+            _registeredBodies2D.Add(entity);
+            Vector3 position = owner.transform.position;
+            SceneRigidbody2DMetadata bodyMetadata = hasBody
+                ? _sceneRigidbodies2D[entity]
+                : default(SceneRigidbody2DMetadata);
+            RigidbodyType2D bodyType = hasBody ? bodyMetadata.BodyType : RigidbodyType2D.Static;
+            RuntimeInterop.unitas_runtime_body2d_create(
+                _runtimeHandle,
+                entity,
+                position.x,
+                position.y,
+                0f,
+                hasBody ? bodyMetadata.Mass : 0f,
+                hasBody ? bodyMetadata.GravityScale : 0f,
+                (uint)bodyType,
+                0u,
+                1u,
+                0u,
+                0u);
+            if (hasBox)
+            {
+                SceneBoxCollider2DMetadata metadata = _sceneBoxColliders2D[entity];
+                RuntimeInterop.unitas_runtime_collider2d_create(
+                    _runtimeHandle,
+                    entity,
+                    entity,
+                    0u,
+                    metadata.Offset.x,
+                    metadata.Offset.y,
+                    metadata.Size.x,
+                    metadata.Size.y,
+                    0f,
+                    metadata.IsTrigger ? 1u : 0u,
+                    0u);
+            }
+            if (hasCircle)
+            {
+                SceneCircleCollider2DMetadata metadata = _sceneCircleColliders2D[entity];
+                RuntimeInterop.unitas_runtime_collider2d_create(
+                    _runtimeHandle,
+                    entity,
+                    entity,
+                    1u,
+                    metadata.Offset.x,
+                    metadata.Offset.y,
+                    0f,
+                    0f,
+                    metadata.Radius,
+                    metadata.IsTrigger ? 1u : 0u,
+                    0u);
+            }
+            if (_scenePlatformEffectors2D.TryGetValue(entity, out ScenePlatformEffector2DMetadata platformMetadata))
+            {
+                RuntimeInterop.unitas_runtime_collider2d_set_platform_effector(
+                    _runtimeHandle,
+                    entity,
+                    platformMetadata.UseOneWay ? 1 : 0,
+                    platformMetadata.SurfaceArc,
+                    platformMetadata.RotationalOffset,
+                    platformMetadata.SideArc,
+                    platformMetadata.UseSideFriction ? 1 : 0,
+                    platformMetadata.UseSideBounce ? 1 : 0);
+            }
+            if (_sceneSurfaceEffectors2D.TryGetValue(entity, out SceneSurfaceEffector2DMetadata surfaceMetadata))
+            {
+                RuntimeInterop.unitas_runtime_collider2d_set_surface_effector(
+                    _runtimeHandle,
+                    entity,
+                    surfaceMetadata.Speed,
+                    surfaceMetadata.ForceScale,
+                    surfaceMetadata.UseFriction ? 1 : 0,
+                    surfaceMetadata.UseBounce ? 1 : 0);
             }
         }
 
@@ -3129,6 +3535,13 @@ namespace Unitas.Bridge
         private void OnCollision(ulong entityA, ulong entityB, uint phase)
         {
             SyncSimulatedTransforms();
+            bool is2d = (phase & ContactPhase2DFlag) != 0;
+            uint phaseCode = phase & ~ContactPhase2DFlag;
+            if (is2d)
+            {
+                DispatchCollision2DToRecipient(entityA, entityB, phaseCode);
+                return;
+            }
             GameObject? otherB = ResolveGameObjectByEntity(entityB);
             GameObject? otherA = ResolveGameObjectByEntity(entityA);
 
@@ -3139,7 +3552,7 @@ namespace Unitas.Bridge
                 {
                     if (_scripts.TryGetValue(snapshotA[i], out MonoBehaviour? scriptA) && IsEligible(scriptA))
                     {
-                        DispatchCollision(scriptA!, new Collision(otherB, entityA, entityB), phase);
+                        DispatchCollision(scriptA!, new Collision(otherB, entityA, entityB), phaseCode);
                     }
                 }
             }
@@ -3148,7 +3561,7 @@ namespace Unitas.Bridge
                 MonoBehaviour? scriptA = FindScriptByEntity(entityA);
                 if (IsEligible(scriptA))
                 {
-                    DispatchCollision(scriptA!, new Collision(otherB, entityA, entityB), phase);
+                    DispatchCollision(scriptA!, new Collision(otherB, entityA, entityB), phaseCode);
                 }
             }
 
@@ -3161,7 +3574,7 @@ namespace Unitas.Bridge
                     {
                         if (_scripts.TryGetValue(snapshotB[i], out MonoBehaviour? scriptB) && IsEligible(scriptB))
                         {
-                            DispatchCollision(scriptB!, new Collision(otherA, entityA, entityB), phase);
+                            DispatchCollision(scriptB!, new Collision(otherA, entityA, entityB), phaseCode);
                         }
                     }
                 }
@@ -3170,7 +3583,7 @@ namespace Unitas.Bridge
                     MonoBehaviour? scriptB = FindScriptByEntity(entityB);
                     if (IsEligible(scriptB))
                     {
-                        DispatchCollision(scriptB!, new Collision(otherA, entityA, entityB), phase);
+                        DispatchCollision(scriptB!, new Collision(otherA, entityA, entityB), phaseCode);
                     }
                 }
             }
@@ -3179,6 +3592,13 @@ namespace Unitas.Bridge
         private void OnTrigger(ulong entityA, ulong entityB, uint phase)
         {
             SyncSimulatedTransforms();
+            bool is2d = (phase & ContactPhase2DFlag) != 0;
+            uint phaseCode = phase & ~ContactPhase2DFlag;
+            if (is2d)
+            {
+                DispatchTrigger2DToRecipient(entityA, entityB, phaseCode);
+                return;
+            }
             Collider? colliderB = ResolveColliderByEntity(entityB);
             Collider? colliderA = ResolveColliderByEntity(entityA);
 
@@ -3189,7 +3609,7 @@ namespace Unitas.Bridge
                 {
                     if (_scripts.TryGetValue(snapshotA[i], out MonoBehaviour? scriptA) && IsEligible(scriptA))
                     {
-                        DispatchTrigger(scriptA!, colliderB, phase);
+                        DispatchTrigger(scriptA!, colliderB, phaseCode);
                     }
                 }
             }
@@ -3198,7 +3618,7 @@ namespace Unitas.Bridge
                 MonoBehaviour? scriptA = FindScriptByEntity(entityA);
                 if (IsEligible(scriptA))
                 {
-                    DispatchTrigger(scriptA!, colliderB, phase);
+                    DispatchTrigger(scriptA!, colliderB, phaseCode);
                 }
             }
 
@@ -3211,7 +3631,7 @@ namespace Unitas.Bridge
                     {
                         if (_scripts.TryGetValue(snapshotB[i], out MonoBehaviour? scriptB) && IsEligible(scriptB))
                         {
-                            DispatchTrigger(scriptB!, colliderA, phase);
+                            DispatchTrigger(scriptB!, colliderA, phaseCode);
                         }
                     }
                 }
@@ -3220,7 +3640,7 @@ namespace Unitas.Bridge
                     MonoBehaviour? scriptB = FindScriptByEntity(entityB);
                     if (IsEligible(scriptB))
                     {
-                        DispatchTrigger(scriptB!, colliderA, phase);
+                        DispatchTrigger(scriptB!, colliderA, phaseCode);
                     }
                 }
             }
@@ -3272,6 +3692,12 @@ namespace Unitas.Bridge
                 _sceneBoxColliders.Clear();
                 _sceneCapsuleColliders.Clear();
                 _sceneMeshColliders.Clear();
+                _sceneRigidbodies2D.Clear();
+                _sceneBoxColliders2D.Clear();
+                _sceneCircleColliders2D.Clear();
+                _scenePlatformEffectors2D.Clear();
+                _sceneSurfaceEffectors2D.Clear();
+                _registeredBodies2D.Clear();
                 _sceneTransforms.Clear();
                 _sceneCameras.Clear();
                 _sceneAudioSources.Clear();
@@ -3316,9 +3742,15 @@ namespace Unitas.Bridge
             Vector3 currentCenter = Vector3.zero;
             Vector3 currentSize = new Vector3(1f, 1f, 1f);
             bool currentConvex = false;
+            ScenePhysics2DFields current2D = new ScenePhysics2DFields();
             string currentMeshFileId = string.Empty;
             string currentMeshGuid = string.Empty;
             List<ParsedRigidbodyRecord> rigidbodies = new List<ParsedRigidbodyRecord>();
+            List<ParsedRigidbody2DRecord> rigidbodies2D = new List<ParsedRigidbody2DRecord>();
+            List<ParsedBoxCollider2DRecord> boxColliders2D = new List<ParsedBoxCollider2DRecord>();
+            List<ParsedCircleCollider2DRecord> circleColliders2D = new List<ParsedCircleCollider2DRecord>();
+            List<ParsedPlatformEffector2DRecord> platformEffectors2D = new List<ParsedPlatformEffector2DRecord>();
+            List<ParsedSurfaceEffector2DRecord> surfaceEffectors2D = new List<ParsedSurfaceEffector2DRecord>();
             List<ParsedSphereColliderRecord> sphereColliders = new List<ParsedSphereColliderRecord>();
             List<ParsedBoxColliderRecord> boxColliders = new List<ParsedBoxColliderRecord>();
             List<ParsedCapsuleColliderRecord> capsuleColliders = new List<ParsedCapsuleColliderRecord>();
@@ -3421,6 +3853,16 @@ namespace Unitas.Bridge
                         }
                     }
 
+                    RecordScenePhysics2DComponent(
+                        currentClassId,
+                        currentGameObjectFileId,
+                        current2D,
+                        rigidbodies2D,
+                        boxColliders2D,
+                        circleColliders2D,
+                        platformEffectors2D,
+                        surfaceEffectors2D);
+
                     FlushDocument(
                         currentClassId,
                         currentFileId,
@@ -3462,6 +3904,7 @@ namespace Unitas.Bridge
                     currentCenter = Vector3.zero;
                     currentSize = new Vector3(1f, 1f, 1f);
                     currentConvex = false;
+                    current2D = new ScenePhysics2DFields();
                     currentMeshFileId = string.Empty;
                     currentMeshGuid = string.Empty;
                     currentFatherFileId = string.Empty;
@@ -3611,6 +4054,129 @@ namespace Unitas.Bridge
                     {
                         currentMeshFileId = ExtractFileId(line);
                         currentMeshGuid = ExtractGuidValue(line);
+                    }
+                }
+                else if (currentClassId == RIGIDBODY2D_CLASS)
+                {
+                    if (line.StartsWith("m_GameObject:", StringComparison.Ordinal))
+                    {
+                        currentGameObjectFileId = ExtractFileId(line);
+                    }
+                    else if (line.StartsWith("m_BodyType:", StringComparison.Ordinal))
+                    {
+                        current2D.BodyType = (int)ParseFloatValue(line, 0f);
+                    }
+                    else if (line.StartsWith("m_Simulated:", StringComparison.Ordinal))
+                    {
+                        current2D.Simulated = ParseBoolValue(line, true);
+                    }
+                    else if (line.StartsWith("m_Mass:", StringComparison.Ordinal))
+                    {
+                        current2D.Mass = ParseFloatValue(line, 1f);
+                    }
+                    else if (line.StartsWith("m_GravityScale:", StringComparison.Ordinal))
+                    {
+                        current2D.GravityScale = ParseFloatValue(line, 1f);
+                    }
+                    else if (line.StartsWith("m_Interpolate:", StringComparison.Ordinal))
+                    {
+                        current2D.Interpolation = (int)ParseFloatValue(line, 0f);
+                    }
+                    else if (line.StartsWith("m_CollisionDetection:", StringComparison.Ordinal))
+                    {
+                        current2D.CollisionDetectionMode = (int)ParseFloatValue(line, 0f);
+                    }
+                }
+                else if (currentClassId == BOX_COLLIDER2D_CLASS)
+                {
+                    if (line.StartsWith("m_GameObject:", StringComparison.Ordinal))
+                    {
+                        currentGameObjectFileId = ExtractFileId(line);
+                    }
+                    else if (line.StartsWith("m_IsTrigger:", StringComparison.Ordinal))
+                    {
+                        current2D.IsTrigger = ParseBoolValue(line, false);
+                    }
+                    else if (line.StartsWith("m_Offset:", StringComparison.Ordinal))
+                    {
+                        current2D.Offset = ParseVector2Value(line, Vector2.zero);
+                    }
+                    else if (line.StartsWith("m_Size:", StringComparison.Ordinal))
+                    {
+                        current2D.Size = ParseVector2Value(line, Vector2.one);
+                    }
+                }
+                else if (currentClassId == CIRCLE_COLLIDER2D_CLASS)
+                {
+                    if (line.StartsWith("m_GameObject:", StringComparison.Ordinal))
+                    {
+                        currentGameObjectFileId = ExtractFileId(line);
+                    }
+                    else if (line.StartsWith("m_IsTrigger:", StringComparison.Ordinal))
+                    {
+                        current2D.IsTrigger = ParseBoolValue(line, false);
+                    }
+                    else if (line.StartsWith("m_Offset:", StringComparison.Ordinal))
+                    {
+                        current2D.Offset = ParseVector2Value(line, Vector2.zero);
+                    }
+                    else if (line.StartsWith("m_Radius:", StringComparison.Ordinal))
+                    {
+                        current2D.Radius = ParseFloatValue(line, 0.5f);
+                    }
+                }
+                else if (currentClassId == PLATFORM_EFFECTOR2D_CLASS)
+                {
+                    if (line.StartsWith("m_GameObject:", StringComparison.Ordinal))
+                    {
+                        currentGameObjectFileId = ExtractFileId(line);
+                    }
+                    else if (line.StartsWith("m_UseOneWay:", StringComparison.Ordinal))
+                    {
+                        current2D.UseOneWay = ParseBoolValue(line, true);
+                    }
+                    else if (line.StartsWith("m_SurfaceArc:", StringComparison.Ordinal))
+                    {
+                        current2D.SurfaceArc = ParseFloatValue(line, 180f);
+                    }
+                    else if (line.StartsWith("m_RotationalOffset:", StringComparison.Ordinal))
+                    {
+                        current2D.RotationalOffset = ParseFloatValue(line, 0f);
+                    }
+                    else if (line.StartsWith("m_SideArc:", StringComparison.Ordinal))
+                    {
+                        current2D.SideArc = ParseFloatValue(line, 0f);
+                    }
+                    else if (line.StartsWith("m_UseSideFriction:", StringComparison.Ordinal))
+                    {
+                        current2D.UseSideFriction = ParseBoolValue(line, false);
+                    }
+                    else if (line.StartsWith("m_UseSideBounce:", StringComparison.Ordinal))
+                    {
+                        current2D.UseSideBounce = ParseBoolValue(line, false);
+                    }
+                }
+                else if (currentClassId == SURFACE_EFFECTOR2D_CLASS)
+                {
+                    if (line.StartsWith("m_GameObject:", StringComparison.Ordinal))
+                    {
+                        currentGameObjectFileId = ExtractFileId(line);
+                    }
+                    else if (line.StartsWith("m_Speed:", StringComparison.Ordinal))
+                    {
+                        current2D.Speed = ParseFloatValue(line, 0f);
+                    }
+                    else if (line.StartsWith("m_ForceScale:", StringComparison.Ordinal))
+                    {
+                        current2D.ForceScale = ParseFloatValue(line, 1f);
+                    }
+                    else if (line.StartsWith("m_UseFriction:", StringComparison.Ordinal))
+                    {
+                        current2D.UseFriction = ParseBoolValue(line, true);
+                    }
+                    else if (line.StartsWith("m_UseBounce:", StringComparison.Ordinal))
+                    {
+                        current2D.UseBounce = ParseBoolValue(line, false);
                     }
                 }
                 else if (currentClassId == 20)
@@ -3863,6 +4429,16 @@ namespace Unitas.Bridge
                 meshColliders,
                 cameras);
 
+            RecordScenePhysics2DComponent(
+                currentClassId,
+                currentGameObjectFileId,
+                current2D,
+                rigidbodies2D,
+                boxColliders2D,
+                circleColliders2D,
+                platformEffectors2D,
+                surfaceEffectors2D);
+
             foreach (KeyValuePair<string, ulong> entry in gameObjectEntities)
             {
                 ulong shiftedEntity = _nextSceneEntityBase + entry.Value;
@@ -3938,6 +4514,78 @@ namespace Unitas.Bridge
                         record.Convex,
                         record.IsTrigger,
                         record.Center);
+                }
+            }
+
+            for (int index = 0; index < rigidbodies2D.Count; index++)
+            {
+                ParsedRigidbody2DRecord record = rigidbodies2D[index];
+                if (gameObjectEntities.TryGetValue(record.GameObjectFileId, out ulong localEntity))
+                {
+                    ulong shiftedEntity = _nextSceneEntityBase + localEntity;
+                    _sceneRigidbodies2D[shiftedEntity] = new SceneRigidbody2DMetadata(
+                        ToRigidbodyType2D(record.BodyType),
+                        record.Simulated,
+                        record.Mass,
+                        record.GravityScale,
+                        ToRigidbodyInterpolation2D(record.Interpolation),
+                        ToCollisionDetectionMode2D(record.CollisionDetectionMode));
+                }
+            }
+
+            for (int index = 0; index < boxColliders2D.Count; index++)
+            {
+                ParsedBoxCollider2DRecord record = boxColliders2D[index];
+                if (gameObjectEntities.TryGetValue(record.GameObjectFileId, out ulong localEntity))
+                {
+                    ulong shiftedEntity = _nextSceneEntityBase + localEntity;
+                    _sceneBoxColliders2D[shiftedEntity] = new SceneBoxCollider2DMetadata(
+                        record.Size,
+                        record.Offset,
+                        record.IsTrigger);
+                }
+            }
+
+            for (int index = 0; index < circleColliders2D.Count; index++)
+            {
+                ParsedCircleCollider2DRecord record = circleColliders2D[index];
+                if (gameObjectEntities.TryGetValue(record.GameObjectFileId, out ulong localEntity))
+                {
+                    ulong shiftedEntity = _nextSceneEntityBase + localEntity;
+                    _sceneCircleColliders2D[shiftedEntity] = new SceneCircleCollider2DMetadata(
+                        record.Radius,
+                        record.Offset,
+                        record.IsTrigger);
+                }
+            }
+
+            for (int index = 0; index < platformEffectors2D.Count; index++)
+            {
+                ParsedPlatformEffector2DRecord record = platformEffectors2D[index];
+                if (gameObjectEntities.TryGetValue(record.GameObjectFileId, out ulong localEntity))
+                {
+                    ulong shiftedEntity = _nextSceneEntityBase + localEntity;
+                    _scenePlatformEffectors2D[shiftedEntity] = new ScenePlatformEffector2DMetadata(
+                        record.UseOneWay,
+                        record.SurfaceArc,
+                        record.RotationalOffset,
+                        record.SideArc,
+                        record.UseSideFriction,
+                        record.UseSideBounce);
+                }
+            }
+
+            for (int index = 0; index < surfaceEffectors2D.Count; index++)
+            {
+                ParsedSurfaceEffector2DRecord record = surfaceEffectors2D[index];
+                if (gameObjectEntities.TryGetValue(record.GameObjectFileId, out ulong localEntity))
+                {
+                    ulong shiftedEntity = _nextSceneEntityBase + localEntity;
+                    _sceneSurfaceEffectors2D[shiftedEntity] = new SceneSurfaceEffector2DMetadata(
+                        record.Speed,
+                        record.ForceScale,
+                        record.UseFriction,
+                        record.UseBounce);
                 }
             }
 
@@ -4488,6 +5136,73 @@ namespace Unitas.Bridge
             return fallback;
         }
 
+        private static Vector2 ParseVector2Value(string line, Vector2 fallback)
+        {
+            int braceStart = line.IndexOf('{', StringComparison.Ordinal);
+            int braceEnd = line.LastIndexOf('}');
+            if (braceStart < 0 || braceEnd <= braceStart)
+            {
+                return fallback;
+            }
+
+            float x = fallback.x;
+            float y = fallback.y;
+            string inner = line.Substring(braceStart + 1, braceEnd - braceStart - 1);
+            string[] parts = inner.Split(',');
+            for (int i = 0; i < parts.Length; i++)
+            {
+                string part = parts[i].Trim();
+                if (part.StartsWith("x:", StringComparison.Ordinal))
+                {
+                    x = ParseFloatValue(part, fallback.x);
+                }
+                else if (part.StartsWith("y:", StringComparison.Ordinal))
+                {
+                    y = ParseFloatValue(part, fallback.y);
+                }
+            }
+            return new Vector2(x, y);
+        }
+
+        private static RigidbodyType2D ToRigidbodyType2D(int bodyType)
+        {
+            switch (bodyType)
+            {
+                case 1:
+                    return RigidbodyType2D.Kinematic;
+                case 2:
+                    return RigidbodyType2D.Static;
+                default:
+                    return RigidbodyType2D.Dynamic;
+            }
+        }
+
+        private static RigidbodyInterpolation2D ToRigidbodyInterpolation2D(int interpolation)
+        {
+            switch (interpolation)
+            {
+                case 1:
+                    return RigidbodyInterpolation2D.Interpolate;
+                case 2:
+                    return RigidbodyInterpolation2D.Extrapolate;
+                default:
+                    return RigidbodyInterpolation2D.None;
+            }
+        }
+
+        private static CollisionDetectionMode2D ToCollisionDetectionMode2D(int mode)
+        {
+            switch (mode)
+            {
+                case 1:
+                    return CollisionDetectionMode2D.Continuous;
+                case 2:
+                    return CollisionDetectionMode2D.ContinuousSpeculative;
+                default:
+                    return CollisionDetectionMode2D.Discrete;
+            }
+        }
+
         private static bool ParseBoolValue(string line, bool fallback)
         {
             int colon = line.IndexOf(':', StringComparison.Ordinal);
@@ -4644,6 +5359,213 @@ namespace Unitas.Bridge
             public bool UseGravity { get; }
 
             public bool IsKinematic { get; }
+        }
+
+        private sealed class ScenePhysics2DFields
+        {
+            public int BodyType { get; set; }
+
+            public bool Simulated { get; set; } = true;
+
+            public float Mass { get; set; } = 1f;
+
+            public float GravityScale { get; set; } = 1f;
+
+            public int Interpolation { get; set; }
+
+            public int CollisionDetectionMode { get; set; }
+
+            public Vector2 Offset { get; set; }
+
+            public Vector2 Size { get; set; } = Vector2.one;
+
+            public float Radius { get; set; } = 0.5f;
+
+            public bool IsTrigger { get; set; }
+
+            public bool UseOneWay { get; set; } = true;
+
+            public float SurfaceArc { get; set; } = 180f;
+
+            public float RotationalOffset { get; set; }
+
+            public float SideArc { get; set; }
+
+            public bool UseSideFriction { get; set; }
+
+            public bool UseSideBounce { get; set; }
+
+            public float Speed { get; set; }
+
+            public float ForceScale { get; set; } = 1f;
+
+            public bool UseFriction { get; set; } = true;
+
+            public bool UseBounce { get; set; }
+        }
+
+        private static void RecordScenePhysics2DComponent(
+            int classId,
+            string gameObjectFileId,
+            ScenePhysics2DFields fields,
+            List<ParsedRigidbody2DRecord> rigidbodies2D,
+            List<ParsedBoxCollider2DRecord> boxColliders2D,
+            List<ParsedCircleCollider2DRecord> circleColliders2D,
+            List<ParsedPlatformEffector2DRecord> platformEffectors2D,
+            List<ParsedSurfaceEffector2DRecord> surfaceEffectors2D)
+        {
+            if (string.IsNullOrEmpty(gameObjectFileId))
+            {
+                return;
+            }
+            switch (classId)
+            {
+                case RIGIDBODY2D_CLASS:
+                    rigidbodies2D.Add(new ParsedRigidbody2DRecord(
+                        gameObjectFileId,
+                        fields.BodyType,
+                        fields.Simulated,
+                        fields.Mass,
+                        fields.GravityScale,
+                        fields.Interpolation,
+                        fields.CollisionDetectionMode));
+                    break;
+                case BOX_COLLIDER2D_CLASS:
+                    boxColliders2D.Add(new ParsedBoxCollider2DRecord(
+                        gameObjectFileId,
+                        fields.Size,
+                        fields.Offset,
+                        fields.IsTrigger));
+                    break;
+                case CIRCLE_COLLIDER2D_CLASS:
+                    circleColliders2D.Add(new ParsedCircleCollider2DRecord(
+                        gameObjectFileId,
+                        fields.Radius,
+                        fields.Offset,
+                        fields.IsTrigger));
+                    break;
+                case PLATFORM_EFFECTOR2D_CLASS:
+                    platformEffectors2D.Add(new ParsedPlatformEffector2DRecord(
+                        gameObjectFileId,
+                        fields.UseOneWay,
+                        fields.SurfaceArc,
+                        fields.RotationalOffset,
+                        fields.SideArc,
+                        fields.UseSideFriction,
+                        fields.UseSideBounce));
+                    break;
+                case SURFACE_EFFECTOR2D_CLASS:
+                    surfaceEffectors2D.Add(new ParsedSurfaceEffector2DRecord(
+                        gameObjectFileId,
+                        fields.Speed,
+                        fields.ForceScale,
+                        fields.UseFriction,
+                        fields.UseBounce));
+                    break;
+                default:
+                    break;
+            }
+        }
+
+        private readonly struct SceneRigidbody2DMetadata
+        {
+            public SceneRigidbody2DMetadata(RigidbodyType2D bodyType, bool simulated, float mass, float gravityScale, RigidbodyInterpolation2D interpolation, CollisionDetectionMode2D collisionDetectionMode)
+            {
+                BodyType = bodyType;
+                Simulated = simulated;
+                Mass = mass;
+                GravityScale = gravityScale;
+                Interpolation = interpolation;
+                CollisionDetectionMode = collisionDetectionMode;
+            }
+
+            public RigidbodyType2D BodyType { get; }
+
+            public bool Simulated { get; }
+
+            public float Mass { get; }
+
+            public float GravityScale { get; }
+
+            public RigidbodyInterpolation2D Interpolation { get; }
+
+            public CollisionDetectionMode2D CollisionDetectionMode { get; }
+        }
+
+        private readonly struct SceneBoxCollider2DMetadata
+        {
+            public SceneBoxCollider2DMetadata(Vector2 size, Vector2 offset, bool isTrigger)
+            {
+                Size = size;
+                Offset = offset;
+                IsTrigger = isTrigger;
+            }
+
+            public Vector2 Size { get; }
+
+            public Vector2 Offset { get; }
+
+            public bool IsTrigger { get; }
+        }
+
+        private readonly struct SceneCircleCollider2DMetadata
+        {
+            public SceneCircleCollider2DMetadata(float radius, Vector2 offset, bool isTrigger)
+            {
+                Radius = radius;
+                Offset = offset;
+                IsTrigger = isTrigger;
+            }
+
+            public float Radius { get; }
+
+            public Vector2 Offset { get; }
+
+            public bool IsTrigger { get; }
+        }
+
+        private readonly struct ScenePlatformEffector2DMetadata
+        {
+            public ScenePlatformEffector2DMetadata(bool useOneWay, float surfaceArc, float rotationalOffset, float sideArc, bool useSideFriction, bool useSideBounce)
+            {
+                UseOneWay = useOneWay;
+                SurfaceArc = surfaceArc;
+                RotationalOffset = rotationalOffset;
+                SideArc = sideArc;
+                UseSideFriction = useSideFriction;
+                UseSideBounce = useSideBounce;
+            }
+
+            public bool UseOneWay { get; }
+
+            public float SurfaceArc { get; }
+
+            public float RotationalOffset { get; }
+
+            public float SideArc { get; }
+
+            public bool UseSideFriction { get; }
+
+            public bool UseSideBounce { get; }
+        }
+
+        private readonly struct SceneSurfaceEffector2DMetadata
+        {
+            public SceneSurfaceEffector2DMetadata(float speed, float forceScale, bool useFriction, bool useBounce)
+            {
+                Speed = speed;
+                ForceScale = forceScale;
+                UseFriction = useFriction;
+                UseBounce = useBounce;
+            }
+
+            public float Speed { get; }
+
+            public float ForceScale { get; }
+
+            public bool UseFriction { get; }
+
+            public bool UseBounce { get; }
         }
 
         private readonly struct SceneSphereColliderMetadata
@@ -5015,6 +5937,122 @@ namespace Unitas.Bridge
             public bool IsKinematic { get; }
         }
 
+        private readonly struct ParsedRigidbody2DRecord
+        {
+            public ParsedRigidbody2DRecord(string gameObjectFileId, int bodyType, bool simulated, float mass, float gravityScale, int interpolation, int collisionDetectionMode)
+            {
+                GameObjectFileId = gameObjectFileId;
+                BodyType = bodyType;
+                Simulated = simulated;
+                Mass = mass;
+                GravityScale = gravityScale;
+                Interpolation = interpolation;
+                CollisionDetectionMode = collisionDetectionMode;
+            }
+
+            public string GameObjectFileId { get; }
+
+            public int BodyType { get; }
+
+            public bool Simulated { get; }
+
+            public float Mass { get; }
+
+            public float GravityScale { get; }
+
+            public int Interpolation { get; }
+
+            public int CollisionDetectionMode { get; }
+        }
+
+        private readonly struct ParsedBoxCollider2DRecord
+        {
+            public ParsedBoxCollider2DRecord(string gameObjectFileId, Vector2 size, Vector2 offset, bool isTrigger)
+            {
+                GameObjectFileId = gameObjectFileId;
+                Size = size;
+                Offset = offset;
+                IsTrigger = isTrigger;
+            }
+
+            public string GameObjectFileId { get; }
+
+            public Vector2 Size { get; }
+
+            public Vector2 Offset { get; }
+
+            public bool IsTrigger { get; }
+        }
+
+        private readonly struct ParsedCircleCollider2DRecord
+        {
+            public ParsedCircleCollider2DRecord(string gameObjectFileId, float radius, Vector2 offset, bool isTrigger)
+            {
+                GameObjectFileId = gameObjectFileId;
+                Radius = radius;
+                Offset = offset;
+                IsTrigger = isTrigger;
+            }
+
+            public string GameObjectFileId { get; }
+
+            public float Radius { get; }
+
+            public Vector2 Offset { get; }
+
+            public bool IsTrigger { get; }
+        }
+
+        private readonly struct ParsedPlatformEffector2DRecord
+        {
+            public ParsedPlatformEffector2DRecord(string gameObjectFileId, bool useOneWay, float surfaceArc, float rotationalOffset, float sideArc, bool useSideFriction, bool useSideBounce)
+            {
+                GameObjectFileId = gameObjectFileId;
+                UseOneWay = useOneWay;
+                SurfaceArc = surfaceArc;
+                RotationalOffset = rotationalOffset;
+                SideArc = sideArc;
+                UseSideFriction = useSideFriction;
+                UseSideBounce = useSideBounce;
+            }
+
+            public string GameObjectFileId { get; }
+
+            public bool UseOneWay { get; }
+
+            public float SurfaceArc { get; }
+
+            public float RotationalOffset { get; }
+
+            public float SideArc { get; }
+
+            public bool UseSideFriction { get; }
+
+            public bool UseSideBounce { get; }
+        }
+
+        private readonly struct ParsedSurfaceEffector2DRecord
+        {
+            public ParsedSurfaceEffector2DRecord(string gameObjectFileId, float speed, float forceScale, bool useFriction, bool useBounce)
+            {
+                GameObjectFileId = gameObjectFileId;
+                Speed = speed;
+                ForceScale = forceScale;
+                UseFriction = useFriction;
+                UseBounce = useBounce;
+            }
+
+            public string GameObjectFileId { get; }
+
+            public float Speed { get; }
+
+            public float ForceScale { get; }
+
+            public bool UseFriction { get; }
+
+            public bool UseBounce { get; }
+        }
+
         private readonly struct ParsedUiComponentRecord
         {
             public ParsedUiComponentRecord(
@@ -5316,6 +6354,46 @@ namespace Unitas.Bridge
             }
         }
 
+        private void DispatchCollision2DToRecipient(ulong entityA, ulong entityB, uint phase)
+        {
+            GameObject? other = ResolveGameObjectByEntity(entityB);
+            if (_entityScriptHandles.TryGetValue(entityA, out List<ulong>? handles))
+            {
+                List<ulong> snapshot = new List<ulong>(handles);
+                for (int index = 0; index < snapshot.Count; index++)
+                {
+                    if (_scripts.TryGetValue(snapshot[index], out MonoBehaviour? script) && IsEligible(script))
+                    {
+                        DispatchCollision2D(script!, new Collision2D(other, entityA, entityB), phase);
+                    }
+                }
+                return;
+            }
+            MonoBehaviour? scriptA = FindScriptByEntity(entityA);
+            if (IsEligible(scriptA))
+            {
+                DispatchCollision2D(scriptA!, new Collision2D(other, entityA, entityB), phase);
+            }
+        }
+
+        private static void DispatchCollision2D(MonoBehaviour script, Collision2D collision, uint phase)
+        {
+            switch (phase)
+            {
+                case CollisionPhaseEnter:
+                    InvokeWithOrigin(script, () => script.OnCollisionEnter2D(collision));
+                    break;
+                case CollisionPhaseStay:
+                    InvokeWithOrigin(script, () => script.OnCollisionStay2D(collision));
+                    break;
+                case CollisionPhaseExit:
+                    InvokeWithOrigin(script, () => script.OnCollisionExit2D(collision));
+                    break;
+                default:
+                    break;
+            }
+        }
+
         private static void DispatchTrigger(MonoBehaviour script, Collider? other, uint phase)
         {
             switch (phase)
@@ -5328,6 +6406,46 @@ namespace Unitas.Bridge
                     break;
                 case CollisionPhaseExit:
                     InvokeWithOrigin(script, () => script.OnTriggerExit(other));
+                    break;
+                default:
+                    break;
+            }
+        }
+
+        private void DispatchTrigger2DToRecipient(ulong entityA, ulong entityB, uint phase)
+        {
+            Collider2D? other = ResolveCollider2DByEntity(entityB);
+            if (_entityScriptHandles.TryGetValue(entityA, out List<ulong>? handles))
+            {
+                List<ulong> snapshot = new List<ulong>(handles);
+                for (int index = 0; index < snapshot.Count; index++)
+                {
+                    if (_scripts.TryGetValue(snapshot[index], out MonoBehaviour? script) && IsEligible(script))
+                    {
+                        DispatchTrigger2D(script!, other, phase);
+                    }
+                }
+                return;
+            }
+            MonoBehaviour? scriptA = FindScriptByEntity(entityA);
+            if (IsEligible(scriptA))
+            {
+                DispatchTrigger2D(scriptA!, other, phase);
+            }
+        }
+
+        private static void DispatchTrigger2D(MonoBehaviour script, Collider2D? other, uint phase)
+        {
+            switch (phase)
+            {
+                case CollisionPhaseEnter:
+                    InvokeWithOrigin(script, () => script.OnTriggerEnter2D(other));
+                    break;
+                case CollisionPhaseStay:
+                    InvokeWithOrigin(script, () => script.OnTriggerStay2D(other));
+                    break;
+                case CollisionPhaseExit:
+                    InvokeWithOrigin(script, () => script.OnTriggerExit2D(other));
                     break;
                 default:
                     break;

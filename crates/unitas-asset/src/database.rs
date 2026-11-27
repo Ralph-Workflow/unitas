@@ -7,6 +7,11 @@ use crate::font::{self, FontImportSettings};
 use crate::project::{build_inventory, AssetEntry, AssetKind, Project};
 use crate::unity_yaml::{self, Node};
 
+#[path = "tilemap/mod.rs"]
+pub mod tilemap;
+
+use self::tilemap::TilemapKind;
+
 const TRASH_DIRECTORY: &str = ".unitas/trash";
 const MAX_RECENT_ASSETS: usize = 32;
 
@@ -107,6 +112,9 @@ pub enum RecognizedAssetFamily {
     Texture2D,
     AudioClip,
     Model,
+    Tile,
+    Tilemap,
+    Grid,
 }
 
 impl RecognizedAssetFamily {
@@ -147,6 +155,9 @@ impl RecognizedAssetFamily {
             RecognizedAssetFamily::Texture2D => "Texture2D",
             RecognizedAssetFamily::AudioClip => "AudioClip",
             RecognizedAssetFamily::Model => "Mesh",
+            RecognizedAssetFamily::Tile => "Tile",
+            RecognizedAssetFamily::Tilemap => "Tilemap",
+            RecognizedAssetFamily::Grid => "Grid",
         }
     }
 
@@ -187,6 +198,9 @@ impl RecognizedAssetFamily {
             RecognizedAssetFamily::Texture2D => "Texture2D",
             RecognizedAssetFamily::AudioClip => "AudioClip",
             RecognizedAssetFamily::Model => "Model",
+            RecognizedAssetFamily::Tile => "Tile",
+            RecognizedAssetFamily::Tilemap => "Tilemap",
+            RecognizedAssetFamily::Grid => "Grid",
         }
     }
 }
@@ -461,7 +475,7 @@ pub fn identify_asset_family(
                 outcome: ImportOutcome::ready(),
             });
         }
-        "png" | "jpg" | "jpeg" | "tga" | "targa" | "exr" | "psd" | "hdr" => {
+        "png" | "jpg" | "jpeg" | "tga" | "targa" | "exr" | "psd" | "psb" | "hdr" => {
             return Some(IdentifiedAssetFamily {
                 family: RecognizedAssetFamily::Texture2D,
                 outcome: ImportOutcome::ready(),
@@ -544,7 +558,7 @@ pub fn identify_asset_family(
         if let Ok(stream) = unity_yaml::parse(text) {
             if let Some(doc) = stream.documents.iter().find(|doc| !doc.stripped) {
                 if let Node::Mapping(entries) = &doc.root {
-                    if let Some((key, _)) = entries.first() {
+                    if let Some((key, body)) = entries.first() {
                         let family = match key.as_str() {
                             "AvatarMask" => Some((
                                 RecognizedAssetFamily::AvatarMask,
@@ -573,10 +587,37 @@ pub fn identify_asset_family(
                                 RecognizedAssetFamily::TerrainData,
                                 ImportOutcome::ready(),
                             )),
-                            "MonoBehaviour" => Some((
-                                RecognizedAssetFamily::ScriptableObject,
-                                ImportOutcome::ready(),
+                            "Tilemap" => Some((
+                                RecognizedAssetFamily::Tilemap,
+                                tilemap_outcome(bytes, &asset_label),
                             )),
+                            "Grid" => Some((
+                                RecognizedAssetFamily::Grid,
+                                tilemap_outcome(bytes, &asset_label),
+                            )),
+                            "Tile" | "TileBase" | "RuleTile" | "ScriptableRuleTile"
+                            | "IsometricRuleTile" => Some((
+                                RecognizedAssetFamily::Tile,
+                                tilemap_outcome(bytes, &asset_label),
+                            )),
+                            "MonoBehaviour" => match self::tilemap::classify_body(body) {
+                                Some(TilemapKind::Tile | TilemapKind::RuleTile) => Some((
+                                    RecognizedAssetFamily::Tile,
+                                    tilemap_outcome(bytes, &asset_label),
+                                )),
+                                Some(TilemapKind::Tilemap) => Some((
+                                    RecognizedAssetFamily::Tilemap,
+                                    tilemap_outcome(bytes, &asset_label),
+                                )),
+                                Some(TilemapKind::Grid) => Some((
+                                    RecognizedAssetFamily::Grid,
+                                    tilemap_outcome(bytes, &asset_label),
+                                )),
+                                None => Some((
+                                    RecognizedAssetFamily::ScriptableObject,
+                                    ImportOutcome::ready(),
+                                )),
+                            },
                             _ => None,
                         };
                         if let Some((family, outcome)) = family {
@@ -589,6 +630,13 @@ pub fn identify_asset_family(
     }
 
     None
+}
+
+fn tilemap_outcome(bytes: &[u8], asset_label: &str) -> ImportOutcome {
+    match self::tilemap::import_tilemap(bytes, asset_label) {
+        Ok(imported) => self::tilemap::tilemap_import_outcome(asset_label, Ok(&imported)),
+        Err(error) => self::tilemap::tilemap_import_outcome(asset_label, Err(&error)),
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

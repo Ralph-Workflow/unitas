@@ -92,6 +92,7 @@ SCENARIOS: tuple[tuple[str, str, tuple[str, ...], bool], ...] = (
     ("persist_state_write", "persist_state_write.json", (), True),
     ("persist_state_read", "persist_state_read.json", (), True),
     ("ghost_replay", "ghost_replay.scenario.json", ("--repeat", "2"), True),
+    ("s1_open_and_inspect", "s1_open_and_inspect.scenario.json", ("--repeat", "2"), False),
     ("s8_title_checkpoint", "s8_title_checkpoint.scenario.json", (), False),
     ("s8_arena_countdown", "s8_arena_countdown.scenario.json", (), False),
     ("s8_arena_x5_checkpoint", "s8_arena_x5_checkpoint.scenario.json", (), False),

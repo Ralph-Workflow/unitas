@@ -48,6 +48,21 @@ impl PlatformEffector2D {
         self
     }
 
+    pub fn with_side_arc(mut self, side_arc_degrees: f32) -> Self {
+        self.side_arc = side_arc_degrees;
+        self
+    }
+
+    pub fn with_side_friction(mut self, use_side_friction: bool) -> Self {
+        self.use_side_friction = use_side_friction;
+        self
+    }
+
+    pub fn with_side_bounce(mut self, use_side_bounce: bool) -> Self {
+        self.use_side_bounce = use_side_bounce;
+        self
+    }
+
     pub fn allows_layer(&self, layer: u8) -> bool {
         layer < 32 && (self.collider_mask & (1u32 << layer)) != 0
     }
@@ -80,6 +95,30 @@ impl PlatformEffector2D {
         }
         false
     }
+
+    /// True when the contact lands in the side region: within `side_arc` degrees of
+    /// the platform's side axis. A zero side arc leaves the side region empty.
+    pub(crate) fn is_side_contact(
+        &self,
+        platform_angle_radians: f32,
+        outward_normal_from_platform_to_other: [f32; 2],
+    ) -> bool {
+        if self.side_arc <= 0.0 {
+            return false;
+        }
+        let up = self.surface_up(platform_angle_radians);
+        let side_axis = rotate_vec2(up, std::f32::consts::FRAC_PI_2);
+        let normal = normalize2(outward_normal_from_platform_to_other).unwrap_or([0.0, 1.0]);
+        let to_positive = angle_between_degrees(normal, side_axis);
+        let to_negative = angle_between_degrees(normal, [-side_axis[0], -side_axis[1]]);
+        to_positive.min(to_negative) <= self.side_arc * 0.5
+    }
+}
+
+fn angle_between_degrees(a: [f32; 2], b: [f32; 2]) -> f32 {
+    let na = normalize2(a).unwrap_or([0.0, 1.0]);
+    let nb = normalize2(b).unwrap_or([0.0, 1.0]);
+    dot2(na, nb).clamp(-1.0, 1.0).acos().to_degrees()
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]

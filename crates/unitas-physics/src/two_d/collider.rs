@@ -31,11 +31,27 @@ impl From<ColliderId2D> for u64 {
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Shape2D {
-    Box { half_extents: [f32; 2] },
-    Circle { radius: f32 },
-    Edge { start: [f32; 2], end: [f32; 2] },
-    Polygon { vertices: Vec<[f32; 2]> },
-    Composite { shapes: Vec<Shape2D> },
+    Box {
+        half_extents: [f32; 2],
+    },
+    Circle {
+        radius: f32,
+    },
+    Capsule {
+        radius: f32,
+        height: f32,
+        direction: u8,
+    },
+    Edge {
+        start: [f32; 2],
+        end: [f32; 2],
+    },
+    Polygon {
+        vertices: Vec<[f32; 2]>,
+    },
+    Composite {
+        shapes: Vec<Shape2D>,
+    },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -115,6 +131,25 @@ impl ColliderDesc2D {
     pub fn circle_collider(game_object: EntityId, radius: f32) -> Self {
         Self {
             shape: Shape2D::Circle { radius },
+            game_object,
+            ..Self::default()
+        }
+    }
+
+    /// `height` is the total extent along the capsule axis; `direction` is 0 for a
+    /// horizontal capsule and 1 for a vertical one.
+    pub fn capsule_collider(
+        game_object: EntityId,
+        radius: f32,
+        height: f32,
+        direction: u8,
+    ) -> Self {
+        Self {
+            shape: Shape2D::Capsule {
+                radius,
+                height,
+                direction,
+            },
             game_object,
             ..Self::default()
         }
@@ -251,6 +286,33 @@ pub(crate) fn rotate_vec2(v: [f32; 2], angle: f32) -> [f32; 2] {
     [v[0] * c - v[1] * s, v[0] * s + v[1] * c]
 }
 
+pub(crate) fn capsule_half_segment(radius: f32, height: f32) -> f32 {
+    (0.5 * height - radius).max(0.0)
+}
+
+const CAPSULE_ARC_SEGMENTS: usize = 12;
+
+/// Stadium outline of a 2D capsule in shape-local space; direction 0 lays the
+/// capsule along local X, direction 1 along local Y.
+pub(crate) fn capsule_local_polygon(radius: f32, height: f32, direction: u8) -> Vec<[f32; 2]> {
+    let r = radius.max(0.0);
+    let half = capsule_half_segment(r, height);
+    let step = std::f32::consts::PI / CAPSULE_ARC_SEGMENTS as f32;
+    let mut verts = Vec::with_capacity(2 * (CAPSULE_ARC_SEGMENTS + 1));
+    for k in 0..=CAPSULE_ARC_SEGMENTS {
+        let t = -std::f32::consts::FRAC_PI_2 + (k as f32) * step;
+        verts.push([half + r * t.cos(), r * t.sin()]);
+    }
+    for k in 0..=CAPSULE_ARC_SEGMENTS {
+        let t = std::f32::consts::FRAC_PI_2 + (k as f32) * step;
+        verts.push([-half + r * t.cos(), r * t.sin()]);
+    }
+    if direction == 1 {
+        verts = verts.iter().map(|[x, y]| [-*y, *x]).collect();
+    }
+    verts
+}
+
 pub(crate) fn transform_point2(local: [f32; 2], center: [f32; 2], angle: f32) -> [f32; 2] {
     let r = rotate_vec2(local, angle);
     [center[0] + r[0], center[1] + r[1]]
@@ -316,7 +378,7 @@ pub(crate) fn surface_normal_at_point(
             let tangent = sub2(b, a);
             normalize2([-tangent[1], tangent[0]])
         }
-        Shape2D::Polygon { .. } => {
+        Shape2D::Polygon { .. } | Shape2D::Capsule { .. } => {
             let verts = shape_vertices_world(shape, center, angle)?;
             let mut centroid = [0.0, 0.0];
             for v in &verts {
@@ -361,7 +423,11 @@ pub(crate) fn scale2(v: [f32; 2], s: f32) -> [f32; 2] {
     [v[0] * s, v[1] * s]
 }
 
-fn shape_vertices_world(shape: &Shape2D, center: [f32; 2], angle: f32) -> Option<Vec<[f32; 2]>> {
+pub(crate) fn shape_vertices_world(
+    shape: &Shape2D,
+    center: [f32; 2],
+    angle: f32,
+) -> Option<Vec<[f32; 2]>> {
     match shape {
         Shape2D::Box { half_extents } => {
             let hx = half_extents[0];
@@ -389,6 +455,16 @@ fn shape_vertices_world(shape: &Shape2D, center: [f32; 2], angle: f32) -> Option
                     .collect(),
             )
         }
+        Shape2D::Capsule {
+            radius,
+            height,
+            direction,
+        } => Some(
+            capsule_local_polygon(*radius, *height, *direction)
+                .iter()
+                .map(|p| transform_point2(*p, center, angle))
+                .collect(),
+        ),
         Shape2D::Circle { .. } | Shape2D::Composite { .. } => None,
     }
 }
@@ -426,6 +502,20 @@ pub(crate) fn shape_to_local_shapes_in_frame(
                 .collect();
             vec![Shape2D::Polygon { vertices: mapped }]
         }
+        Shape2D::Capsule {
+            radius,
+            height,
+            direction,
+        } => {
+            if *radius <= 0.0 {
+                return Vec::new();
+            }
+            let mapped = capsule_local_polygon(*radius, *height, *direction)
+                .iter()
+                .map(|p| transform_point2(*p, rel_offset, rel_angle))
+                .collect();
+            vec![Shape2D::Polygon { vertices: mapped }]
+        }
         Shape2D::Circle { radius } => {
             if *radius <= 0.0 {
                 return Vec::new();
@@ -450,6 +540,54 @@ pub(crate) fn shape_to_local_shapes_in_frame(
             out
         }
     }
+}
+
+const CAST_CIRCLE_SEGMENTS: usize = 24;
+
+/// Convex outlines of a shape, used by the swept-box cast.
+pub(crate) fn shape_convex_polygons(
+    shape: &Shape2D,
+    center: [f32; 2],
+    angle: f32,
+) -> Vec<Vec<[f32; 2]>> {
+    match shape {
+        Shape2D::Circle { radius } => {
+            if *radius <= 0.0 {
+                return Vec::new();
+            }
+            let mut verts = Vec::with_capacity(CAST_CIRCLE_SEGMENTS);
+            for k in 0..CAST_CIRCLE_SEGMENTS {
+                let t = (k as f32) * (std::f32::consts::TAU / CAST_CIRCLE_SEGMENTS as f32);
+                let (s, c) = t.sin_cos();
+                verts.push(transform_point2([c * *radius, s * *radius], center, angle));
+            }
+            vec![verts]
+        }
+        Shape2D::Composite { shapes } => shapes
+            .iter()
+            .flat_map(|sub| shape_convex_polygons(sub, center, angle))
+            .collect(),
+        _ => shape_vertices_world(shape, center, angle)
+            .map(|verts| vec![verts])
+            .unwrap_or_default(),
+    }
+}
+
+/// Signed separation of two convex outlines: positive when they are apart, negative
+/// when they overlap (the overlap depth along the separating axis).
+pub(crate) fn convex_gap(a: &[[f32; 2]], b: &[[f32; 2]]) -> (f32, [f32; 2]) {
+    let mut best_gap = f32::NEG_INFINITY;
+    let mut best_axis = [0.0, 1.0];
+    for axis in candidate_axes(a).iter().chain(candidate_axes(b).iter()) {
+        let (min_a, max_a) = project_polygon(a, *axis);
+        let (min_b, max_b) = project_polygon(b, *axis);
+        let gap = (min_b - max_a).max(min_a - max_b);
+        if gap > best_gap {
+            best_gap = gap;
+            best_axis = *axis;
+        }
+    }
+    (best_gap, best_axis)
 }
 
 pub(crate) fn closest_point_on_segment2(a: [f32; 2], b: [f32; 2], p: [f32; 2]) -> [f32; 2] {
@@ -646,7 +784,7 @@ fn circle_polygon_contact(
     })
 }
 
-fn project_polygon(verts: &[[f32; 2]], axis: [f32; 2]) -> (f32, f32) {
+pub(crate) fn project_polygon(verts: &[[f32; 2]], axis: [f32; 2]) -> (f32, f32) {
     let mut min_p = f32::INFINITY;
     let mut max_p = f32::NEG_INFINITY;
     for v in verts {
@@ -661,7 +799,7 @@ fn project_polygon(verts: &[[f32; 2]], axis: [f32; 2]) -> (f32, f32) {
     (min_p, max_p)
 }
 
-fn candidate_axes(verts: &[[f32; 2]]) -> Vec<[f32; 2]> {
+pub(crate) fn candidate_axes(verts: &[[f32; 2]]) -> Vec<[f32; 2]> {
     if verts.len() == 2 {
         let edge = sub2(verts[1], verts[0]);
         let mut axes = Vec::new();
@@ -761,7 +899,7 @@ pub(crate) fn point_in_shape2d(
             let cp = closest_point_on_segment2(a, b, point);
             length2(sub2(point, cp)) <= 1e-4
         }
-        Shape2D::Polygon { .. } => {
+        Shape2D::Polygon { .. } | Shape2D::Capsule { .. } => {
             let Some(verts) = shape_vertices_world(shape, center, angle) else {
                 return false;
             };
@@ -869,7 +1007,7 @@ pub(crate) fn raycast_shape2d(
             let b = transform_point2(*end, center, angle);
             ray_segment_intersect(origin, dir, max_distance, a, b)
         }
-        Shape2D::Polygon { .. } => {
+        Shape2D::Polygon { .. } | Shape2D::Capsule { .. } => {
             let verts = shape_vertices_world(shape, center, angle)?;
             let mut best: Option<(f32, [f32; 2], [f32; 2])> = None;
             for i in 0..verts.len() {

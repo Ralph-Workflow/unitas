@@ -1,12 +1,15 @@
+use std::collections::HashMap;
+
 use unitas_core::EntityId;
 use unitas_physics::matrix::{
     CollisionMatrix, CollisionMessage, MessageDelivery, PhysicsObject, message_is_eligible,
     route_message,
 };
+use unitas_physics::two_d::body::{CollisionDetectionMode2D, RigidbodyInterpolation2D};
 use unitas_physics::two_d::effector::BuoyancyEffector2D;
 use unitas_physics::two_d::{
     AreaEffector2D, BodyDesc2D, BodyId2D, BodyType2D, ColliderDesc2D, ColliderId2D,
-    ContactFilter2D, Effector2D, PlatformEffector2D, PointEffector2D, RaycastHit2D,
+    ContactFilter2D, ContactPoint2D, Effector2D, PlatformEffector2D, PointEffector2D, RaycastHit2D,
     RoutedMessage2D, SurfaceEffector2D, World2D,
 };
 use unitas_physics::{
@@ -75,12 +78,22 @@ pub struct BodySnapshot2D {
     pub sleeping: bool,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct ContactEvent2D {
+#[derive(Clone, Debug, PartialEq)]
+pub struct ContactEvent {
     pub a: EntityId,
     pub b: EntityId,
     pub trigger: bool,
     pub phase: Phase,
+    pub is_2d: bool,
+    pub contacts: Vec<ContactPoint2D>,
+    pub relative_velocity: [f32; 2],
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct CollisionPayload2D {
+    pub impulse: f32,
+    pub relative_velocity: [f32; 2],
+    pub contacts: Vec<ContactPoint2D>,
 }
 
 #[derive(Default)]
@@ -88,6 +101,8 @@ pub struct PhysicsRuntimeWorld {
     world_3d: World,
     world_2d: World2D,
     interpolation_alpha_3d: f64,
+    bodies_2d: HashMap<EntityId, BodyId2D>,
+    colliders_2d: HashMap<EntityId, Vec<ColliderId2D>>,
 }
 
 impl PhysicsRuntimeWorld {
@@ -96,6 +111,8 @@ impl PhysicsRuntimeWorld {
             world_3d: World::new(),
             world_2d: World2D::new(),
             interpolation_alpha_3d: 0.0,
+            bodies_2d: HashMap::new(),
+            colliders_2d: HashMap::new(),
         }
     }
 
@@ -113,6 +130,12 @@ impl PhysicsRuntimeWorld {
 
     pub fn world_2d_mut(&mut self) -> &mut World2D {
         &mut self.world_2d
+    }
+
+    pub fn clear_2d(&mut self) {
+        self.world_2d = World2D::new();
+        self.bodies_2d.clear();
+        self.colliders_2d.clear();
     }
 
     pub fn summary(&self) -> PhysicsWorldSummary {
@@ -221,11 +244,112 @@ impl PhysicsRuntimeWorld {
     }
 
     pub fn add_body_2d(&mut self, desc: BodyDesc2D) -> BodyId2D {
-        self.world_2d.add_body(desc)
+        let entity = desc.game_object;
+        let id = self.world_2d.add_body(desc);
+        self.bodies_2d.insert(entity, id);
+        id
     }
 
     pub fn add_collider_2d(&mut self, desc: ColliderDesc2D) -> ColliderId2D {
-        self.world_2d.add_collider(desc)
+        let entity = desc.game_object;
+        let id = self.world_2d.add_collider(desc);
+        self.colliders_2d.entry(entity).or_default().push(id);
+        id
+    }
+
+    pub fn body_id_2d(&self, entity: EntityId) -> Option<BodyId2D> {
+        self.bodies_2d.get(&entity).copied()
+    }
+
+    pub fn collider_ids_2d(&self, entity: EntityId) -> &[ColliderId2D] {
+        self.colliders_2d
+            .get(&entity)
+            .map_or(&[][..], |ids| ids.as_slice())
+    }
+
+    pub fn collider_game_object_2d(&self, collider: ColliderId2D) -> Option<EntityId> {
+        self.world_2d
+            .collider(collider)
+            .map(|collider| collider.game_object)
+    }
+
+    pub fn body_velocity_2d(&self, entity: EntityId) -> Option<[f32; 2]> {
+        let id = self.body_id_2d(entity)?;
+        self.world_2d.body(id).map(|body| body.linear_velocity)
+    }
+
+    pub fn set_body_velocity_2d(&mut self, entity: EntityId, velocity: [f32; 2]) -> bool {
+        let Some(id) = self.body_id_2d(entity) else {
+            return false;
+        };
+        let Some(body) = self.world_2d.body_mut(id) else {
+            return false;
+        };
+        body.linear_velocity = velocity;
+        true
+    }
+
+    pub fn move_body_position_2d(&mut self, entity: EntityId, target: [f32; 2]) -> bool {
+        let Some(id) = self.body_id_2d(entity) else {
+            return false;
+        };
+        let Some(body) = self.world_2d.body_mut(id) else {
+            return false;
+        };
+        body.move_position(target);
+        true
+    }
+
+    pub fn set_body_simulated_2d(&mut self, entity: EntityId, simulated: bool) -> bool {
+        let Some(id) = self.body_id_2d(entity) else {
+            return false;
+        };
+        let Some(body) = self.world_2d.body_mut(id) else {
+            return false;
+        };
+        body.simulated = simulated;
+        true
+    }
+
+    pub fn set_body_type_2d(&mut self, entity: EntityId, body_type: BodyType2D) -> bool {
+        let Some(id) = self.body_id_2d(entity) else {
+            return false;
+        };
+        let Some(body) = self.world_2d.body_mut(id) else {
+            return false;
+        };
+        body.body_type = body_type;
+        true
+    }
+
+    pub fn set_body_interpolation_2d(
+        &mut self,
+        entity: EntityId,
+        interpolation: RigidbodyInterpolation2D,
+    ) -> bool {
+        let Some(id) = self.body_id_2d(entity) else {
+            return false;
+        };
+        let Some(body) = self.world_2d.body_mut(id) else {
+            return false;
+        };
+        body.interpolation = interpolation;
+        true
+    }
+
+    pub fn set_body_collision_detection_mode_2d(
+        &mut self,
+        entity: EntityId,
+        mode: CollisionDetectionMode2D,
+    ) -> bool {
+        let Some(id) = self.body_id_2d(entity) else {
+            return false;
+        };
+        let Some(body) = self.world_2d.body_mut(id) else {
+            return false;
+        };
+        body.collision_detection_mode = mode;
+        true
     }
 
     pub fn set_effector_2d(&mut self, collider: ColliderId2D, effector: Effector2D) -> bool {
@@ -296,11 +420,11 @@ impl PhysicsRuntimeWorld {
         self.world_2d.drain_messages()
     }
 
-    pub fn step_2d_contacts(&mut self, delta_seconds: f32) -> Vec<ContactEvent2D> {
+    pub fn step_2d_contacts(&mut self, delta_seconds: f32) -> Vec<ContactEvent> {
         let messages = self.step_2d(delta_seconds);
         messages
             .iter()
-            .map(|message| ContactEvent2D {
+            .map(|message| ContactEvent {
                 a: message.recipient,
                 b: self
                     .world_2d
@@ -308,6 +432,9 @@ impl PhysicsRuntimeWorld {
                     .map_or(message.recipient, |collider| collider.game_object),
                 trigger: message.kind.is_trigger(),
                 phase: message.kind.phase(),
+                is_2d: true,
+                contacts: message.contacts.clone(),
+                relative_velocity: message.relative_velocity,
             })
             .collect()
     }
@@ -336,6 +463,30 @@ impl PhysicsRuntimeWorld {
     ) -> Vec<RaycastHit2D> {
         self.world_2d
             .raycast(origin, direction, max_distance, filter)
+    }
+
+    pub fn overlap_point_2d(&self, point: [f32; 2], filter: ContactFilter2D) -> Vec<ColliderId2D> {
+        self.world_2d.overlap_point(point, filter)
+    }
+
+    pub fn overlap_circle_2d(
+        &self,
+        center: [f32; 2],
+        radius: f32,
+        filter: ContactFilter2D,
+    ) -> Vec<ColliderId2D> {
+        self.world_2d.overlap_circle(center, radius, filter)
+    }
+
+    pub fn overlap_box_2d(
+        &self,
+        center: [f32; 2],
+        half_extents: [f32; 2],
+        angle: f32,
+        filter: ContactFilter2D,
+    ) -> Vec<ColliderId2D> {
+        self.world_2d
+            .overlap_box(center, half_extents, angle, filter)
     }
 
     pub fn matrix_3d(&self) -> &CollisionMatrix {

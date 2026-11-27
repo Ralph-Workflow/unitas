@@ -10,6 +10,8 @@ mod teleport_tests;
 mod trails_tests;
 #[path = "simulation/two_d_effector_tests.rs"]
 mod two_d_effector_tests;
+#[path = "simulation/two_d_game02_tests.rs"]
+mod two_d_game02_tests;
 #[path = "simulation/two_d_tests.rs"]
 mod two_d_tests;
 

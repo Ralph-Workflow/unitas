@@ -21,16 +21,26 @@ use unitas_audio::{AudioClip, AudioMixerGroup};
 use unitas_core::EntityId;
 use unitas_jobs::JobHandle;
 use unitas_physics::trails::TrailSettings;
+use unitas_physics::two_d::body::{
+    BodyDesc2D, BodyType2D, CollisionDetectionMode2D, RigidbodyInterpolation2D,
+};
+use unitas_physics::two_d::{
+    ColliderDesc2D, ColliderId2D, ContactFilter2D, PlatformEffector2D, SurfaceEffector2D,
+};
 use unitas_physics::{CollisionDetectionMode3D, CollisionPayload, ForceMode};
 use unitas_render::Vec3;
 
 use crate::error::RuntimeError;
 use crate::jobs::job_system;
+use crate::physics::CollisionPayload2D;
 use crate::player_loop::{self, CustomSystemPosition};
 pub use crate::runtime::CharacterMoveRequest;
-use crate::runtime::{Callbacks, LoadSceneMode, QueryRecord, RenderCameraParams, Runtime};
+use crate::runtime::{
+    Callbacks, LoadSceneMode, QueryRecord, QueryRecord2D, RenderCameraParams, Runtime,
+};
 
 const QUERY_RECORD_SIZE: usize = 64;
+const QUERY_RECORD_2D_SIZE: usize = 32;
 const ANIMATOR_STATE_INFO_SIZE: usize = 80;
 const CAMERA_BLOB_SIZE: usize = 32;
 const CAMERA_BLOB_FLOATS: usize = 8;
@@ -103,13 +113,35 @@ pub struct CollisionContactPoint {
     pub impulse: f32,
 }
 
+/// The 2D collision summary the managed `Collision2D` reads.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct CollisionSummary2D {
+    pub impulse: f32,
+    pub relative_velocity: [f32; 2],
+    pub contact_count: u32,
+    pub point: [f32; 2],
+    pub normal: [f32; 2],
+}
+
+/// One 2D contact point the managed `ContactPoint2D` reads.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct CollisionContactPoint2D {
+    pub point: [f32; 2],
+    pub normal: [f32; 2],
+    pub impulse: f32,
+}
+
 pub struct RuntimeState {
     pub runtime: Runtime,
     pub path_buffer: Vec<u8>,
     pub query_buffer: Vec<u8>,
+    pub query_buffer_2d: Vec<u8>,
     pub render_buffer: Vec<u8>,
     pub player_loop_buffer: Vec<u8>,
     pub query_records: Vec<QueryRecord>,
+    pub query_records_2d: Vec<QueryRecord2D>,
     pub last_error: Option<Vec<u8>>,
 }
 
@@ -119,9 +151,11 @@ impl RuntimeState {
             runtime,
             path_buffer: Vec::new(),
             query_buffer: Vec::new(),
+            query_buffer_2d: Vec::new(),
             render_buffer: Vec::new(),
             player_loop_buffer: Vec::new(),
             query_records: Vec::new(),
+            query_records_2d: Vec::new(),
             last_error: None,
         }
     }
@@ -1114,6 +1148,662 @@ pub extern "C" fn unitas_runtime_move_body_position(entity: u64, x: f32, y: f32,
         None => -1,
     }
 }
+}
+
+ffi_export! {
+pub extern "C" fn unitas_runtime_body2d_create(
+    handle: u64,
+    entity: u64,
+    position_x: f32,
+    position_y: f32,
+    rotation: f32,
+    mass: f32,
+    gravity_scale: f32,
+    body_type: u32,
+    layer: u32,
+    simulated: u32,
+    interpolation: u32,
+    collision_detection_mode: u32,
+) -> i32 {
+    match with_runtime_state(handle, |state| {
+        let entity = EntityId::new(entity);
+        let position = [position_x, position_y];
+        let mut body = match body_type {
+            1 => BodyDesc2D::kinematic(entity, position),
+            2 => BodyDesc2D::static_body(entity, position),
+            _ => BodyDesc2D::dynamic(entity, position),
+        };
+        body = body
+            .with_rotation(rotation)
+            .with_mass(mass)
+            .with_gravity_scale(gravity_scale)
+            .with_layer(layer as u8)
+            .with_simulated(simulated != 0);
+        body = match interpolation {
+            1 => body.with_interpolation(RigidbodyInterpolation2D::Interpolate),
+            2 => body.with_interpolation(RigidbodyInterpolation2D::Extrapolate),
+            _ => body,
+        };
+        body = match collision_detection_mode {
+            1 => body.with_collision_detection_mode(CollisionDetectionMode2D::Continuous),
+            _ => body,
+        };
+        state.runtime.physics_mut().add_body_2d(body);
+        state.clear_error();
+        0
+    }) {
+        Ok(code) => code,
+        Err(code) => code,
+    }
+}
+}
+
+ffi_export! {
+pub extern "C" fn unitas_runtime_collider2d_create(
+    handle: u64,
+    entity: u64,
+    attached_body: u64,
+    shape: u32,
+    offset_x: f32,
+    offset_y: f32,
+    size_x: f32,
+    size_y: f32,
+    radius: f32,
+    is_trigger: u32,
+    layer: u32,
+) -> i32 {
+    match with_runtime_state(handle, |state| {
+        let entity = EntityId::new(entity);
+        let mut collider = match shape {
+            1 => ColliderDesc2D::circle_collider(entity, radius),
+            _ => ColliderDesc2D::box_collider(entity, [size_x / 2.0, size_y / 2.0]),
+        };
+        collider = collider
+            .with_offset([offset_x, offset_y])
+            .with_trigger(is_trigger != 0)
+            .with_layer(layer as u8);
+        if attached_body != 0 {
+            let attached = state
+                .runtime
+                .physics_mut()
+                .body_id_2d(EntityId::new(attached_body));
+            if let Some(attached) = attached {
+                collider = collider.with_attached_body(attached);
+            }
+        }
+        state.runtime.physics_mut().add_collider_2d(collider);
+        state.clear_error();
+        0
+    }) {
+        Ok(code) => code,
+        Err(code) => code,
+    }
+}
+}
+
+ffi_export! {
+pub extern "C" fn unitas_runtime_body2d_velocity(
+    handle: u64,
+    entity: u64,
+    out_buffer: u64,
+) -> i32 {
+    match with_runtime_state(handle, |state| {
+        if out_buffer == 0
+            || out_buffer != state.path_buffer.as_ptr() as usize as u64
+            || state.path_buffer.len() < 8
+        {
+            state.set_error("buffer address mismatch");
+            return -2;
+        }
+        let Some(velocity) = state
+            .runtime
+            .physics_mut()
+            .body_velocity_2d(EntityId::new(entity))
+        else {
+            state.set_error("body not found");
+            return -4;
+        };
+        state.path_buffer[0..4].copy_from_slice(&velocity[0].to_le_bytes());
+        state.path_buffer[4..8].copy_from_slice(&velocity[1].to_le_bytes());
+        state.clear_error();
+        0
+    }) {
+        Ok(code) => code,
+        Err(code) => code,
+    }
+}
+}
+
+ffi_export! {
+pub extern "C" fn unitas_runtime_body2d_set_velocity(
+    handle: u64,
+    entity: u64,
+    x: f32,
+    y: f32,
+) -> i32 {
+    match with_runtime_state(handle, |state| {
+        if !state
+            .runtime
+            .physics_mut()
+            .set_body_velocity_2d(EntityId::new(entity), [x, y])
+        {
+            state.set_error("body not found");
+            return -4;
+        }
+        state.clear_error();
+        0
+    }) {
+        Ok(code) => code,
+        Err(code) => code,
+    }
+}
+}
+
+ffi_export! {
+pub extern "C" fn unitas_runtime_body2d_move_position(
+    handle: u64,
+    entity: u64,
+    x: f32,
+    y: f32,
+) -> i32 {
+    match with_runtime_state(handle, |state| {
+        if !state
+            .runtime
+            .physics_mut()
+            .move_body_position_2d(EntityId::new(entity), [x, y])
+        {
+            state.set_error("body not found");
+            return -4;
+        }
+        state.clear_error();
+        0
+    }) {
+        Ok(code) => code,
+        Err(code) => code,
+    }
+}
+}
+
+ffi_export! {
+pub extern "C" fn unitas_runtime_body2d_set_simulated(
+    handle: u64,
+    entity: u64,
+    simulated: u32,
+) -> i32 {
+    match with_runtime_state(handle, |state| {
+        if !state
+            .runtime
+            .physics_mut()
+            .set_body_simulated_2d(EntityId::new(entity), simulated != 0)
+        {
+            state.set_error("body not found");
+            return -4;
+        }
+        state.clear_error();
+        0
+    }) {
+        Ok(code) => code,
+        Err(code) => code,
+    }
+}
+}
+
+ffi_export! {
+pub extern "C" fn unitas_runtime_body2d_set_body_type(
+    handle: u64,
+    entity: u64,
+    body_type: u32,
+) -> i32 {
+    let body_type = match body_type {
+        0 => BodyType2D::Dynamic,
+        1 => BodyType2D::Kinematic,
+        2 => BodyType2D::Static,
+        _ => {
+            return match with_runtime_state(handle, |state| {
+                state.set_error("unknown 2D body type");
+                -2
+            }) {
+                Ok(code) => code,
+                Err(code) => code,
+            };
+        }
+    };
+    match with_runtime_state(handle, |state| {
+        if !state
+            .runtime
+            .physics_mut()
+            .set_body_type_2d(EntityId::new(entity), body_type)
+        {
+            state.set_error("body not found");
+            return -4;
+        }
+        state.clear_error();
+        0
+    }) {
+        Ok(code) => code,
+        Err(code) => code,
+    }
+}
+}
+
+ffi_export! {
+pub extern "C" fn unitas_runtime_body2d_set_interpolation(
+    handle: u64,
+    entity: u64,
+    interpolation: u32,
+) -> i32 {
+    let interpolation = match interpolation {
+        0 => RigidbodyInterpolation2D::None,
+        1 => RigidbodyInterpolation2D::Interpolate,
+        2 => RigidbodyInterpolation2D::Extrapolate,
+        _ => {
+            return match with_runtime_state(handle, |state| {
+                state.set_error("unknown 2D interpolation mode");
+                -2
+            }) {
+                Ok(code) => code,
+                Err(code) => code,
+            };
+        }
+    };
+    match with_runtime_state(handle, |state| {
+        if !state
+            .runtime
+            .physics_mut()
+            .set_body_interpolation_2d(EntityId::new(entity), interpolation)
+        {
+            state.set_error("body not found");
+            return -4;
+        }
+        state.clear_error();
+        0
+    }) {
+        Ok(code) => code,
+        Err(code) => code,
+    }
+}
+}
+
+ffi_export! {
+pub extern "C" fn unitas_runtime_body2d_set_collision_detection_mode(
+    handle: u64,
+    entity: u64,
+    mode: u32,
+) -> i32 {
+    let mode = match mode {
+        0 => CollisionDetectionMode2D::Discrete,
+        1 => CollisionDetectionMode2D::Continuous,
+        _ => {
+            return match with_runtime_state(handle, |state| {
+                state.set_error("unknown 2D collision detection mode");
+                -2
+            }) {
+                Ok(code) => code,
+                Err(code) => code,
+            };
+        }
+    };
+    match with_runtime_state(handle, |state| {
+        if !state
+            .runtime
+            .physics_mut()
+            .set_body_collision_detection_mode_2d(EntityId::new(entity), mode)
+        {
+            state.set_error("body not found");
+            return -4;
+        }
+        state.clear_error();
+        0
+    }) {
+        Ok(code) => code,
+        Err(code) => code,
+    }
+}
+}
+
+ffi_export! {
+pub extern "C" fn unitas_runtime_raycast2d(
+    handle: u64,
+    origin_x: f32,
+    origin_y: f32,
+    direction_x: f32,
+    direction_y: f32,
+    max_distance: f32,
+    layer_mask: u32,
+    include_triggers: i32,
+) -> i32 {
+    match with_runtime_state(handle, |state| {
+        let filter = ContactFilter2D::default()
+            .with_triggers(include_triggers != 0)
+            .with_layer_mask(layer_mask);
+        let hits = state.runtime.physics_mut().raycast_2d(
+            [origin_x, origin_y],
+            [direction_x, direction_y],
+            max_distance,
+            filter,
+        );
+        let records = hits
+            .iter()
+            .map(|hit| QueryRecord2D {
+                entity: hit.game_object.as_u64(),
+                distance: hit.distance,
+                point: hit.point,
+                normal: hit.normal,
+            })
+            .collect();
+        store_query_records_2d(state, records)
+    }) {
+        Ok(count) => count,
+        Err(code) => code,
+    }
+}
+}
+
+ffi_export! {
+pub extern "C" fn unitas_runtime_overlap_point2d(
+    handle: u64,
+    x: f32,
+    y: f32,
+    layer_mask: u32,
+) -> i32 {
+    match with_runtime_state(handle, |state| {
+        let filter = ContactFilter2D::default().with_layer_mask(layer_mask);
+        let colliders = state
+            .runtime
+            .physics_mut()
+            .overlap_point_2d([x, y], filter);
+        let records = collider_records_2d(state, &colliders, [x, y]);
+        store_query_records_2d(state, records)
+    }) {
+        Ok(count) => count,
+        Err(code) => code,
+    }
+}
+}
+
+ffi_export! {
+pub extern "C" fn unitas_runtime_overlap_circle2d(
+    handle: u64,
+    x: f32,
+    y: f32,
+    radius: f32,
+    layer_mask: u32,
+) -> i32 {
+    match with_runtime_state(handle, |state| {
+        let filter = ContactFilter2D::default().with_layer_mask(layer_mask);
+        let colliders = state
+            .runtime
+            .physics_mut()
+            .overlap_circle_2d([x, y], radius, filter);
+        let records = collider_records_2d(state, &colliders, [x, y]);
+        store_query_records_2d(state, records)
+    }) {
+        Ok(count) => count,
+        Err(code) => code,
+    }
+}
+}
+
+ffi_export! {
+pub extern "C" fn unitas_runtime_overlap_box2d(
+    handle: u64,
+    x: f32,
+    y: f32,
+    half_x: f32,
+    half_y: f32,
+    angle: f32,
+    layer_mask: u32,
+) -> i32 {
+    match with_runtime_state(handle, |state| {
+        let filter = ContactFilter2D::default().with_layer_mask(layer_mask);
+        let colliders = state
+            .runtime
+            .physics_mut()
+            .overlap_box_2d([x, y], [half_x, half_y], angle, filter);
+        let records = collider_records_2d(state, &colliders, [x, y]);
+        store_query_records_2d(state, records)
+    }) {
+        Ok(count) => count,
+        Err(code) => code,
+    }
+}
+}
+
+ffi_export! {
+pub extern "C" fn unitas_runtime_query_buffer_2d(handle: u64, capacity: u32) -> u64 {
+    if capacity == 0 {
+        return 0;
+    }
+    let size = match usize::try_from(capacity) {
+        Ok(value) => value,
+        Err(_) => return 0,
+    };
+    with_runtime_state(handle, |state| {
+        state.query_buffer_2d = vec![0u8; size];
+        write_query_records_2d(state);
+        state.query_buffer_2d.as_ptr() as usize as u64
+    })
+    .unwrap_or_default()
+}
+}
+
+ffi_export! {
+pub extern "C" fn unitas_runtime_collision_summary_2d(
+    a: u64,
+    b: u64,
+    out: *mut CollisionSummary2D,
+) -> i32 {
+    let Some(summary) = with_collision_payload_2d(a, b, &|payload| CollisionSummary2D {
+        impulse: payload.impulse,
+        relative_velocity: payload.relative_velocity,
+        contact_count: payload.contacts.len() as u32,
+        point: payload
+            .contacts
+            .first()
+            .map_or([0.0; 2], |contact| contact.point),
+        normal: payload
+            .contacts
+            .first()
+            .map_or([0.0; 2], |contact| contact.normal),
+    }) else {
+        return -1;
+    };
+    if !write_output(out, summary) {
+        return -2;
+    }
+    0
+}
+}
+
+ffi_export! {
+pub extern "C" fn unitas_runtime_collision_contact_2d(
+    a: u64,
+    b: u64,
+    index: u32,
+    out: *mut CollisionContactPoint2D,
+) -> i32 {
+    let Some(contact) = with_collision_payload_2d(a, b, &|payload| {
+        payload
+            .contacts
+            .get(index as usize)
+            .map(|contact| CollisionContactPoint2D {
+                point: contact.point,
+                normal: contact.normal,
+                impulse: contact.normal_impulse,
+            })
+    }) else {
+        return -1;
+    };
+    let Some(contact) = contact else {
+        return -1;
+    };
+    if !write_output(out, contact) {
+        return -2;
+    }
+    0
+}
+}
+
+ffi_export! {
+pub extern "C" fn unitas_runtime_physics2d_clear(handle: u64) -> i32 {
+    match with_runtime_state(handle, |state| {
+        state.runtime.physics_mut().clear_2d();
+        state.clear_error();
+        0
+    }) {
+        Ok(code) => code,
+        Err(code) => code,
+    }
+}
+}
+
+ffi_export! {
+pub extern "C" fn unitas_runtime_collider2d_set_platform_effector(
+    handle: u64,
+    entity: u64,
+    use_one_way: u32,
+    surface_arc: f32,
+    rotational_offset: f32,
+    side_arc: f32,
+    use_side_friction: u32,
+    use_side_bounce: u32,
+) -> i32 {
+    match with_runtime_state(handle, |state| {
+        let entity = EntityId::new(entity);
+        let colliders = state.runtime.physics_mut().collider_ids_2d(entity).to_vec();
+        let mut applied = false;
+        for collider in colliders {
+            let effector = PlatformEffector2D {
+                use_one_way: use_one_way != 0,
+                surface_arc,
+                rotational_offset,
+                side_arc,
+                use_side_friction: use_side_friction != 0,
+                use_side_bounce: use_side_bounce != 0,
+                collider_mask: u32::MAX,
+            };
+            applied |= state
+                .runtime
+                .physics_mut()
+                .set_platform_effector_2d(collider, effector);
+        }
+        if !applied {
+            state.set_error("collider not found");
+            return -4;
+        }
+        state.clear_error();
+        0
+    }) {
+        Ok(code) => code,
+        Err(code) => code,
+    }
+}
+}
+
+ffi_export! {
+pub extern "C" fn unitas_runtime_collider2d_set_surface_effector(
+    handle: u64,
+    entity: u64,
+    speed: f32,
+    force_scale: f32,
+    use_friction: u32,
+    use_bounce: u32,
+) -> i32 {
+    match with_runtime_state(handle, |state| {
+        let entity = EntityId::new(entity);
+        let colliders = state.runtime.physics_mut().collider_ids_2d(entity).to_vec();
+        let mut applied = false;
+        for collider in colliders {
+            let effector = SurfaceEffector2D {
+                speed,
+                speed_variation: 0.0,
+                force_scale,
+                use_contact_force: false,
+                use_friction: use_friction != 0,
+                use_bounce: use_bounce != 0,
+                collider_mask: u32::MAX,
+            };
+            applied |= state
+                .runtime
+                .physics_mut()
+                .set_surface_effector_2d(collider, effector);
+        }
+        if !applied {
+            state.set_error("collider not found");
+            return -4;
+        }
+        state.clear_error();
+        0
+    }) {
+        Ok(code) => code,
+        Err(code) => code,
+    }
+}
+}
+
+fn collider_records_2d(
+    state: &mut RuntimeState,
+    colliders: &[ColliderId2D],
+    point: [f32; 2],
+) -> Vec<QueryRecord2D> {
+    colliders
+        .iter()
+        .filter_map(|collider| {
+            state
+                .runtime
+                .physics_mut()
+                .collider_game_object_2d(*collider)
+                .map(|entity| QueryRecord2D {
+                    entity: entity.as_u64(),
+                    distance: 0.0,
+                    point,
+                    normal: [0.0; 2],
+                })
+        })
+        .collect()
+}
+
+fn store_query_records_2d(state: &mut RuntimeState, records: Vec<QueryRecord2D>) -> i32 {
+    let count = records.len();
+    state.query_records_2d = records;
+    write_query_records_2d(state);
+    let Ok(count_value) = i32::try_from(count) else {
+        return -1;
+    };
+    count_value
+}
+
+fn write_query_records_2d(state: &mut RuntimeState) {
+    state.query_buffer_2d.fill(0);
+    let capacity = state.query_buffer_2d.len() / QUERY_RECORD_2D_SIZE;
+    let count = state.query_records_2d.len().min(capacity);
+    for (index, record) in state.query_records_2d.iter().take(count).enumerate() {
+        let offset = index * QUERY_RECORD_2D_SIZE;
+        state.query_buffer_2d[offset..offset + 8].copy_from_slice(&record.entity.to_le_bytes());
+        state.query_buffer_2d[offset + 8..offset + 12]
+            .copy_from_slice(&record.distance.to_le_bytes());
+        state.query_buffer_2d[offset + 12..offset + 16]
+            .copy_from_slice(&record.point[0].to_le_bytes());
+        state.query_buffer_2d[offset + 16..offset + 20]
+            .copy_from_slice(&record.point[1].to_le_bytes());
+        state.query_buffer_2d[offset + 20..offset + 24]
+            .copy_from_slice(&record.normal[0].to_le_bytes());
+        state.query_buffer_2d[offset + 24..offset + 28]
+            .copy_from_slice(&record.normal[1].to_le_bytes());
+    }
+}
+
+fn with_collision_payload_2d<T>(
+    first: u64,
+    second: u64,
+    action: &impl Fn(&CollisionPayload2D) -> T,
+) -> Option<T> {
+    if let Some(value) =
+        with_active_runtime(|runtime| runtime.collision_payload_2d(first, second).map(action))
+    {
+        return Some(value);
+    }
+    with_registered_runtime(|runtime| runtime.collision_payload_2d(first, second).map(action))
 }
 
 fn to_f32(vector: [f64; 3]) -> [f32; 3] {
@@ -3359,8 +4049,13 @@ where
         let mut temp_state = RuntimeState::new(active_runtime);
         std::mem::swap(&mut temp_state.path_buffer, &mut state.path_buffer);
         std::mem::swap(&mut temp_state.query_buffer, &mut state.query_buffer);
+        std::mem::swap(&mut temp_state.query_buffer_2d, &mut state.query_buffer_2d);
         std::mem::swap(&mut temp_state.render_buffer, &mut state.render_buffer);
         std::mem::swap(&mut temp_state.query_records, &mut state.query_records);
+        std::mem::swap(
+            &mut temp_state.query_records_2d,
+            &mut state.query_records_2d,
+        );
         std::mem::swap(&mut temp_state.last_error, &mut state.last_error);
 
         ACTIVE_STATES.with(|cell| {
@@ -3373,8 +4068,16 @@ where
         if let Some((_, mut returned_state)) = popped {
             std::mem::swap(&mut returned_state.path_buffer, &mut state.path_buffer);
             std::mem::swap(&mut returned_state.query_buffer, &mut state.query_buffer);
+            std::mem::swap(
+                &mut returned_state.query_buffer_2d,
+                &mut state.query_buffer_2d,
+            );
             std::mem::swap(&mut returned_state.render_buffer, &mut state.render_buffer);
             std::mem::swap(&mut returned_state.query_records, &mut state.query_records);
+            std::mem::swap(
+                &mut returned_state.query_records_2d,
+                &mut state.query_records_2d,
+            );
             std::mem::swap(&mut returned_state.last_error, &mut state.last_error);
             *runtime = returned_state.runtime;
         }

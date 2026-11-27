@@ -75,6 +75,7 @@ pub struct BodyDesc2D {
     pub use_full_kinematic_contacts: bool,
     pub game_object: EntityId,
     pub layer: u8,
+    pub freeze_rotation: bool,
 }
 
 impl Default for BodyDesc2D {
@@ -97,6 +98,7 @@ impl Default for BodyDesc2D {
             use_full_kinematic_contacts: false,
             game_object: EntityId::new(0),
             layer: 0,
+            freeze_rotation: false,
         }
     }
 }
@@ -184,6 +186,11 @@ impl BodyDesc2D {
         self.interpolation = interpolation;
         self
     }
+
+    pub fn with_freeze_rotation(mut self, freeze_rotation: bool) -> Self {
+        self.freeze_rotation = freeze_rotation;
+        self
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -206,6 +213,7 @@ pub struct Rigidbody2D {
     pub use_full_kinematic_contacts: bool,
     pub game_object: EntityId,
     pub layer: u8,
+    pub freeze_rotation: bool,
     pub(crate) accumulated_force: [f32; 2],
     pub(crate) accumulated_torque: f32,
     pub(crate) sleep_timer: f32,
@@ -243,6 +251,7 @@ impl Rigidbody2D {
             use_full_kinematic_contacts: desc.use_full_kinematic_contacts,
             game_object: desc.game_object,
             layer: desc.layer,
+            freeze_rotation: desc.freeze_rotation,
             accumulated_force: [0.0, 0.0],
             accumulated_torque: 0.0,
             sleep_timer: 0.0,

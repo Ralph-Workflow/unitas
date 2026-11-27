@@ -43,7 +43,7 @@ use crate::error::{RenderError, RuntimeError};
 use crate::input::{AxisConfig, InputState, default_axis_configs};
 use crate::navigation::NavigationRuntimeWorld;
 use crate::particles::{ParticleDrawItem, ParticleRuntimeWorld, ParticleRuntimeWorld2D};
-use crate::physics::{ContactEvent2D, PhysicsRuntimeWorld, layer_bits};
+use crate::physics::{CollisionPayload2D, ContactEvent, PhysicsRuntimeWorld, layer_bits};
 use crate::physics_settings::{
     collision_detection_of, interpolation_of, layer_matrix_of, material_of, solver_settings_of,
 };
@@ -187,7 +187,7 @@ pub struct Callbacks {
 pub(crate) struct PhysicsMessages {
     events: Vec<CollisionEvent>,
     trigger_events: Vec<TriggerEvent>,
-    contacts_2d: Vec<ContactEvent2D>,
+    contacts_2d: Vec<ContactEvent>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -196,6 +196,14 @@ pub struct QueryRecord {
     pub distance: f64,
     pub point: [f64; 3],
     pub normal: [f64; 3],
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct QueryRecord2D {
+    pub entity: u64,
+    pub distance: f32,
+    pub point: [f32; 2],
+    pub normal: [f32; 2],
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -381,6 +389,7 @@ pub struct Runtime {
     pub(crate) physics_settings: Option<PhysicsProjectSettings>,
     pub(crate) quality_settings: QualitySettings,
     pub(crate) collision_payloads: HashMap<(u64, u64), CollisionPayload>,
+    pub(crate) collision_payloads_2d: HashMap<(u64, u64), CollisionPayload2D>,
     pub(crate) callbacks: Option<Callbacks>,
     pub(crate) fixed_timestep: f64,
     pub(crate) maximum_delta_time: f64,
@@ -429,6 +438,7 @@ impl Runtime {
             physics_settings: None,
             quality_settings: QualitySettings::default(),
             collision_payloads: HashMap::new(),
+            collision_payloads_2d: HashMap::new(),
             callbacks: None,
             fixed_timestep: DEFAULT_FIXED_TIMESTEP,
             maximum_delta_time: DEFAULT_MAXIMUM_DELTA_TIME,
@@ -1666,19 +1676,21 @@ impl Runtime {
         let Some(callbacks) = self.callbacks else {
             return;
         };
+        // A step's physics messages are dispatched before the next step
+        // runs, so the message order does not depend on how many fixed
+        // steps a rendered frame happens to batch. The 2D contacts join
+        // the 3D ones on one contact-event path, and the `is_2d`
+        // discriminator keeps a 2D contact off the 3D handlers.
+        let mut contacts: Vec<ContactEvent> = Vec::new();
         for event in messages.events {
-            let a = event.a;
-            let b = event.b;
-            let payload = self.physics.world_3d().collision_payload(a, b).cloned();
-            if let Some(payload) = payload {
-                self.collision_payloads
-                    .insert(ordered_pair(a.as_u64(), b.as_u64()), payload);
-            }
-            let a = a.as_u64();
-            let b = b.as_u64();
-            let phase = phase_code(event.phase);
-            hook(self, &mut || {
-                (callbacks.collision)(a, b, phase);
+            contacts.push(ContactEvent {
+                a: event.a,
+                b: event.b,
+                trigger: false,
+                phase: event.phase,
+                is_2d: false,
+                contacts: Vec::new(),
+                relative_velocity: [0.0; 2],
             });
         }
         for event in messages.trigger_events {
@@ -1687,17 +1699,44 @@ impl Runtime {
             if !has_rigidbody {
                 continue;
             }
-            let a = event.a.as_u64();
-            let b = event.b.as_u64();
-            let phase = phase_code(event.phase);
-            hook(self, &mut || {
-                (callbacks.trigger)(a, b, phase);
+            contacts.push(ContactEvent {
+                a: event.a,
+                b: event.b,
+                trigger: true,
+                phase: event.phase,
+                is_2d: false,
+                contacts: Vec::new(),
+                relative_velocity: [0.0; 2],
             });
         }
-        for contact in messages.contacts_2d {
-            let a = contact.a.as_u64();
-            let b = contact.b.as_u64();
-            let phase = phase_code(contact.phase);
+        contacts.extend(messages.contacts_2d);
+        for contact in contacts {
+            let a = contact.a;
+            let b = contact.b;
+            if !contact.is_2d && !contact.trigger {
+                let payload = self.physics.world_3d().collision_payload(a, b).cloned();
+                if let Some(payload) = payload {
+                    self.collision_payloads
+                        .insert(ordered_pair(a.as_u64(), b.as_u64()), payload);
+                }
+            }
+            if contact.is_2d && !contact.trigger {
+                self.collision_payloads_2d.insert(
+                    (a.as_u64(), b.as_u64()),
+                    CollisionPayload2D {
+                        impulse: contact
+                            .contacts
+                            .iter()
+                            .map(|point| point.normal_impulse)
+                            .sum(),
+                        relative_velocity: contact.relative_velocity,
+                        contacts: contact.contacts,
+                    },
+                );
+            }
+            let a = a.as_u64();
+            let b = b.as_u64();
+            let phase = contact_phase_code(contact.phase, contact.is_2d);
             if contact.trigger {
                 hook(self, &mut || {
                     (callbacks.trigger)(a, b, phase);
@@ -2083,6 +2122,12 @@ impl Runtime {
 
     pub fn collision_payload(&self, first: u64, second: u64) -> Option<&CollisionPayload> {
         self.collision_payloads.get(&ordered_pair(first, second))
+    }
+
+    pub fn collision_payload_2d(&self, first: u64, second: u64) -> Option<&CollisionPayload2D> {
+        self.collision_payloads_2d
+            .get(&(first, second))
+            .or_else(|| self.collision_payloads_2d.get(&(second, first)))
     }
 
     pub fn set_body_velocity(
@@ -3167,6 +3212,17 @@ fn phase_code(phase: Phase) -> u32 {
         Phase::Enter => 0,
         Phase::Stay => 1,
         Phase::Exit => 2,
+    }
+}
+
+pub const CONTACT_PHASE_2D_FLAG: u32 = 0x100;
+
+fn contact_phase_code(phase: Phase, is_2d: bool) -> u32 {
+    let code = phase_code(phase);
+    if is_2d {
+        code | CONTACT_PHASE_2D_FLAG
+    } else {
+        code
     }
 }
 

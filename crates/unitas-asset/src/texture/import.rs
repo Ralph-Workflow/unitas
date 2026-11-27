@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::fmt;
 
 use crate::dependencies::{ImportDiagnostic, ImportOutcome};
@@ -5,7 +6,9 @@ use crate::texture::exr::decode_exr;
 use crate::texture::hdr::decode_hdr;
 use crate::texture::jpeg::{decode_jpeg, has_jpeg_signature};
 use crate::texture::png::decode_png;
-use crate::texture::psd::decode_psd;
+use crate::texture::psd::{
+    decode_psd, has_psd_signature, parse_psd_document, PsdDocument, PsdLayer,
+};
 use crate::texture::tga::decode_tga;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1146,7 +1149,7 @@ pub fn decode_texture(bytes: &[u8], file_name: &str) -> Result<DecodedTexture, T
     if lower.ends_with(".exr") {
         return decode_exr(bytes);
     }
-    if lower.ends_with(".psd") {
+    if has_psd_signature(bytes) || lower.ends_with(".psd") || lower.ends_with(".psb") {
         return decode_psd(bytes);
     }
     if lower.ends_with(".hdr") {
@@ -1208,7 +1211,13 @@ pub fn import_texture_for_target(
         .cloned()
         .unwrap_or_else(|| apply_max_size(&decoded, settings.effective_max_size(build_target)));
     let sprites = match settings.sprite_mode {
-        SpriteMode::Multiple => settings.sprite_slices.clone(),
+        SpriteMode::Multiple => {
+            if settings.sprite_slices.is_empty() {
+                document_sprite_slices(bytes, &texture)?
+            } else {
+                settings.sprite_slices.clone()
+            }
+        }
         _ => Vec::new(),
     };
     let has_alpha = texture_has_alpha(&texture, settings);
@@ -1245,6 +1254,82 @@ pub fn import_texture_for_target(
         sprites,
         notes,
     })
+}
+
+fn document_sprite_slices(
+    bytes: &[u8],
+    texture: &DecodedTexture,
+) -> Result<Vec<SpriteSlice>, TextureImportError> {
+    if !has_psd_signature(bytes) {
+        return Ok(Vec::new());
+    }
+    let document = parse_psd_document(bytes)?;
+    Ok(layer_sprite_slices(&document, texture))
+}
+
+fn layer_sprite_slices(document: &PsdDocument, texture: &DecodedTexture) -> Vec<SpriteSlice> {
+    let scale_x = f64::from(texture.width) / f64::from(document.width.max(1));
+    let scale_y = f64::from(texture.height) / f64::from(document.height.max(1));
+    let mut slices = Vec::new();
+    let mut names = HashSet::new();
+    collect_layer_slices(
+        &document.layers,
+        document.height,
+        scale_x,
+        scale_y,
+        &mut names,
+        &mut slices,
+    );
+    slices
+}
+
+fn collect_layer_slices(
+    layers: &[PsdLayer],
+    document_height: u32,
+    scale_x: f64,
+    scale_y: f64,
+    names: &mut HashSet<String>,
+    slices: &mut Vec<SpriteSlice>,
+) {
+    for layer in layers {
+        if !layer.children.is_empty() {
+            collect_layer_slices(
+                &layer.children,
+                document_height,
+                scale_x,
+                scale_y,
+                names,
+                slices,
+            );
+            continue;
+        }
+        let width = layer.rect.width();
+        let height = layer.rect.height();
+        if width == 0 || height == 0 {
+            continue;
+        }
+        let name = unique_sprite_name(&layer.name, names);
+        let x = (f64::from(layer.rect.left) * scale_x).round() as i32;
+        let y =
+            ((f64::from(document_height) - f64::from(layer.rect.bottom)) * scale_y).round() as i32;
+        let sprite_width = (f64::from(width) * scale_x).round() as i32;
+        let sprite_height = (f64::from(height) * scale_y).round() as i32;
+        slices.push(SpriteSlice::new(name, x, y, sprite_width, sprite_height));
+    }
+}
+
+fn unique_sprite_name(name: &str, names: &mut HashSet<String>) -> String {
+    if names.insert(name.to_string()) {
+        return name.to_string();
+    }
+    let mut suffix = 2;
+    loop {
+        let candidate = format!("{name}#{suffix}");
+        if names.insert(candidate.clone()) {
+            return candidate;
+        }
+        suffix += 1;
+    }
 }
 
 pub fn texture_import_outcome(

@@ -13,7 +13,7 @@ use unitas_physics::two_d::{
 use unitas_physics::{BodyDesc, BodyRole, ColliderShape, PhysicsError, Shape};
 use unitas_runtime::particles::ParticleRuntimeWorld;
 use unitas_runtime::physics::PhysicsRuntimeWorld;
-use unitas_runtime::{Callbacks, Runtime};
+use unitas_runtime::{CONTACT_PHASE_2D_FLAG, Callbacks, Runtime};
 
 #[test]
 fn subsystem_entry_physics_3d_inspects_steps_and_routes_matrix_messages() -> Result<(), PhysicsError>
@@ -591,7 +591,8 @@ fn subsystem_entry_runtime_tick_steps_2d_physics_and_dispatches_the_collision_ca
     let floor = floor_entity.as_u64();
     assert!(
         events.iter().any(|(a, b, phase)| {
-            *phase == 0 && ((*a == ball && *b == floor) || (*a == floor && *b == ball))
+            *phase == CONTACT_PHASE_2D_FLAG
+                && ((*a == ball && *b == floor) || (*a == floor && *b == ball))
         }),
         "the 2D contact must reach the script collision callback path: {events:?}"
     );

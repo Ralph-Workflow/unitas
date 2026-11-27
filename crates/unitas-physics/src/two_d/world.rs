@@ -9,8 +9,9 @@ use crate::two_d::body::{
     JointId2D, Rigidbody2D, RigidbodySleepMode2D,
 };
 use crate::two_d::collider::{
-    compute_contact2d, dot2, inverse_transform_point2, length2, normal_angle_degrees, normalize2,
-    point_in_shape2d, raycast_shape2d, rotate_vec2, shape_to_local_shapes_in_frame, sub2,
+    capsule_half_segment, compute_contact2d, convex_gap, dot2, inverse_transform_point2, length2,
+    normal_angle_degrees, normalize2, point_in_shape2d, raycast_shape2d, rotate_vec2,
+    shape_convex_polygons, shape_to_local_shapes_in_frame, shape_vertices_world, sub2,
     surface_normal_at_point, transform_point2, Collider2D, ColliderDesc2D, ColliderId2D,
     PhysicsMaterial2D, Shape2D,
 };
@@ -143,6 +144,13 @@ struct PairState2D {
     rel_vel_for_a: [f32; 2],
 }
 
+/// A rider held at a fixed offset in the carrier's frame.
+#[derive(Clone, Copy, Debug)]
+struct RiderStick2D {
+    carrier: BodyId2D,
+    offset: [f32; 2],
+}
+
 pub struct World2D {
     gravity: [f32; 2],
     fixed_timestep: f32,
@@ -156,6 +164,7 @@ pub struct World2D {
     effectors: BTreeMap<ColliderId2D, Vec<Effector2D>>,
     constant_forces: BTreeMap<BodyId2D, ConstantForce2D>,
     joints: BTreeMap<JointId2D, Joint2D>,
+    riders: BTreeMap<BodyId2D, RiderStick2D>,
     broken_joints: Vec<JointId2D>,
     next_body_id: u64,
     next_collider_id: u64,
@@ -196,6 +205,7 @@ impl World2D {
             effectors: BTreeMap::new(),
             constant_forces: BTreeMap::new(),
             joints: BTreeMap::new(),
+            riders: BTreeMap::new(),
             broken_joints: Vec::new(),
             next_body_id: 1,
             next_collider_id: 1,
@@ -345,6 +355,32 @@ impl World2D {
         std::mem::take(&mut self.broken_joints)
     }
 
+    /// Holds `rider` at a fixed offset in `carrier`'s frame so a carried body
+    /// cannot drift away from the body that carries it. The rider rides rigidly:
+    /// it keeps the offset and the carrier's velocity until it is unstuck.
+    pub fn stick_rider(&mut self, rider: BodyId2D, carrier: BodyId2D) -> bool {
+        if rider == carrier {
+            return false;
+        }
+        let (Some(rider_body), Some(carrier_body)) =
+            (self.bodies.get(&rider), self.bodies.get(&carrier))
+        else {
+            return false;
+        };
+        let relative = sub2(rider_body.position, carrier_body.position);
+        let offset = rotate_vec2(relative, -carrier_body.rotation);
+        self.riders.insert(rider, RiderStick2D { carrier, offset });
+        true
+    }
+
+    pub fn unstick_rider(&mut self, rider: BodyId2D) -> bool {
+        self.riders.remove(&rider).is_some()
+    }
+
+    pub fn rider_carrier(&self, rider: BodyId2D) -> Option<BodyId2D> {
+        self.riders.get(&rider).map(|stick| stick.carrier)
+    }
+
     pub fn collision_matrix(&self) -> &CollisionMatrix {
         &self.collision_matrix
     }
@@ -421,6 +457,8 @@ impl World2D {
                     collider.attached_body = None;
                 }
             }
+            self.riders
+                .retain(|rider, stick| *rider != id && stick.carrier != id);
         }
         existed
     }
@@ -767,6 +805,7 @@ impl World2D {
         self.apply_constant_forces();
         self.apply_area_and_point_effectors(dt);
         self.integrate_bodies(dt);
+        self.apply_rider_sticks();
         self.solve_joints(dt);
         let current_pairs = self.solve_and_collect_contacts(dt);
         self.sync_transforms();
@@ -947,6 +986,102 @@ impl World2D {
             out.push(collider.id);
         }
         out
+    }
+
+    /// Sweeps a box along `direction` and reports every collider it reaches, nearest
+    /// first, filtered by the same rules the other 2D queries use.
+    pub fn box_cast(
+        &self,
+        center: [f32; 2],
+        half_extents: [f32; 2],
+        angle: f32,
+        direction: [f32; 2],
+        distance: f32,
+        filter: ContactFilter2D,
+    ) -> Vec<RaycastHit2D> {
+        if !distance.is_finite() || distance < 0.0 {
+            return Vec::new();
+        }
+        if !half_extents[0].is_finite()
+            || !half_extents[1].is_finite()
+            || half_extents[0] < 0.0
+            || half_extents[1] < 0.0
+        {
+            return Vec::new();
+        }
+        let Some(dir) = normalize2(direction) else {
+            return Vec::new();
+        };
+        let probe = Shape2D::Box { half_extents };
+        let probe_verts: Vec<[f32; 2]> = [
+            [-half_extents[0], -half_extents[1]],
+            [half_extents[0], -half_extents[1]],
+            [half_extents[0], half_extents[1]],
+            [-half_extents[0], half_extents[1]],
+        ]
+        .iter()
+        .map(|corner| transform_point2(*corner, center, angle))
+        .collect();
+
+        let mut hits = Vec::new();
+        for collider in self.colliders.values() {
+            if !self.is_collider_simulated(collider) || !filter.matches_collider(collider) {
+                continue;
+            }
+            let (target_center, target_angle) = self.collider_query_pose(collider);
+            let mut best: Option<(f32, [f32; 2])> = None;
+            for outline in shape_convex_polygons(&collider.shape, target_center, target_angle) {
+                if outline.len() < 2 {
+                    continue;
+                }
+                if let Some((travel, axis)) = box_cast_travel(&probe_verts, dir, distance, &outline)
+                {
+                    if best.is_none_or(|(best_travel, _)| travel < best_travel) {
+                        best = Some((travel, axis));
+                    }
+                }
+            }
+            let Some((travel, axis)) = best else {
+                continue;
+            };
+            if travel <= 0.0 && !self.queries_start_in_colliders {
+                continue;
+            }
+            let hit_center = [center[0] + dir[0] * travel, center[1] + dir[1] * travel];
+            let (point, normal) = match compute_contact2d(
+                &probe,
+                hit_center,
+                angle,
+                &collider.shape,
+                target_center,
+                target_angle,
+            ) {
+                Some(contact) => (contact.point, [-contact.normal[0], -contact.normal[1]]),
+                None => (hit_center, axis),
+            };
+            if !filter.matches_normal_angle(normal) {
+                continue;
+            }
+            hits.push(RaycastHit2D {
+                collider: collider.id,
+                body: collider.attached_body,
+                game_object: collider.game_object,
+                point,
+                normal,
+                distance: travel,
+                fraction: if distance > 0.0 {
+                    travel / distance
+                } else {
+                    0.0
+                },
+            });
+        }
+        hits.sort_by(|a, b| {
+            a.distance
+                .total_cmp(&b.distance)
+                .then(a.collider.cmp(&b.collider))
+        });
+        hits
     }
 
     fn is_collider_simulated(&self, collider: &Collider2D) -> bool {
@@ -1500,6 +1635,32 @@ impl World2D {
         }
     }
 
+    fn apply_rider_sticks(&mut self) {
+        let sticks: Vec<(BodyId2D, RiderStick2D)> =
+            self.riders.iter().map(|(k, v)| (*k, *v)).collect();
+        for (rider_id, stick) in sticks {
+            let Some(carrier) = self.bodies.get(&stick.carrier) else {
+                continue;
+            };
+            let carrier_position = carrier.position;
+            let carrier_rotation = carrier.rotation;
+            let carrier_velocity = carrier.linear_velocity;
+            let carrier_awake = !carrier.sleeping;
+            let Some(rider) = self.bodies.get_mut(&rider_id) else {
+                continue;
+            };
+            let world_offset = rotate_vec2(stick.offset, carrier_rotation);
+            rider.position = [
+                carrier_position[0] + world_offset[0],
+                carrier_position[1] + world_offset[1],
+            ];
+            rider.linear_velocity = carrier_velocity;
+            if carrier_awake {
+                rider.wake_up();
+            }
+        }
+    }
+
     fn integrate_bodies(&mut self, dt: f32) {
         let mut continuous_ids = Vec::new();
         for body in self.bodies.values_mut() {
@@ -1532,6 +1693,10 @@ impl World2D {
                         let damp = (1.0 - body.angular_drag * dt).max(0.0);
                         body.angular_velocity *= damp;
                     }
+                    if body.freeze_rotation {
+                        body.angular_velocity = 0.0;
+                        body.move_target_rotation = None;
+                    }
                     if let Some(target_pos) = body.move_target_position.take() {
                         body.position = target_pos;
                     } else {
@@ -1540,7 +1705,7 @@ impl World2D {
                     }
                     if let Some(target_rot) = body.move_target_rotation.take() {
                         body.rotation = target_rot;
-                    } else {
+                    } else if !body.freeze_rotation {
                         body.rotation += body.angular_velocity * dt;
                     }
                     body.accumulated_force = [0.0, 0.0];
@@ -1691,6 +1856,29 @@ impl World2D {
         for eff in list {
             if let Effector2D::Platform(p) = eff {
                 return Some(*p);
+            }
+        }
+        None
+    }
+
+    /// Side-region rules of the platform effector that owns this contact, if any.
+    fn platform_side_rules(
+        &self,
+        col_a: &Collider2D,
+        angle_a: f32,
+        col_b: &Collider2D,
+        angle_b: f32,
+        normal_from_a_to_b: [f32; 2],
+    ) -> Option<(bool, bool)> {
+        if let Some(plat) = self.platform_effector_for(col_a) {
+            if plat.is_side_contact(angle_a, normal_from_a_to_b) {
+                return Some((plat.use_side_friction, plat.use_side_bounce));
+            }
+        }
+        if let Some(plat) = self.platform_effector_for(col_b) {
+            let normal_from_b_to_a = [-normal_from_a_to_b[0], -normal_from_a_to_b[1]];
+            if plat.is_side_contact(angle_b, normal_from_b_to_a) {
+                return Some((plat.use_side_friction, plat.use_side_bounce));
             }
         }
         None
@@ -1879,10 +2067,26 @@ impl World2D {
 
                         let normal_speed = dot2(rel_vel_b_minus_a, raw_contact.normal);
                         if normal_speed < 0.0 {
-                            let restitution =
+                            let mut restitution =
                                 0.5 * (col_a.material.bounciness + col_b.material.bounciness);
-                            let friction =
+                            let mut friction =
                                 (col_a.material.friction * col_b.material.friction).sqrt();
+                            if let Some((use_side_friction, use_side_bounce)) = self
+                                .platform_side_rules(
+                                    &col_a,
+                                    angle_a,
+                                    &col_b,
+                                    angle_b,
+                                    raw_contact.normal,
+                                )
+                            {
+                                if !use_side_friction {
+                                    friction = 0.0;
+                                }
+                                if !use_side_bounce {
+                                    restitution = 0.0;
+                                }
+                            }
                             normal_impulse = -(1.0 + restitution) * normal_speed / inv_sum;
 
                             if let Some(bid_a) = col_a.attached_body {
@@ -2118,6 +2322,9 @@ fn shape_sweep_radius(shape: &Shape2D) -> f32 {
     match shape {
         Shape2D::Circle { radius } => radius.max(0.05),
         Shape2D::Box { half_extents } => half_extents[0].min(half_extents[1]).max(0.05),
+        Shape2D::Capsule { radius, height, .. } => {
+            (capsule_half_segment(*radius, *height) + *radius).max(0.05)
+        }
         Shape2D::Edge { .. } => 0.05,
         Shape2D::Polygon { vertices } => {
             if vertices.is_empty() {
@@ -2168,21 +2375,21 @@ fn shape_vertical_bounds_and_area(
             let b = transform_point2(*end, center, angle);
             (a[1].min(b[1]), a[1].max(b[1]), 0.0)
         }
+        Shape2D::Capsule { .. } => {
+            let Some(verts) = shape_vertices_world(shape, center, angle) else {
+                return (center[1], center[1], 0.0);
+            };
+            polygon_vertical_bounds_and_area(&verts)
+        }
         Shape2D::Polygon { vertices } => {
             if vertices.len() < 3 {
                 return (center[1], center[1], 0.0);
             }
-            let mut min_y = f32::INFINITY;
-            let mut max_y = f32::NEG_INFINITY;
-            let mut signed_twice_area = 0.0f32;
-            for i in 0..vertices.len() {
-                let a = transform_point2(vertices[i], center, angle);
-                let b = transform_point2(vertices[(i + 1) % vertices.len()], center, angle);
-                min_y = min_y.min(a[1]);
-                max_y = max_y.max(a[1]);
-                signed_twice_area += a[0] * b[1] - b[0] * a[1];
+            let mut verts = Vec::with_capacity(vertices.len());
+            for v in vertices {
+                verts.push(transform_point2(*v, center, angle));
             }
-            (min_y, max_y, 0.5 * signed_twice_area.abs())
+            polygon_vertical_bounds_and_area(&verts)
         }
         Shape2D::Composite { shapes } => {
             if shapes.is_empty() {
@@ -2208,4 +2415,48 @@ fn ordered_pair(a: ColliderId2D, b: ColliderId2D) -> (ColliderId2D, ColliderId2D
     } else {
         (b, a)
     }
+}
+
+/// Conservative-advancement sweep of a translated box against a convex outline.
+/// Returns the travelled distance and the surface normal at the contact.
+fn box_cast_travel(
+    probe_verts: &[[f32; 2]],
+    dir: [f32; 2],
+    max_distance: f32,
+    outline: &[[f32; 2]],
+) -> Option<(f32, [f32; 2])> {
+    let mut travel = 0.0f32;
+    for _ in 0..96 {
+        let moved: Vec<[f32; 2]> = probe_verts
+            .iter()
+            .map(|corner| [corner[0] + dir[0] * travel, corner[1] + dir[1] * travel])
+            .collect();
+        let (gap, axis) = convex_gap(&moved, outline);
+        if gap <= 0.0 {
+            let mut normal = axis;
+            if dot2(normal, dir) > 0.0 {
+                normal = [-normal[0], -normal[1]];
+            }
+            return Some((travel, normal));
+        }
+        travel += gap;
+        if travel > max_distance {
+            return None;
+        }
+    }
+    None
+}
+
+fn polygon_vertical_bounds_and_area(verts: &[[f32; 2]]) -> (f32, f32, f32) {
+    let mut min_y = f32::INFINITY;
+    let mut max_y = f32::NEG_INFINITY;
+    let mut signed_twice_area = 0.0f32;
+    for i in 0..verts.len() {
+        let a = verts[i];
+        let b = verts[(i + 1) % verts.len()];
+        min_y = min_y.min(a[1]);
+        max_y = max_y.max(a[1]);
+        signed_twice_area += a[0] * b[1] - b[0] * a[1];
+    }
+    (min_y, max_y, 0.5 * signed_twice_area.abs())
 }

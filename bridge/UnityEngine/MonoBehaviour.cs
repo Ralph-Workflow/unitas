@@ -395,6 +395,36 @@ namespace UnityEngine
             DispatchScriptMessage("OnTriggerExit", other);
         }
 
+        public virtual void OnCollisionEnter2D(Collision2D collision)
+        {
+            DispatchScriptMessage("OnCollisionEnter2D", collision);
+        }
+
+        public virtual void OnCollisionStay2D(Collision2D collision)
+        {
+            DispatchScriptMessage("OnCollisionStay2D", collision);
+        }
+
+        public virtual void OnCollisionExit2D(Collision2D collision)
+        {
+            DispatchScriptMessage("OnCollisionExit2D", collision);
+        }
+
+        public virtual void OnTriggerEnter2D(Collider2D? other)
+        {
+            DispatchScriptMessage("OnTriggerEnter2D", other);
+        }
+
+        public virtual void OnTriggerStay2D(Collider2D? other)
+        {
+            DispatchScriptMessage("OnTriggerStay2D", other);
+        }
+
+        public virtual void OnTriggerExit2D(Collider2D? other)
+        {
+            DispatchScriptMessage("OnTriggerExit2D", other);
+        }
+
         public virtual void OnApplicationFocus(bool hasFocus)
         {
             DispatchScriptMessage("OnApplicationFocus", hasFocus);
