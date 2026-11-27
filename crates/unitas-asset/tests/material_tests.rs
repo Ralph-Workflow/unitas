@@ -104,7 +104,7 @@ fn material_fixture_parses_shader_color_and_main_texture() -> TestResult {
 }
 
 #[test]
-fn sample_pickup_material_carries_albedo_bump_and_surface_properties() -> TestResult {
+fn sample_pickup_material_carries_albedo_bump_emission_and_surface_properties() -> TestResult {
     let root = sample_root();
     let material = parse_material(&root.join(SAMPLE_PICKUP_MATERIAL))?;
     let albedo_guid = meta::parse_meta_file(&root.join(SAMPLE_PICKUP_TEXTURE_META))?;

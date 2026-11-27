@@ -220,10 +220,27 @@ fn sample_opens_as_a_unity_2022_project() -> TestResult {
 fn scene_scripts_resolve_to_sample_sources_through_the_script_index() -> TestResult {
     let runtime = loaded_scene()?;
     let index = ProjectScriptIndex::build(&sample_root())?;
-    // Eleven sample scripts: the nine the sample shipped with, plus the ghost
-    // replay component the S14 cross-attempt replay needs and the reduced-motion
-    // preference component.
-    assert_eq!(index.script_count(), 11);
+    // Every script under Assets/Scripts is indexed, and every script file
+    // ships the .meta that carries its GUID. The counts come from the
+    // directory, so adding a script does not break the pin.
+    let script_dir = sample_root().join(SCRIPT_DIRECTORY);
+    let mut source_files = 0usize;
+    let mut meta_files = 0usize;
+    for entry in std::fs::read_dir(&script_dir).map_err(|error| {
+        std::io::Error::other(format!("cannot read {SCRIPT_DIRECTORY}: {error}"))
+    })? {
+        let path = entry?.path();
+        match path.extension().and_then(|extension| extension.to_str()) {
+            Some("cs") => source_files += 1,
+            Some("meta") => meta_files += 1,
+            _ => {}
+        }
+    }
+    assert_eq!(
+        meta_files, source_files,
+        "every script under {SCRIPT_DIRECTORY} ships its .meta"
+    );
+    assert_eq!(index.script_count(), source_files);
     let root = sample_root();
 
     for script in runtime.scripts() {

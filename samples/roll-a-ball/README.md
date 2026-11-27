@@ -7,13 +7,19 @@ reported with its real state, never hidden.
 
 ## What the sample contains
 
-- One gameplay scene, `Assets/Scenes/RollABall.unity`: one arena (a 12 x 12 unit
-  floor with four walls), one marble (`PlayerBall`, radius 0.5), a pickup
+- One gameplay scene, `Assets/Scenes/RollABall.unity`: the first arena (a 12 x 12
+  unit floor with four walls), one marble (`PlayerBall`, radius 0.5), a pickup
   sensor, a directional light and one camera (`Main Camera`). The pickups are
   partly authored as prefab instances (`Assets/Prefabs/Pickup.prefab`,
   `PickupGold.prefab`) under the `Pickups` root, next to four authored pickup
   objects, and the scene also carries an authored prop (`ArenaProp`), a
   collect burst, a landing dust effect and the collect chime.
+- Two more arena scenes, `Assets/Scenes/Arena2.unity` (the Clockwork arena) and
+  `Assets/Scenes/Arena3.unity` (the Sky Garden arena), each carrying the
+  `ArenaController` script that lays that arena's twelve pickups on the arena's
+  own layout and drives the Sky Garden's moving blocks. Their scenario
+  `Scenarios/arenas_2_3.json` does not pass yet (see the arena gap below), so
+  they are not in the `make verify-samples` scenario list.
 - One physics-probe scene, `Assets/Scenes/PhysicsLab.unity`, used by the
   physics scenarios; it is not an arena and carries no game scripts. It now
   also carries the bodies the S11 scenarios need: the `EdgeMarble` (a 2 kg
@@ -48,7 +54,7 @@ reported with its real state, never hidden.
 | S2 collect every pickup | demonstrated | `Scenarios/collect_all.json` passes in the lane's scripting step and in the headless editor-host step (see the lane state below) |
 | S4 retry without leftover state | demonstrated | `Scenarios/restart_recovery.scenario.json` presses `R` in the middle of a run and asserts that the ball is back at its spawn point afterwards, that the pickups can be collected again and that the run reaches `All 12 pickups collected` after the retry; six further checkpoints pin the reset state the specification's S4 asks for — `retry-score-reset`, `retry-pickups-restored` (all twelve pickups exist), `retry-multiplier-reset` (x1), `retry-gold-removed` (no gold pickup exists), `retry-timer-reset` (the timer reads 0) and `gold-spawned-again` — and the sample's retry now resets the run timer and logs the **actual** reset state (`Retry complete score 0 pickups 12 multiplier x1 timer 0.000`) instead of a hardcoded line, so those pins fail when a reset regresses; the scenario passes 16 of 16 checkpoints with `--repeat 2` in the lane's scripting step, and passes all 16 in the headless editor host, which runs the scenario once. The specification's "no object from the previous attempt remains" rests on the sample destroying its own pickups and resetting the marble; the engine destroys a replaced scene's objects on a single-mode load and creates the reloaded scene's objects before the load returns, so a lookup after a reload resolves the new attempt's objects and never the replaced attempt's — `Scenarios/ghost_replay.scenario.json` pins that over the registry (`next_attempt_scene_reloaded`) |
 | S12 combo multiplier, S13 gold pickup window, S15 dash and cooldown | demonstrated | `Scenarios/combo_multiplier.json`, `Scenarios/gold_window.json`, `Scenarios/gold_collect.json`, `Scenarios/dash_cooldown.json` — all four pass |
-| S6 settings and persistence | partly demonstrated | `Scenarios/persist_write.json`, `Scenarios/persist_read.json` cover persistence of records; no settings panel exists yet |
+| S6 settings and persistence | partly demonstrated | `Scenarios/persist_write.json`, `Scenarios/persist_read.json` cover persistence of records; the sample defines the `reduced_motion` preference, but no settings panel exists yet, so no setting is changed from the game and no master, music, or effects volume, fullscreen mode, resolution, vertical sync, quality level, ghost or camera shake setting is defined |
 | S7 input modes | partly demonstrated | `Scenarios/frame_independence.json` injects keyboard input (`W`, `A`) and sweeps 30/60/144/240 fps, and `Scenarios/gamepad_drive.scenario.json` injects the gamepad axes. `Scenarios/pointer_ui.scenario.json` drives the pointer (`inject_pointer` to the Play button at the 800x600 reference-resolution centre, then `inject_mouse_button`) and is in the `make verify-samples` scenario list: the native runtime detects the button hit and queues the clicked object id, the bridge binds the scene's uGUI buttons to their managed `UnityEngine.UI.Button` counterparts and pumps that queue every frame, so the click reaches `Button.onClick`, `HudController` logs `Title play clicked`, and the scenario's log checkpoint passes |
 | S8 visual checkpoints | partly demonstrated — see below | `Scenarios/s8_*.scenario.json`, `References/*.bmp` — all four pass, their `render_capture` checkpoints included, and the approved references were re-approved on 2026-11-27 with the arena's authored materials (textured and normal-mapped pickups, a normal-mapped marble, a tiled floor) and the HUD drawn from the engine-bundled font in the picture |
 | S10 package | partly demonstrated | the lane packages a macOS player with a build report and replays input in it (`packaged-player-proof` passes); only one desktop target is built, not each |
@@ -57,7 +63,7 @@ reported with its real state, never hidden.
 | S5 focus loss and recovery | engine half demonstrated | the windowed player clears every held key, mouse button and axis on `WindowEvent::Focused(false)` and freezes the simulation (`time_scale` 0), and restores the time scale and clean input on focus return (`FocusPause` in `crates/unitas-runtime/src/input.rs`, wired in `crates/unitas-runtime/src/window.rs`); the four focus tests live in `crates/unitas-runtime/src/input.rs` and `crates/unitas-runtime/src/window.rs`. The person-facing half — a pause overlay and an explicit Resume — does not exist yet, so "play resumes only after Resume" is not demonstrated |
 | S12 combo timing sweep | demonstrated | `Scenarios/combo_timing_sweep.json` drives the marble around the pickup ring with the same travel per leg and sweeps only the gap between consecutive pickups: 1.400 s (below the 1.5 s combo window) raises the multiplier to x4, the window then expires 1.5167 s later (`Combo expired`), the next gap of 1.600 s (above the window) resets the multiplier to x1 and awards a single point, and a further 1.400 s gap re-arms it to x2; 17 of 17 checkpoints pass with `--repeat 2` |
 | S14 medals/records/ghost | demonstrated | `Scenarios/persist_state_write.json` awards the gold medal with the new best time and best score and unlocks Arena 2 (`Records saved medals arena1=gold bestTime 4.900 bestScore 50 arenas arena1,arena2 quality high bytes 160`) and writes the ghost file (`Ghost written version 2 steps 245 bytes 1996`); `Scenarios/persist_state_read.json` restores both on the next launch (`Records loaded medals arena1=gold ...`, `Ghost restored version 2 steps 245 bytes 1996`); `Scenarios/ghost_replay.scenario.json` finishes Arena 1 through replayed input in 796 frames (the `frames_under_30s` checkpoint), replays the recorded route on the ghost object within 1 cm at every fixed step (`Ghost replay within 0.01 m`, `Ghost attempt replay within 0.01 m`) and starts the next attempt against the reloaded scene (`next_attempt_origin`, `next_attempt_scene_reloaded`). All three run in the `make verify-samples` lane. The ghost's translucent material is not pinned by a render capture |
-| S16 reduced motion | not demonstrated | no scenario covers it yet |
+| S16 reduced motion | not demonstrated | `Assets/Scripts/ReducedMotion.cs` owns the `reduced_motion` PlayerPrefs preference and `PlayerController` stops the speed trail while it is on (`Reduced motion active trail off`), but `Scenarios/reduced_motion.json` cannot run: it opens the settings row on `Assets/Scenes/Title.unity`, and the title scene with the settings panel does not exist yet; the story's camera-shake half has no setting to switch off |
 
 ## S8 visual checkpoints — what is demonstrated and what is not
 
@@ -135,8 +141,14 @@ cannot show).
   `Renderer::present_image_to_surface` in `crates/unitas-render/src/gpu.rs`).
   There is still no second canvas renderer: the capture and the window share
   one composition.
-- The sample has one arena; the specification names three (Courtyard,
-  Clockwork, Sky Garden), so "each arena at its countdown" is not covered.
+- The sample now carries three arenas — Courtyard (`Assets/Scenes/RollABall.unity`),
+  Clockwork (`Assets/Scenes/Arena2.unity`) and Sky Garden
+  (`Assets/Scenes/Arena3.unity`) — but `Scenarios/arenas_2_3.json` does not
+  pass yet: both arena scenes load, the marble stays inside the arena and
+  collects pickups, but the arena controller's own log is not captured by the
+  scenario, and the twelve pickups keep the positions the scene authors gave
+  them instead of the arena's layout, so "each arena at its countdown" is
+  still not covered.
 - **The four captures render the arena and are reproducible, and approved
   reference images now exist for them.** Each 256 x 256 capture shows
   the arena floor, its four walls, the four bumper boxes, the gold pickups and

@@ -2869,7 +2869,7 @@ pub const OWNED_FEATURE_CAPABILITIES: &[OwnedFeatureCapability] = &[
                 behavior: "the roll-a-ball sample's settings all persist through PlayerPrefs and take effect immediately",
                 location: "samples/roll-a-ball/Assets/Scripts/SavedState.cs",
                 evidence: &[],
-                missing: Some("the sample persists its records, medals, unlocked-arena set and the quality setting through PlayerPrefs, but the stored quality value is only read back and logged and never applied to the render quality, and the sample defines no master, music, or effects volume, fullscreen mode, resolution, vertical sync, camera shake, or reduced motion setting to persist"),
+                missing: Some("the sample persists its records, medals, unlocked-arena set and the quality setting through PlayerPrefs, but the stored quality value is only read back and logged and never applied to the render quality, and the sample defines a reduced-motion preference that the game honours (the speed trail stops while it is on) but exposes through no settings panel, and still defines no master, music, or effects volume, fullscreen mode, resolution, vertical sync, or camera shake setting to persist"),
             },
         ],
     },

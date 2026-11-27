@@ -1,0 +1,184 @@
+{
+  "name": "arenas_2_3",
+  "steps": [
+    {
+      "load_scene": {
+        "path": "Assets/Scenes/Arena2.unity"
+      }
+    },
+    {
+      "tick": {
+        "frames": 3,
+        "delta_seconds": 0.016666666666666666
+      }
+    },
+    {
+      "inject_key": {
+        "key": "W",
+        "pressed": true
+      }
+    },
+    {
+      "tick": {
+        "frames": 30,
+        "delta_seconds": 0.016666666666666666
+      }
+    },
+    {
+      "inject_key": {
+        "key": "W",
+        "pressed": false
+      }
+    },
+    {
+      "tick": {
+        "frames": 5,
+        "delta_seconds": 0.016666666666666666
+      }
+    },
+    {
+      "load_scene": {
+        "path": "Assets/Scenes/Arena3.unity"
+      }
+    },
+    {
+      "tick": {
+        "frames": 3,
+        "delta_seconds": 0.016666666666666666
+      }
+    },
+    {
+      "inject_key": {
+        "key": "W",
+        "pressed": true
+      }
+    },
+    {
+      "tick": {
+        "frames": 30,
+        "delta_seconds": 0.016666666666666666
+      }
+    },
+    {
+      "inject_key": {
+        "key": "W",
+        "pressed": false
+      }
+    },
+    {
+      "tick": {
+        "frames": 5,
+        "delta_seconds": 0.016666666666666666
+      }
+    }
+  ],
+  "checkpoints": [
+    {
+      "id": "arena2_controller_runs_the_arena",
+      "after_step": 1,
+      "kind": "log",
+      "severity": "log",
+      "contains": "[roll-a-ball] arena Arena2 pickups 12"
+    },
+    {
+      "id": "arena2_marble_starts_inside_the_arena",
+      "after_step": 1,
+      "kind": "transform_position",
+      "object": "PlayerBall",
+      "expected": [
+        0,
+        0.5,
+        0
+      ],
+      "tolerance": 0.1
+    },
+    {
+      "id": "arena2_pickups_sit_on_the_clockwork_ring",
+      "after_step": 1,
+      "kind": "transform_position",
+      "object": "Pickup_1",
+      "expected": [
+        0,
+        0.75,
+        3.75
+      ],
+      "tolerance": 0.05
+    },
+    {
+      "id": "arena2_pickup_collected",
+      "after_step": 5,
+      "kind": "log",
+      "severity": "log",
+      "contains": "Pickup collected score 1"
+    },
+    {
+      "id": "arena2_marble_stays_inside_the_arena",
+      "after_step": 5,
+      "kind": "transform_position",
+      "object": "PlayerBall",
+      "expected": [
+        0,
+        0.5,
+        3.75
+      ],
+      "tolerance": 0.5
+    },
+    {
+      "id": "arena3_controller_runs_the_arena",
+      "after_step": 7,
+      "kind": "log",
+      "severity": "log",
+      "contains": "[roll-a-ball] arena Arena3 pickups 12"
+    },
+    {
+      "id": "arena3_marble_starts_inside_the_arena",
+      "after_step": 7,
+      "kind": "transform_position",
+      "object": "PlayerBall",
+      "expected": [
+        0,
+        0.5,
+        0
+      ],
+      "tolerance": 0.1
+    },
+    {
+      "id": "arena3_pickups_sit_on_the_sky_garden_path",
+      "after_step": 7,
+      "kind": "transform_position",
+      "object": "Pickup_1",
+      "expected": [
+        0,
+        0.75,
+        2
+      ],
+      "tolerance": 0.05
+    },
+    {
+      "id": "arena3_pickups_collected",
+      "after_step": 11,
+      "kind": "log",
+      "severity": "log",
+      "contains": "Pickup collected score 3"
+    },
+    {
+      "id": "arena3_gold_pickup_spawned",
+      "after_step": 11,
+      "kind": "log",
+      "severity": "log",
+      "contains": "Gold pickup spawned"
+    },
+    {
+      "id": "arena3_marble_stays_inside_the_arena",
+      "after_step": 11,
+      "kind": "transform_position",
+      "object": "PlayerBall",
+      "expected": [
+        0,
+        0.5,
+        3.75
+      ],
+      "tolerance": 0.5
+    }
+  ]
+}
