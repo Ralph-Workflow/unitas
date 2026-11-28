@@ -87,6 +87,52 @@ fn the_draw_list_is_emptied_when_the_particles_expire() -> Result<(), Box<dyn st
 
 const MODULE_SCENE: &str = "--- !u!198 &1000\nParticleSystem:\n  m_Duration: 5\n  m_Loop: 0\n  m_MaxParticles: 32\n  m_StartLifetime: 1\n  m_StartSpeed: 0\n  m_StartSize: 0.5\n  m_StartColor:\n    r: 1\n    g: 0.5\n    b: 0\n    a: 1\n  m_EmissionRate: 0\n  m_Bursts:\n  - m_Time: 0\n    m_Count: 1\n    m_Cycles: 1\n  SubModule:\n    enabled: 1\n    subEmitters:\n    - subEmitter: {fileID: 2000}\n      type: 0\n      emitProbability: 1\n      emitCount: 2\n    - subEmitter: {fileID: 2001}\n      type: 1\n      emitProbability: 1\n      emitCount: 3\n    - subEmitter: {fileID: 2002}\n      type: 2\n      emitProbability: 1\n      emitCount: 4\n    - subEmitter: {fileID: 2003}\n      type: 3\n      emitProbability: 1\n      emitCount: 5\n  UVModule:\n    enabled: 1\n    tilesX: 4\n    tilesY: 2\n    animationType: 0\n    rowIndex: 0\n    cycles: 1\n    startFrame: 0\n    frameOverTime:\n      start: 0\n      end: 1\n";
 
+fn build_particle_sub_emitter_runtime(
+    binding: &ParticleSystemBinding,
+    modules: &unitas_asset::scene::ParticleSystemModulesBinding,
+) -> Result<Runtime, Box<dyn std::error::Error>> {
+    let mut runtime = Runtime::new()?;
+    let parent = EntityId::new(1000);
+    let child_binding = ParticleSystemBinding {
+        duration: 5.0,
+        looping: false,
+        max_particles: 32,
+        start_lifetime: 5.0,
+        start_speed: 0.0,
+        start_size: 0.25,
+        start_color: [0.0, 1.0, 0.0, 1.0],
+        emission_rate: 0.0,
+        bursts: Vec::new(),
+    };
+    for (id, seed) in [(2000, 10), (2001, 11), (2002, 12), (2003, 13)] {
+        runtime.register_particle_system(EntityId::new(id), seed, &child_binding);
+    }
+    runtime
+        .particles_mut()
+        .register_binding_with_modules(parent, 99, binding, modules);
+
+    runtime.physics_mut().add_body_3d(
+        EntityId::new(50),
+        unitas_physics::BodyDesc {
+            position: [0.0, 0.0, 0.0],
+            rotation: [0.0, 0.0, 0.0, 1.0],
+            mass: 0.0,
+            velocity: [0.0; 3],
+            use_gravity: false,
+            is_trigger: false,
+            collider_shape: unitas_physics::ColliderShape::Primitive(
+                unitas_physics::Shape::Sphere { radius: 1.0 },
+            ),
+            layer: 1,
+            role: unitas_physics::BodyRole::Static,
+            friction: 0.5,
+            restitution: 0.0,
+            collision_detection_mode: unitas_physics::CollisionDetectionMode3D::Discrete,
+        },
+    )?;
+    Ok(runtime)
+}
+
 #[test]
 fn particle_sub_emitters_and_texture_sheet_round_trip_through_scene_yaml_and_step_in_runtime()
 -> Result<(), Box<dyn std::error::Error>> {
@@ -113,56 +159,14 @@ fn particle_sub_emitters_and_texture_sheet_round_trip_through_scene_yaml_and_ste
         .documents
         .first()
         .ok_or("missing reparsed document")?;
-    let reparsed_binding = parse_particle_system(reparsed_doc)?;
-    let reparsed_modules = parse_particle_system_modules(reparsed_doc)?;
-    assert_eq!(reparsed_binding, binding);
-    assert_eq!(reparsed_modules, modules);
+    assert_eq!(parse_particle_system(reparsed_doc)?, binding);
+    assert_eq!(parse_particle_system_modules(reparsed_doc)?, modules);
 
-    let mut runtime = Runtime::new()?;
+    let mut runtime = build_particle_sub_emitter_runtime(&binding, &modules)?;
     let parent = EntityId::new(1000);
     let birth_child = EntityId::new(2000);
     let collision_child = EntityId::new(2001);
     let death_child = EntityId::new(2002);
-    let trigger_child = EntityId::new(2003);
-
-    let child_binding = ParticleSystemBinding {
-        duration: 5.0,
-        looping: false,
-        max_particles: 32,
-        start_lifetime: 5.0,
-        start_speed: 0.0,
-        start_size: 0.25,
-        start_color: [0.0, 1.0, 0.0, 1.0],
-        emission_rate: 0.0,
-        bursts: Vec::new(),
-    };
-    runtime.register_particle_system(birth_child, 10, &child_binding);
-    runtime.register_particle_system(collision_child, 11, &child_binding);
-    runtime.register_particle_system(death_child, 12, &child_binding);
-    runtime.register_particle_system(trigger_child, 13, &child_binding);
-    runtime
-        .particles_mut()
-        .register_binding_with_modules(parent, 99, &binding, &modules);
-
-    runtime.physics_mut().add_body_3d(
-        EntityId::new(50),
-        unitas_physics::BodyDesc {
-            position: [0.0, 0.0, 0.0],
-            rotation: [0.0, 0.0, 0.0, 1.0],
-            mass: 0.0,
-            velocity: [0.0; 3],
-            use_gravity: false,
-            is_trigger: false,
-            collider_shape: unitas_physics::ColliderShape::Primitive(
-                unitas_physics::Shape::Sphere { radius: 1.0 },
-            ),
-            layer: 1,
-            role: unitas_physics::BodyRole::Static,
-            friction: 0.5,
-            restitution: 0.0,
-            collision_detection_mode: unitas_physics::CollisionDetectionMode3D::Discrete,
-        },
-    )?;
 
     runtime.tick(0.02)?;
     runtime.tick(0.5)?;

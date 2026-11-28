@@ -879,53 +879,57 @@ impl PlayableGraph {
                 clip.sample(*previous_time as f32, state.time as f32)
                     .bindings
             }
-            PlayableNode::Mixer { inputs, .. } => {
-                let mut pose: Vec<SampledBinding> = Vec::new();
-                let mut accumulated = 0.0_f32;
-                for input in inputs {
-                    let Some(source) = input.source else {
-                        continue;
-                    };
-                    if input.weight <= 0.0 {
-                        continue;
-                    }
-                    let sample = self.evaluate_node(source);
-                    let fraction = input.weight / (accumulated + input.weight);
-                    blend_into(&mut pose, &sample, fraction);
-                    accumulated += input.weight;
-                }
-                pose
-            }
-            PlayableNode::LayerMixer { layers, .. } => {
-                let mut pose: Vec<SampledBinding> = Vec::new();
-                for (index, layer) in layers.iter().enumerate() {
-                    let Some(source) = layer.source else {
-                        continue;
-                    };
-                    let sample = self.evaluate_node(source);
-                    let masked = match &layer.mask {
-                        Some(mask) => mask.filter_bindings(&sample),
-                        None => sample,
-                    };
-                    let weight = layer.weight.clamp(0.0, 1.0);
-                    if index == 0 {
-                        pose = masked
-                            .into_iter()
-                            .map(|item| SampledBinding {
-                                target: item.target.clone(),
-                                value: default_value(&item.value).blend(&item.value, weight),
-                            })
-                            .collect();
-                    } else {
-                        blend_into(&mut pose, &masked, weight);
-                    }
-                }
-                pose
-            }
+            PlayableNode::Mixer { inputs, .. } => self.evaluate_mixer_node(inputs),
+            PlayableNode::LayerMixer { layers, .. } => self.evaluate_layer_mixer_node(layers),
             PlayableNode::AudioClip { .. }
             | PlayableNode::AudioMixer { .. }
             | PlayableNode::Script { .. } => Vec::new(),
         }
+    }
+
+    fn evaluate_mixer_node(&self, inputs: &[MixerInput]) -> Vec<SampledBinding> {
+        let mut pose: Vec<SampledBinding> = Vec::new();
+        let mut accumulated = 0.0_f32;
+        for input in inputs {
+            let Some(source) = input.source else {
+                continue;
+            };
+            if input.weight <= 0.0 {
+                continue;
+            }
+            let sample = self.evaluate_node(source);
+            let fraction = input.weight / (accumulated + input.weight);
+            blend_into(&mut pose, &sample, fraction);
+            accumulated += input.weight;
+        }
+        pose
+    }
+
+    fn evaluate_layer_mixer_node(&self, layers: &[LayerMixerLayer]) -> Vec<SampledBinding> {
+        let mut pose: Vec<SampledBinding> = Vec::new();
+        for (index, layer) in layers.iter().enumerate() {
+            let Some(source) = layer.source else {
+                continue;
+            };
+            let sample = self.evaluate_node(source);
+            let masked = match &layer.mask {
+                Some(mask) => mask.filter_bindings(&sample),
+                None => sample,
+            };
+            let weight = layer.weight.clamp(0.0, 1.0);
+            if index == 0 {
+                pose = masked
+                    .into_iter()
+                    .map(|item| SampledBinding {
+                        target: item.target.clone(),
+                        value: default_value(&item.value).blend(&item.value, weight),
+                    })
+                    .collect();
+            } else {
+                blend_into(&mut pose, &masked, weight);
+            }
+        }
+        pose
     }
 
     fn node_is_done(&self, handle: PlayableHandle) -> bool {

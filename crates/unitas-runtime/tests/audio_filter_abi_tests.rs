@@ -32,6 +32,25 @@ fn gain_db(input_rms: f32, output_rms: f32) -> f32 {
     20.0 * (output_rms / input_rms).log10()
 }
 
+fn mix_and_measure_left_attenuation(
+    handle: u64,
+    half_frames: usize,
+    output_buffer: u64,
+    samples: &[f32],
+    skip: usize,
+) -> Result<f32, Box<dyn Error>> {
+    let mixed_frames = unitas_runtime_audio_mix(handle, half_frames as u64, output_buffer);
+    assert_eq!(mixed_frames, half_frames as u64);
+    let mut mixed_bytes = vec![0u8; half_frames * 2 * 4];
+    test_read_path_buffer(handle, &mut mixed_bytes)?;
+    let mixed: Vec<f32> = mixed_bytes
+        .chunks_exact(4)
+        .map(|chunk| f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]))
+        .collect();
+    let left: Vec<f32> = mixed.iter().step_by(2).copied().collect();
+    Ok(gain_db(rms(samples, skip), rms(&left, skip)))
+}
+
 #[test]
 fn runtime_abi_audio_filters_round_trip() -> Result<(), Box<dyn Error>> {
     let handle = unitas_runtime_new();
@@ -79,25 +98,14 @@ fn runtime_abi_audio_filters_round_trip() -> Result<(), Box<dyn Error>> {
     let half_frames = frames / 2;
     let output_buffer = unitas_runtime_path_buffer(handle, (half_frames * 2 * 4) as u64);
     assert_ne!(output_buffer, 0);
-    let mixed_frames = unitas_runtime_audio_mix(handle, half_frames as u64, output_buffer);
-    assert_eq!(mixed_frames, half_frames as u64);
-    let mut mixed_bytes = vec![0u8; half_frames * 2 * 4];
-    test_read_path_buffer(handle, &mut mixed_bytes)?;
-    let mixed: Vec<f32> = mixed_bytes
-        .chunks_exact(4)
-        .map(|chunk| f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]))
-        .collect();
-    let left: Vec<f32> = mixed.iter().step_by(2).copied().collect();
     let skip = half_frames / 4;
-    let attenuation = gain_db(rms(&samples, skip), rms(&left, skip));
+    let attenuation =
+        mix_and_measure_left_attenuation(handle, half_frames, output_buffer, &samples, skip)?;
     assert!(
         attenuation <= -30.0,
         "8 kHz sine through the ABI low-pass attenuated {attenuation} dB"
     );
 
-    // The other two filters stay off for the measurement above, so the number
-    // above is the low-pass's own attenuation; they are enabled here to prove
-    // the ABI accepts them on the same source.
     assert_eq!(
         unitas_runtime_audio_set_high_pass_filter(handle, entity, 1, 2000.0, 1.0),
         0
@@ -106,7 +114,6 @@ fn runtime_abi_audio_filters_round_trip() -> Result<(), Box<dyn Error>> {
         unitas_runtime_audio_set_echo_filter(handle, entity, 1, 0.1, 0.0, -6.0, 0.0),
         0
     );
-
     assert_eq!(
         unitas_runtime_audio_set_low_pass_filter(handle, entity, 0, CUTOFF_HZ, 1.0),
         0
@@ -119,15 +126,8 @@ fn runtime_abi_audio_filters_round_trip() -> Result<(), Box<dyn Error>> {
         unitas_runtime_audio_set_echo_filter(handle, entity, 0, 0.1, 0.0, -6.0, 0.0),
         0
     );
-    let mixed_frames = unitas_runtime_audio_mix(handle, half_frames as u64, output_buffer);
-    assert_eq!(mixed_frames, half_frames as u64);
-    test_read_path_buffer(handle, &mut mixed_bytes)?;
-    let mixed: Vec<f32> = mixed_bytes
-        .chunks_exact(4)
-        .map(|chunk| f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]))
-        .collect();
-    let left: Vec<f32> = mixed.iter().step_by(2).copied().collect();
-    let attenuation = gain_db(rms(&samples, skip), rms(&left, skip));
+    let attenuation =
+        mix_and_measure_left_attenuation(handle, half_frames, output_buffer, &samples, skip)?;
     assert!(
         attenuation.abs() < 1.0,
         "unfiltered 8 kHz sine changed by {attenuation} dB"

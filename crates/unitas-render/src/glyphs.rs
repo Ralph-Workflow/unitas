@@ -571,12 +571,8 @@ pub struct TextPipeline {
 }
 
 impl TextPipeline {
-    pub fn new(device: &wgpu::Device, format: wgpu::TextureFormat) -> Self {
-        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("text"),
-            source: wgpu::ShaderSource::Wgsl(TEXT_SHADER_SOURCE.into()),
-        });
-        let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+    fn create_text_bind_group_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
+        device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("text"),
             entries: &[
                 wgpu::BindGroupLayoutEntry {
@@ -606,13 +602,11 @@ impl TextPipeline {
                     count: None,
                 },
             ],
-        });
-        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("text"),
-            bind_group_layouts: &[Some(&bind_group_layout)],
-            immediate_size: 0,
-        });
-        let blend = wgpu::BlendState {
+        })
+    }
+
+    fn text_blend_state() -> wgpu::BlendState {
+        wgpu::BlendState {
             color: wgpu::BlendComponent {
                 src_factor: wgpu::BlendFactor::One,
                 dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
@@ -623,12 +617,21 @@ impl TextPipeline {
                 dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
                 operation: wgpu::BlendOperation::Add,
             },
-        };
-        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        }
+    }
+
+    fn create_text_pipeline(
+        device: &wgpu::Device,
+        format: wgpu::TextureFormat,
+        shader: &wgpu::ShaderModule,
+        pipeline_layout: &wgpu::PipelineLayout,
+        blend: wgpu::BlendState,
+    ) -> wgpu::RenderPipeline {
+        device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("text"),
-            layout: Some(&pipeline_layout),
+            layout: Some(pipeline_layout),
             vertex: wgpu::VertexState {
-                module: &shader,
+                module: shader,
                 entry_point: Some("vs_main"),
                 compilation_options: wgpu::PipelineCompilationOptions::default(),
                 buffers: &[Some(TEXT_VERTEX_LAYOUT)],
@@ -637,7 +640,7 @@ impl TextPipeline {
             depth_stencil: None,
             multisample: wgpu::MultisampleState::default(),
             fragment: Some(wgpu::FragmentState {
-                module: &shader,
+                module: shader,
                 entry_point: Some("fs_main"),
                 compilation_options: wgpu::PipelineCompilationOptions::default(),
                 targets: &[Some(wgpu::ColorTargetState {
@@ -648,7 +651,22 @@ impl TextPipeline {
             }),
             multiview_mask: None,
             cache: None,
+        })
+    }
+
+    pub fn new(device: &wgpu::Device, format: wgpu::TextureFormat) -> Self {
+        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("text"),
+            source: wgpu::ShaderSource::Wgsl(TEXT_SHADER_SOURCE.into()),
         });
+        let bind_group_layout = Self::create_text_bind_group_layout(device);
+        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("text"),
+            bind_group_layouts: &[Some(&bind_group_layout)],
+            immediate_size: 0,
+        });
+        let blend = Self::text_blend_state();
+        let pipeline = Self::create_text_pipeline(device, format, &shader, &pipeline_layout, blend);
         Self {
             pipeline,
             bind_group_layout,
@@ -750,12 +768,11 @@ impl TextPipeline {
         }
     }
 
-    pub fn upload_atlas(
-        &self,
+    fn upload_atlas_texture(
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         atlas: &GlyphAtlas,
-    ) -> GlyphResources {
+    ) -> wgpu::Texture {
         let texture = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("glyph_atlas"),
             size: wgpu::Extent3d {
@@ -793,42 +810,129 @@ impl TextPipeline {
                 },
             );
         }
-        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-        let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+        texture
+    }
+
+    fn create_atlas_sampler(device: &wgpu::Device) -> wgpu::Sampler {
+        device.create_sampler(&wgpu::SamplerDescriptor {
             label: Some("glyph_atlas"),
             mag_filter: wgpu::FilterMode::Linear,
             min_filter: wgpu::FilterMode::Linear,
             ..Default::default()
-        });
-        let uniform = device.create_buffer(&wgpu::BufferDescriptor {
+        })
+    }
+
+    fn create_atlas_uniform(device: &wgpu::Device) -> wgpu::Buffer {
+        device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("text_globals"),
             size: 8,
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
-        });
-        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+        })
+    }
+
+    fn create_atlas_bind_group(
+        device: &wgpu::Device,
+        layout: &wgpu::BindGroupLayout,
+        view: &wgpu::TextureView,
+        sampler: &wgpu::Sampler,
+        uniform: &wgpu::Buffer,
+    ) -> wgpu::BindGroup {
+        device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("glyph_atlas"),
-            layout: &self.bind_group_layout,
+            layout,
             entries: &[
                 wgpu::BindGroupEntry {
                     binding: 0,
-                    resource: wgpu::BindingResource::TextureView(&view),
+                    resource: wgpu::BindingResource::TextureView(view),
                 },
                 wgpu::BindGroupEntry {
                     binding: 1,
-                    resource: wgpu::BindingResource::Sampler(&sampler),
+                    resource: wgpu::BindingResource::Sampler(sampler),
                 },
                 wgpu::BindGroupEntry {
                     binding: 2,
                     resource: uniform.as_entire_binding(),
                 },
             ],
-        });
+        })
+    }
+
+    pub fn upload_atlas(
+        &self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        atlas: &GlyphAtlas,
+    ) -> GlyphResources {
+        let texture = Self::upload_atlas_texture(device, queue, atlas);
+        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let sampler = Self::create_atlas_sampler(device);
+        let uniform = Self::create_atlas_uniform(device);
+        let bind_group = Self::create_atlas_bind_group(
+            device,
+            &self.bind_group_layout,
+            &view,
+            &sampler,
+            &uniform,
+        );
         GlyphResources {
             texture,
             bind_group,
             uniform,
         }
+    }
+
+    fn create_text_vertex_buffer(
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        vertices: &[f32],
+    ) -> wgpu::Buffer {
+        let vertex_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("text_vertices"),
+            size: ((vertices.len().max(1)) * 4) as u64,
+            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        if !vertices.is_empty() {
+            queue.write_buffer(&vertex_buffer, 0, bytemuck::cast_slice(vertices));
+        }
+        vertex_buffer
+    }
+
+    fn create_text_index_buffer(
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        indices: &[u32],
+    ) -> wgpu::Buffer {
+        let index_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("text_indices"),
+            size: ((indices.len().max(1)) * 4) as u64,
+            usage: wgpu::BufferUsages::INDEX | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        if !indices.is_empty() {
+            queue.write_buffer(&index_buffer, 0, bytemuck::cast_slice(indices));
+        }
+        index_buffer
+    }
+
+    fn text_scissor(clip: &Rect, frame_w: f32, frame_h: f32) -> Option<(u32, u32, u32, u32)> {
+        let scissor_x = clip.x.max(0.0).min(frame_w) as u32;
+        let scissor_y = clip.y.max(0.0).min(frame_h) as u32;
+        let scissor_w = (clip.x + clip.width)
+            .max(0.0)
+            .min(frame_w)
+            .max(scissor_x as f32) as u32
+            - scissor_x;
+        let scissor_h = (clip.y + clip.height)
+            .max(0.0)
+            .min(frame_h)
+            .max(scissor_y as f32) as u32
+            - scissor_y;
+        if scissor_w == 0 || scissor_h == 0 {
+            return None;
+        }
+        Some((scissor_x, scissor_y, scissor_w, scissor_h))
     }
 
     pub fn draw(
@@ -847,39 +951,13 @@ impl TextPipeline {
         let resolution = [frame_w, frame_h];
         queue.write_buffer(&resources.uniform, 0, bytemuck::cast_slice(&resolution));
         let (vertices, indices) = build_geometry(quads);
-        let vertex_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("text_vertices"),
-            size: ((vertices.len().max(1)) * 4) as u64,
-            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-        if !vertices.is_empty() {
-            queue.write_buffer(&vertex_buffer, 0, bytemuck::cast_slice(&vertices));
-        }
-        let index_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("text_indices"),
-            size: ((indices.len().max(1)) * 4) as u64,
-            usage: wgpu::BufferUsages::INDEX | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-        if !indices.is_empty() {
-            queue.write_buffer(&index_buffer, 0, bytemuck::cast_slice(&indices));
-        }
-        let scissor_x = target.clip.x.max(0.0).min(frame_w) as u32;
-        let scissor_y = target.clip.y.max(0.0).min(frame_h) as u32;
-        let scissor_w = (target.clip.x + target.clip.width)
-            .max(0.0)
-            .min(frame_w)
-            .max(scissor_x as f32) as u32
-            - scissor_x;
-        let scissor_h = (target.clip.y + target.clip.height)
-            .max(0.0)
-            .min(frame_h)
-            .max(scissor_y as f32) as u32
-            - scissor_y;
-        if scissor_w == 0 || scissor_h == 0 {
+        let vertex_buffer = Self::create_text_vertex_buffer(device, queue, &vertices);
+        let index_buffer = Self::create_text_index_buffer(device, queue, &indices);
+        let Some((scissor_x, scissor_y, scissor_w, scissor_h)) =
+            Self::text_scissor(&target.clip, frame_w, frame_h)
+        else {
             return;
-        }
+        };
         let mut pass = target
             .encoder
             .begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -1188,24 +1266,16 @@ mod tests {
         Ok(())
     }
 
-    #[test]
-    fn shaped_phrase_coverage_is_letterform_like() -> Result<(), Box<dyn std::error::Error>> {
-        let mut fonts = FontLibrary::new();
-        if !fonts.load_system_fonts() {
-            return Err("no system fonts are available to shape the HUD phrase".into());
-        }
-        let style = TextStyle::new(28.0, 28.0, [1.0, 1.0, 1.0, 1.0]);
-        let layout = layout_text(&mut fonts, "Score: 0/4", None, &style);
-        let mut cache = SwashCache::new();
-        let mut atlas = GlyphAtlas::new(1024, 1024);
-        let quads = shape_glyph_quads(&mut fonts, &mut cache, &mut atlas, &layout);
-        assert!(!quads.is_empty(), "the phrase produced no glyph quads");
-        let columns = layout.width.ceil() as usize;
+    fn measure_phrase_ink(
+        quads: &[TexturedQuad],
+        atlas: &GlyphAtlas,
+        columns: usize,
+    ) -> (usize, usize, usize, Vec<bool>) {
         let mut inked_columns = vec![false; columns];
         let mut inked = 0usize;
         let mut blank = 0usize;
         let mut partial = 0usize;
-        for quad in &quads {
+        for quad in quads {
             let region_x = (quad.uv[0] * atlas.image.width as f32).round() as u32;
             let region_y = (quad.uv[1] * atlas.image.height as f32).round() as u32;
             let region_width =
@@ -1232,6 +1302,23 @@ mod tests {
                 }
             }
         }
+        (inked, blank, partial, inked_columns)
+    }
+
+    #[test]
+    fn shaped_phrase_coverage_is_letterform_like() -> Result<(), Box<dyn std::error::Error>> {
+        let mut fonts = FontLibrary::new();
+        if !fonts.load_system_fonts() {
+            return Err("no system fonts are available to shape the HUD phrase".into());
+        }
+        let style = TextStyle::new(28.0, 28.0, [1.0, 1.0, 1.0, 1.0]);
+        let layout = layout_text(&mut fonts, "Score: 0/4", None, &style);
+        let mut cache = SwashCache::new();
+        let mut atlas = GlyphAtlas::new(1024, 1024);
+        let quads = shape_glyph_quads(&mut fonts, &mut cache, &mut atlas, &layout);
+        assert!(!quads.is_empty(), "the phrase produced no glyph quads");
+        let columns = layout.width.ceil() as usize;
+        let (inked, blank, partial, inked_columns) = measure_phrase_ink(&quads, &atlas, columns);
         assert!(inked + partial > 0, "the shaped phrase carries no ink");
         assert!(
             blank > 0,

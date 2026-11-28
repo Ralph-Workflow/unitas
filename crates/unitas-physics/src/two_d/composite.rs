@@ -143,33 +143,43 @@ impl TilemapCollider2D {
                 }
             }
         }
-        for (y, mut xs) in grid_rows {
-            xs.sort_unstable();
-            xs.dedup();
-            let mut idx = 0usize;
-            while idx < xs.len() {
-                let start_x = xs[idx];
-                let mut end_x = start_x;
-                while idx + 1 < xs.len() && xs[idx + 1] == end_x + 1 {
-                    idx += 1;
-                    end_x = xs[idx];
-                }
-                let min_x = (start_x as f32) * cw;
-                let max_x = ((end_x + 1) as f32) * cw;
-                let min_y = (y as f32) * ch;
-                let max_y = ((y + 1) as f32) * ch;
-                shapes.push(Shape2D::Polygon {
-                    vertices: vec![
-                        [min_x, min_y],
-                        [max_x, min_y],
-                        [max_x, max_y],
-                        [min_x, max_y],
-                    ],
-                });
-                idx += 1;
-            }
+        for (y, xs) in grid_rows {
+            build_merged_grid_row_shapes(y, xs, cw, ch, &mut shapes);
         }
         shapes
+    }
+}
+
+fn build_merged_grid_row_shapes(
+    y: i32,
+    mut xs: Vec<i32>,
+    cw: f32,
+    ch: f32,
+    shapes: &mut Vec<Shape2D>,
+) {
+    xs.sort_unstable();
+    xs.dedup();
+    let mut idx = 0usize;
+    while idx < xs.len() {
+        let start_x = xs[idx];
+        let mut end_x = start_x;
+        while idx + 1 < xs.len() && xs[idx + 1] == end_x + 1 {
+            idx += 1;
+            end_x = xs[idx];
+        }
+        let min_x = (start_x as f32) * cw;
+        let max_x = ((end_x + 1) as f32) * cw;
+        let min_y = (y as f32) * ch;
+        let max_y = ((y + 1) as f32) * ch;
+        shapes.push(Shape2D::Polygon {
+            vertices: vec![
+                [min_x, min_y],
+                [max_x, min_y],
+                [max_x, max_y],
+                [min_x, max_y],
+            ],
+        });
+        idx += 1;
     }
 }
 

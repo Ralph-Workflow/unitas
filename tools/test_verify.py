@@ -1040,6 +1040,31 @@ def test_dependency_gate_reports_third_party_python_import(tmp_path: Path) -> No
     ]
 
 
+def test_dependency_gate_reports_unpaired_manifest_and_lock(tmp_path: Path) -> None:
+    cargo_toml = tmp_path / "Cargo.toml"
+    cargo_lock = tmp_path / "Cargo.lock"
+    pkg_json = tmp_path / "package.json"
+    pkg_lock = tmp_path / "package-lock.json"
+    _write_registry(tmp_path, [("alpha", "1.0.0", "MIT", "2026-01-01")])
+    cargo_toml.write_text("[workspace]\n", encoding="utf-8")
+    assert "Cargo.toml and Cargo.lock must be committed together" in verify.check_dependencies(
+        tmp_path
+    )
+    cargo_toml.unlink()
+    _write_lockfile(tmp_path, [("alpha", "1.0.0")])
+    assert verify.check_dependencies(tmp_path) == [
+        "Cargo.toml and Cargo.lock must be committed together"
+    ]
+    cargo_toml.write_text("[workspace]\n", encoding="utf-8")
+    pkg_json.write_text("{}\n", encoding="utf-8")
+    assert verify.check_dependencies(tmp_path) == [
+        "package.json and package-lock.json must be committed together"
+    ]
+    pkg_lock.write_text("{}\n", encoding="utf-8")
+    assert cargo_lock.exists()
+    assert verify.check_dependencies(tmp_path) == []
+
+
 def _write_lockfile(root: Path, packages: list[tuple[str, str]]) -> Path:
     path = root / "Cargo.lock"
     blocks = [

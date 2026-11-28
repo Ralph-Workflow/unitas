@@ -149,6 +149,34 @@ fn ui_capture_frame_composite_extends_the_object_table() {
     assert_eq!(frame.objects[1].id, 2);
 }
 
+fn assert_capture_and_offscreen_pass_orders() {
+    assert_eq!(
+        RenderGraph::capture(false).pass_order(),
+        vec![
+            RenderPassKind::Opaque,
+            RenderPassKind::Transparent,
+            RenderPassKind::CaptureIds
+        ]
+    );
+    assert_eq!(
+        RenderGraph::offscreen(true, false).pass_order(),
+        vec![
+            RenderPassKind::Opaque,
+            RenderPassKind::Transparent,
+            RenderPassKind::UiOverlay
+        ]
+    );
+}
+
+fn assert_id_map_matches_objects(frame: &CaptureFrame) {
+    let mut listed: Vec<u32> = frame.objects.iter().map(|object| object.id).collect();
+    listed.sort_unstable();
+    let mut present: Vec<u32> = frame.id_map.iter().copied().filter(|id| *id != 0).collect();
+    present.sort_unstable();
+    present.dedup();
+    assert_eq!(present, listed);
+}
+
 #[test]
 fn ui_capture_frame_reports_ui_pixels_and_object_ids() -> Result<(), Box<dyn std::error::Error>> {
     let renderer = shared_renderer()?;
@@ -168,22 +196,7 @@ fn ui_capture_frame_reports_ui_pixels_and_object_ids() -> Result<(), Box<dyn std
         BACKGROUND,
         (WIDTH, HEIGHT),
     )?;
-    assert_eq!(
-        RenderGraph::capture(false).pass_order(),
-        vec![
-            RenderPassKind::Opaque,
-            RenderPassKind::Transparent,
-            RenderPassKind::CaptureIds
-        ]
-    );
-    assert_eq!(
-        RenderGraph::offscreen(true, false).pass_order(),
-        vec![
-            RenderPassKind::Opaque,
-            RenderPassKind::Transparent,
-            RenderPassKind::UiOverlay
-        ]
-    );
+    assert_capture_and_offscreen_pass_orders();
     let items = vec![quad([4.0, 4.0, 20.0, 12.0], [1.0, 0.0, 0.0, 1.0])];
     let objects = composite_ui_onto_capture(&mut frame, &items, None);
     assert_eq!(objects.len(), 1);
@@ -196,11 +209,6 @@ fn ui_capture_frame_reports_ui_pixels_and_object_ids() -> Result<(), Box<dyn std
     assert_eq!(&pixel[0..3], &[255, 0, 0]);
     assert_eq!(frame.id_map[8 * WIDTH as usize + 10], 2);
     assert!(frame.objects.iter().any(|object| object.id == 2));
-    let mut listed: Vec<u32> = frame.objects.iter().map(|object| object.id).collect();
-    listed.sort_unstable();
-    let mut present: Vec<u32> = frame.id_map.iter().copied().filter(|id| *id != 0).collect();
-    present.sort_unstable();
-    present.dedup();
-    assert_eq!(present, listed);
+    assert_id_map_matches_objects(&frame);
     Ok(())
 }

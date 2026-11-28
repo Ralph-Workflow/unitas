@@ -870,7 +870,7 @@ pub const OWNED_FEATURE_CAPABILITIES: &[OwnedFeatureCapability] = &[
                 behavior: "a real-time directional shadow map is rendered from the project's quality level (enablement and hard or 3x3 PCF soft filtering from shadows, map size from Unity 2022.3's Built-in-RP shadowResolution multiplier rule NextPowerOfTwo(pixel_size * multiplier * 3.8), and camera-centered orthographic extent from shadowDistance, with per-platform default quality selection from m_PerPlatformDefaultQuality falling back to m_CurrentQuality)",
                 location: "crates/unitas-render/src/gpu.rs",
                 evidence: &[
-                    "crates/unitas-render/src/gpu.rs::directional_shadow_darkens_occluded_surface_and_tracks_map_size",
+                    "crates/unitas-render/src/gpu_tests.rs::directional_shadow_darkens_occluded_surface_and_tracks_map_size",
                     "crates/unitas-render/src/shadow.rs::shadow_map_size_matches_unity_multiplier_table",
                     "crates/unitas-runtime/src/presenter.rs::quality_shadow_settings_mapping_covers_shadows_resolutions_and_distances",
                 ],

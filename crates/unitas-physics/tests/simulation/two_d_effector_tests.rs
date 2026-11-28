@@ -25,6 +25,16 @@ fn phy_002_story_5_platform_effector_allows_upward_pass_through_without_events_a
         ColliderDesc2D::box_collider(player_go, [0.4, 0.4]).with_attached_body(player_body),
     );
 
+    assert_platform_upward_pass(&mut world, player_body, player_col, platform_col);
+    assert_platform_landing_from_above(&mut world, player_go, player_body, player_col, platform_col);
+}
+
+fn assert_platform_upward_pass(
+    world: &mut World2D,
+    player_body: unitas_physics::two_d::BodyId2D,
+    player_col: unitas_physics::two_d::ColliderId2D,
+    platform_col: unitas_physics::two_d::ColliderId2D,
+) {
     let mut max_y = -1.5f32;
     let mut passed_above = false;
     for _ in 0..35 {
@@ -51,7 +61,15 @@ fn phy_002_story_5_platform_effector_allows_upward_pass_through_without_events_a
         passed_above,
         "player must pass above platform (max_y={max_y})"
     );
+}
 
+fn assert_platform_landing_from_above(
+    world: &mut World2D,
+    player_go: EntityId,
+    player_body: unitas_physics::two_d::BodyId2D,
+    player_col: unitas_physics::two_d::ColliderId2D,
+    platform_col: unitas_physics::two_d::ColliderId2D,
+) {
     let mut landed_enter = false;
     let mut landed_stay = false;
     for _ in 0..160 {
@@ -67,7 +85,6 @@ fn phy_002_story_5_platform_effector_allows_upward_pass_through_without_events_a
             }
         }
     }
-
     assert!(
         landed_enter,
         "player landing from above must receive OnCollisionEnter2D"
@@ -200,33 +217,7 @@ fn area_effector_applies_directional_force_and_drag_inside_trigger() {
 #[test]
 fn point_effector_attracts_and_repels_bodies_with_layer_mask() {
     let mut world = World2D::with_gravity([0.0, 0.0]);
-    let magnet_go = EntityId::new(30);
-    let metal_go = EntityId::new(31);
-    let wood_go = EntityId::new(32);
-
-    let magnet_col = world.add_collider(
-        ColliderDesc2D::circle_collider(magnet_go, 5.0)
-            .with_trigger(true)
-            .with_used_by_effector(true),
-    );
-    world.attach_effector(
-        magnet_col,
-        PointEffector2D::new(-30.0, 1.0).with_collider_mask(1 << 1),
-    );
-
-    let metal_body = world.add_body(BodyDesc2D::dynamic(metal_go, [3.0, 0.0]).with_layer(1));
-    world.add_collider(
-        ColliderDesc2D::circle_collider(metal_go, 0.3)
-            .with_attached_body(metal_body)
-            .with_layer(1),
-    );
-
-    let wood_body = world.add_body(BodyDesc2D::dynamic(wood_go, [3.0, 1.0]).with_layer(2));
-    world.add_collider(
-        ColliderDesc2D::circle_collider(wood_go, 0.3)
-            .with_attached_body(wood_body)
-            .with_layer(2),
-    );
+    let (magnet_col, metal_body, wood_body) = setup_point_effector_world(&mut world);
 
     for _ in 0..10 {
         world.step(0.05);
@@ -262,11 +253,93 @@ fn point_effector_attracts_and_repels_bodies_with_layer_mask() {
     );
 }
 
+fn setup_point_effector_world(
+    world: &mut World2D,
+) -> (
+    unitas_physics::two_d::ColliderId2D,
+    unitas_physics::two_d::BodyId2D,
+    unitas_physics::two_d::BodyId2D,
+) {
+    let magnet_go = EntityId::new(30);
+    let metal_go = EntityId::new(31);
+    let wood_go = EntityId::new(32);
+
+    let magnet_col = world.add_collider(
+        ColliderDesc2D::circle_collider(magnet_go, 5.0)
+            .with_trigger(true)
+            .with_used_by_effector(true),
+    );
+    world.attach_effector(
+        magnet_col,
+        PointEffector2D::new(-30.0, 1.0).with_collider_mask(1 << 1),
+    );
+
+    let metal_body = world.add_body(BodyDesc2D::dynamic(metal_go, [3.0, 0.0]).with_layer(1));
+    world.add_collider(
+        ColliderDesc2D::circle_collider(metal_go, 0.3)
+            .with_attached_body(metal_body)
+            .with_layer(1),
+    );
+
+    let wood_body = world.add_body(BodyDesc2D::dynamic(wood_go, [3.0, 1.0]).with_layer(2));
+    world.add_collider(
+        ColliderDesc2D::circle_collider(wood_go, 0.3)
+            .with_attached_body(wood_body)
+            .with_layer(2),
+    );
+    (magnet_col, metal_body, wood_body)
+}
+
 #[test]
 fn buoyancy_effector_floats_and_sinks_bodies_by_density_and_applies_submerged_drag_and_flow() {
+    let mut world = World2D::with_gravity([0.0, -10.0]);
+    let (cork_body, stone_body, air_body) = setup_buoyancy_effector_world(&mut world);
+
+    for _ in 0..40 {
+        world.step(0.02);
+    }
+
+    let cork = world.body(cork_body);
+    let cork_y = cork.map_or(0.0, |b| b.position[1]);
+    let cork_x = cork.map_or(-2.0, |b| b.position[0]);
+    let cork_vx = cork.map_or(0.0, |b| b.linear_velocity[0]);
+    let cork_ang_vel = cork.map_or(4.0, |b| b.angular_velocity);
+    assert!(
+        cork_y > 0.3,
+        "low-mass cork submerged below surface_level=2.0 in density=2.0 water must float upward, got y={cork_y}"
+    );
+    assert!(
+        cork_x > -1.8 && cork_vx > 0.5,
+        "submerged cork must experience rightward flow force, got x={cork_x}, vx={cork_vx}"
+    );
+    assert!(
+        cork_ang_vel < 1.5,
+        "submerged angular drag must damp cork angular velocity from 4.0, got {cork_ang_vel}"
+    );
+
+    let stone_y = world.body(stone_body).map_or(0.0, |b| b.position[1]);
+    assert!(
+        stone_y < -1.0,
+        "high-mass stone whose weight exceeds displaced fluid buoyancy must sink, got y={stone_y}"
+    );
+
+    let air_x = world.body(air_body).map_or(0.0, |b| b.position[0]);
+    let air_y = world.body(air_body).map_or(3.2, |b| b.position[1]);
+    assert!(
+        air_x.abs() < 1e-4 && (air_y - 3.2).abs() < 1e-4,
+        "body inside effector collider but above surface_level=2.0 must receive zero buoyancy or flow, got ({air_x}, {air_y})"
+    );
+}
+
+fn setup_buoyancy_effector_world(
+    world: &mut World2D,
+) -> (
+    unitas_physics::two_d::BodyId2D,
+    unitas_physics::two_d::BodyId2D,
+    unitas_physics::two_d::BodyId2D,
+) {
     use unitas_physics::two_d::effector::BuoyancyEffector2D;
 
-    let mut world = World2D::with_gravity([0.0, -10.0]);
     let water_go = EntityId::new(40);
     let cork_go = EntityId::new(41);
     let stone_go = EntityId::new(42);
@@ -310,39 +383,5 @@ fn buoyancy_effector_floats_and_sinks_bodies_by_density_and_applies_submerged_dr
     world.add_collider(
         ColliderDesc2D::box_collider(air_go, [0.5, 0.5]).with_attached_body(air_body),
     );
-
-    for _ in 0..40 {
-        world.step(0.02);
-    }
-
-    let cork = world.body(cork_body);
-    let cork_y = cork.map_or(0.0, |b| b.position[1]);
-    let cork_x = cork.map_or(-2.0, |b| b.position[0]);
-    let cork_vx = cork.map_or(0.0, |b| b.linear_velocity[0]);
-    let cork_ang_vel = cork.map_or(4.0, |b| b.angular_velocity);
-    assert!(
-        cork_y > 0.3,
-        "low-mass cork submerged below surface_level=2.0 in density=2.0 water must float upward, got y={cork_y}"
-    );
-    assert!(
-        cork_x > -1.8 && cork_vx > 0.5,
-        "submerged cork must experience rightward flow force, got x={cork_x}, vx={cork_vx}"
-    );
-    assert!(
-        cork_ang_vel < 1.5,
-        "submerged angular drag must damp cork angular velocity from 4.0, got {cork_ang_vel}"
-    );
-
-    let stone_y = world.body(stone_body).map_or(0.0, |b| b.position[1]);
-    assert!(
-        stone_y < -1.0,
-        "high-mass stone whose weight exceeds displaced fluid buoyancy must sink, got y={stone_y}"
-    );
-
-    let air_x = world.body(air_body).map_or(0.0, |b| b.position[0]);
-    let air_y = world.body(air_body).map_or(3.2, |b| b.position[1]);
-    assert!(
-        air_x.abs() < 1e-4 && (air_y - 3.2).abs() < 1e-4,
-        "body inside effector collider but above surface_level=2.0 must receive zero buoyancy or flow, got ({air_x}, {air_y})"
-    );
+    (cork_body, stone_body, air_body)
 }

@@ -19,6 +19,79 @@ type TickEntry = extern "C" fn(f64) -> i32;
 type ShutdownEntry = extern "C" fn() -> i32;
 type InjectInputEntry = extern "C" fn(u64, u64, u8, f64, f64) -> i32;
 
+struct ScriptHostEntries {
+    init: InitEntry,
+    tick: TickEntry,
+    shutdown: ShutdownEntry,
+    inject_input: InjectInputEntry,
+}
+
+fn load_runtime_dylib(library_path: &Path) -> Result<RuntimeDylib, PlayerStartupError> {
+    RuntimeDylib::load(library_path).map_err(|error| PlayerStartupError::ScriptHostBootFailed {
+        message: error.to_string(),
+    })
+}
+
+fn boot_dotnet_host(runtime_config_path: &Path) -> Result<DotnetHost, PlayerStartupError> {
+    DotnetHost::boot(runtime_config_path).map_err(|error| {
+        PlayerStartupError::ScriptHostBootFailed {
+            message: error.to_string(),
+        }
+    })
+}
+
+fn prepare_persist_root() -> Result<PathBuf, PlayerStartupError> {
+    let persist_root = persist_root_directory();
+    fs::create_dir_all(&persist_root).map_err(|error| {
+        PlayerStartupError::ScriptHostBootFailed {
+            message: format!(
+                "the persistent data directory '{}' could not be created: {error}",
+                persist_root.display()
+            ),
+        }
+    })?;
+    Ok(persist_root)
+}
+
+fn load_script_host_entries(
+    host: &DotnetHost,
+    assembly_path: &Path,
+) -> Result<ScriptHostEntries, PlayerStartupError> {
+    let init = host
+        .load_function::<InitEntry>(assembly_path, PLAYER_HOST_ENTRY_TYPE, "UnitasPlayerInit")
+        .map_err(|error| PlayerStartupError::ScriptHostBootFailed {
+            message: error.to_string(),
+        })?;
+    let tick = host
+        .load_function::<TickEntry>(assembly_path, PLAYER_HOST_ENTRY_TYPE, "UnitasPlayerTick")
+        .map_err(|error| PlayerStartupError::ScriptHostBootFailed {
+            message: error.to_string(),
+        })?;
+    let shutdown = host
+        .load_function::<ShutdownEntry>(
+            assembly_path,
+            PLAYER_HOST_ENTRY_TYPE,
+            "UnitasPlayerShutdown",
+        )
+        .map_err(|error| PlayerStartupError::ScriptHostBootFailed {
+            message: error.to_string(),
+        })?;
+    let inject_input = host
+        .load_function::<InjectInputEntry>(
+            assembly_path,
+            PLAYER_HOST_ENTRY_TYPE,
+            "UnitasPlayerInjectInput",
+        )
+        .map_err(|error| PlayerStartupError::ScriptHostBootFailed {
+            message: error.to_string(),
+        })?;
+    Ok(ScriptHostEntries {
+        init,
+        tick,
+        shutdown,
+        inject_input,
+    })
+}
 pub struct ScriptedPlayer {
     runtime: RuntimeDylib,
     handle: u64,
@@ -48,11 +121,7 @@ impl ScriptedPlayer {
 
         let bundle_root = absolute_path(bundle_dir);
         let library_path = resolve_runtime_library(&bundle_root)?;
-        let runtime = RuntimeDylib::load(&library_path).map_err(|error| {
-            PlayerStartupError::ScriptHostBootFailed {
-                message: error.to_string(),
-            }
-        })?;
+        let runtime = load_runtime_dylib(&library_path)?;
         let handle = runtime.new_handle();
         if handle == 0 {
             return Err(PlayerStartupError::ScriptHostBootFailed {
@@ -60,49 +129,14 @@ impl ScriptedPlayer {
             });
         }
 
-        let host = DotnetHost::boot(&runtime_config_path).map_err(|error| {
-            PlayerStartupError::ScriptHostBootFailed {
-                message: error.to_string(),
-            }
-        })?;
-        let init = host
-            .load_function::<InitEntry>(&assembly_path, PLAYER_HOST_ENTRY_TYPE, "UnitasPlayerInit")
-            .map_err(|error| PlayerStartupError::ScriptHostBootFailed {
-                message: error.to_string(),
-            })?;
-        let tick = host
-            .load_function::<TickEntry>(&assembly_path, PLAYER_HOST_ENTRY_TYPE, "UnitasPlayerTick")
-            .map_err(|error| PlayerStartupError::ScriptHostBootFailed {
-                message: error.to_string(),
-            })?;
-        let shutdown = host
-            .load_function::<ShutdownEntry>(
-                &assembly_path,
-                PLAYER_HOST_ENTRY_TYPE,
-                "UnitasPlayerShutdown",
-            )
-            .map_err(|error| PlayerStartupError::ScriptHostBootFailed {
-                message: error.to_string(),
-            })?;
-        let inject_input = host
-            .load_function::<InjectInputEntry>(
-                &assembly_path,
-                PLAYER_HOST_ENTRY_TYPE,
-                "UnitasPlayerInjectInput",
-            )
-            .map_err(|error| PlayerStartupError::ScriptHostBootFailed {
-                message: error.to_string(),
-            })?;
-
-        let persist_root = persist_root_directory();
-        fs::create_dir_all(&persist_root).map_err(|error| {
-            PlayerStartupError::ScriptHostBootFailed {
-                message: format!(
-                    "the persistent data directory '{}' could not be created: {error}",
-                    persist_root.display()
-                ),
-            }
-        })?;
+        let host = boot_dotnet_host(&runtime_config_path)?;
+        let ScriptHostEntries {
+            init,
+            tick,
+            shutdown,
+            inject_input,
+        } = load_script_host_entries(&host, &assembly_path)?;
+        let persist_root = prepare_persist_root()?;
         let bundle_root_argument = nul_terminated(&bundle_root)?;
         let persist_root_argument = nul_terminated(&persist_root)?;
         let scene_argument = nul_terminated(&absolute_path(startup_scene_path))?;

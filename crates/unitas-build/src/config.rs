@@ -197,44 +197,57 @@ impl BuildConfiguration {
         host: Option<BuildTarget>,
     ) -> Result<(), Vec<BuildValidationError>> {
         let mut errors = Vec::new();
+        self.validate_scenes(&mut errors);
+        self.validate_identity(&mut errors);
+        self.validate_target(host, &mut errors);
+        self.validate_diagnostics(&mut errors);
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(errors)
+        }
+    }
 
+    fn validate_scenes(&self, errors: &mut Vec<BuildValidationError>) {
         if self.scenes.is_empty() {
             errors.push(BuildValidationError::new(
                 "scenes",
                 "no startup scene is configured, so the built player has no initial scene to launch",
                 "add at least one '.unity' scene path to BuildConfiguration::scenes",
             ));
-        } else {
-            let mut seen = BTreeSet::new();
-            for (index, scene_path) in self.scenes.iter().enumerate() {
-                let raw = scene_path.as_os_str();
-                let is_unity_ext = scene_path
-                    .extension()
-                    .and_then(|ext| ext.to_str())
-                    .is_some_and(|ext| ext.eq_ignore_ascii_case("unity"));
-                if raw.is_empty() || !is_unity_ext {
-                    errors.push(BuildValidationError::new(
-                        "scenes",
-                        format!(
-                            "scene entry at index {index} ('{}') is not a valid '.unity' scene path",
-                            scene_path.display()
-                        ),
-                        "provide a non-empty file path ending with the '.unity' extension",
-                    ));
-                }
-                if !seen.insert(scene_path.clone()) {
-                    errors.push(BuildValidationError::new(
-                        "scenes",
-                        format!(
-                            "duplicate scene path '{}' creates ambiguous build scene ordering",
-                            scene_path.display()
-                        ),
-                        "remove the duplicate scene entry so each included scene path appears once",
-                    ));
-                }
+            return;
+        }
+        let mut seen = BTreeSet::new();
+        for (index, scene_path) in self.scenes.iter().enumerate() {
+            let raw = scene_path.as_os_str();
+            let is_unity_ext = scene_path
+                .extension()
+                .and_then(|ext| ext.to_str())
+                .is_some_and(|ext| ext.eq_ignore_ascii_case("unity"));
+            if raw.is_empty() || !is_unity_ext {
+                errors.push(BuildValidationError::new(
+                    "scenes",
+                    format!(
+                        "scene entry at index {index} ('{}') is not a valid '.unity' scene path",
+                        scene_path.display()
+                    ),
+                    "provide a non-empty file path ending with the '.unity' extension",
+                ));
+            }
+            if !seen.insert(scene_path.clone()) {
+                errors.push(BuildValidationError::new(
+                    "scenes",
+                    format!(
+                        "duplicate scene path '{}' creates ambiguous build scene ordering",
+                        scene_path.display()
+                    ),
+                    "remove the duplicate scene entry so each included scene path appears once",
+                ));
             }
         }
+    }
 
+    fn validate_identity(&self, errors: &mut Vec<BuildValidationError>) {
         if self.company_name.trim().is_empty() {
             errors.push(BuildValidationError::new(
                 "company_name",
@@ -266,7 +279,9 @@ impl BuildConfiguration {
                 "set version to a non-empty semantic or platform version string such as '0.1.0'",
             ));
         }
+    }
 
+    fn validate_target(&self, host: Option<BuildTarget>, errors: &mut Vec<BuildValidationError>) {
         match self.target.status_on(host) {
             TargetStatus::Supported => {}
             TargetStatus::UnavailableOnCurrentHost {
@@ -293,19 +308,15 @@ impl BuildConfiguration {
                 ));
             }
         }
+    }
 
+    fn validate_diagnostics(&self, errors: &mut Vec<BuildValidationError>) {
         if !self.development_build && self.development_diagnostics {
             errors.push(BuildValidationError::new(
                 "development_diagnostics",
                 "development diagnostics are enabled on a release build, which would leak development-only access into release output",
                 "disable development_diagnostics for release builds or enable development_build",
             ));
-        }
-
-        if errors.is_empty() {
-            Ok(())
-        } else {
-            Err(errors)
         }
     }
 }

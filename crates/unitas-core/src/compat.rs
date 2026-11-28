@@ -146,6 +146,41 @@ pub fn assess_package(
     )
 }
 
+fn unknown_assessment(
+    package_id: &str,
+    resolved_version: &str,
+    tier: Option<Tier>,
+    owning_spec: Option<&str>,
+    owning_feature_id: Option<&str>,
+    notes: String,
+) -> AssessedPackage {
+    AssessedPackage {
+        package_id: package_id.to_string(),
+        resolved_version: resolved_version.to_string(),
+        tier,
+        state: CompatibilityState::Unknown,
+        owning_spec: owning_spec.map(str::to_string),
+        owning_feature_id: owning_feature_id.map(str::to_string),
+        notes,
+    }
+}
+
+fn unsupported_family_assessment(
+    package_id: &str,
+    resolved_version: &str,
+    unsupported: &UnsupportedFamilyEntry,
+) -> AssessedPackage {
+    AssessedPackage {
+        package_id: package_id.to_string(),
+        resolved_version: resolved_version.to_string(),
+        tier: None,
+        state: unsupported.state,
+        owning_spec: Some(unsupported.owning_spec.to_string()),
+        owning_feature_id: Some(unsupported.owning_feature_id.to_string()),
+        notes: unsupported.observable_consequence.to_string(),
+    }
+}
+
 pub fn assess_package_for_baseline(
     package_id: &str,
     resolved_version: &str,
@@ -153,70 +188,60 @@ pub fn assess_package_for_baseline(
     migrated_from_earlier_lts: bool,
 ) -> AssessedPackage {
     if is_locally_modified_embedded {
-        return AssessedPackage {
-            package_id: package_id.to_string(),
-            resolved_version: resolved_version.to_string(),
-            tier: None,
-            state: CompatibilityState::Unknown,
-            owning_spec: None,
-            owning_feature_id: None,
-            notes: "locally modified embedded copy is assessed as third-party content".to_string(),
-        };
+        return unknown_assessment(
+            package_id,
+            resolved_version,
+            None,
+            None,
+            None,
+            "locally modified embedded copy is assessed as third-party content".to_string(),
+        );
     }
     if let Some(unsupported) = lookup_unsupported_family(package_id) {
-        return AssessedPackage {
-            package_id: package_id.to_string(),
-            resolved_version: resolved_version.to_string(),
-            tier: None,
-            state: unsupported.state,
-            owning_spec: Some(unsupported.owning_spec.to_string()),
-            owning_feature_id: Some(unsupported.owning_feature_id.to_string()),
-            notes: unsupported.observable_consequence.to_string(),
-        };
+        return unsupported_family_assessment(package_id, resolved_version, unsupported);
     }
     let Some(entry) = lookup_package_matrix(package_id) else {
-        return AssessedPackage {
-            package_id: package_id.to_string(),
-            resolved_version: resolved_version.to_string(),
-            tier: None,
-            state: CompatibilityState::Unknown,
-            owning_spec: None,
-            owning_feature_id: None,
-            notes: "package is not listed in the Unity 2022.3 LTS supported package matrix"
-                .to_string(),
-        };
+        return unknown_assessment(
+            package_id,
+            resolved_version,
+            None,
+            None,
+            None,
+            "package is not listed in the Unity 2022.3 LTS supported package matrix".to_string(),
+        );
     };
-    if is_preview_or_experimental_version(resolved_version) {
-        return AssessedPackage {
-            package_id: package_id.to_string(),
-            resolved_version: resolved_version.to_string(),
-            tier: Some(entry.tier),
-            state: CompatibilityState::Unknown,
-            owning_spec: Some(entry.owning_spec.to_string()),
-            owning_feature_id: Some(entry.owning_feature_id.to_string()),
-            notes: format!(
-                "version {resolved_version} is outside the Unity 2022.3 LTS matrix line ({})",
-                entry.version_line
-            ),
-        };
-    }
+    assess_against_matrix_entry(
+        package_id,
+        resolved_version,
+        entry,
+        migrated_from_earlier_lts,
+    )
+}
+
+fn assess_against_matrix_entry(
+    package_id: &str,
+    resolved_version: &str,
+    entry: &PackageMatrixEntry,
+    migrated_from_earlier_lts: bool,
+) -> AssessedPackage {
     let matches_direct = version_matches_line(resolved_version, entry.version_line);
     let matches_migrated = !matches_direct
         && migrated_from_earlier_lts
         && version_migrates_from_earlier_lts_line(resolved_version, entry.version_line);
-    if !matches_direct && !matches_migrated {
-        return AssessedPackage {
-            package_id: package_id.to_string(),
-            resolved_version: resolved_version.to_string(),
-            tier: Some(entry.tier),
-            state: CompatibilityState::Unknown,
-            owning_spec: Some(entry.owning_spec.to_string()),
-            owning_feature_id: Some(entry.owning_feature_id.to_string()),
-            notes: format!(
+    if is_preview_or_experimental_version(resolved_version)
+        || (!matches_direct && !matches_migrated)
+    {
+        return unknown_assessment(
+            package_id,
+            resolved_version,
+            Some(entry.tier),
+            Some(entry.owning_spec),
+            Some(entry.owning_feature_id),
+            format!(
                 "version {resolved_version} is outside the Unity 2022.3 LTS matrix line ({})",
                 entry.version_line
             ),
-        };
+        );
     }
     let notes = if matches_migrated {
         format!(
@@ -608,6 +633,48 @@ fn apply_tracked_absent_features(
     }
 }
 
+fn familiar_differences(feature_id: &str, tier: Tier) -> Vec<String> {
+    if tier == Tier::Familiar {
+        lookup_familiar_behavior_differences(feature_id).map_or_else(Vec::new, |entry| {
+            entry
+                .differences
+                .iter()
+                .map(|diff| (*diff).to_string())
+                .collect()
+        })
+    } else {
+        Vec::new()
+    }
+}
+
+fn consequence_with_capability_gap(
+    consequence: String,
+    state: CompatibilityState,
+    capability: Option<&'static OwnedFeatureCapability>,
+) -> String {
+    if state == CompatibilityState::PartiallySupported {
+        format!(
+            "{}{}",
+            consequence,
+            owned_capability_gap_suffix(&consequence, capability)
+        )
+    } else {
+        consequence
+    }
+}
+
+fn built_in_module_assessment(pkg: &ProjectPackageEntry) -> AssessedPackage {
+    AssessedPackage {
+        package_id: pkg.package_id.clone(),
+        resolved_version: pkg.version.clone(),
+        tier: Some(Tier::Semantic),
+        state: CompatibilityState::Supported,
+        owning_spec: Some("scripting-runtime.md".to_string()),
+        owning_feature_id: Some("RUN-002".to_string()),
+        notes: "built-in engine module".to_string(),
+    }
+}
+
 fn project_package_finding(
     pkg: &ProjectPackageEntry,
     migrated_from_earlier_lts: bool,
@@ -615,15 +682,7 @@ fn project_package_finding(
     let assessed = if pkg.source == PackageSource::BuiltInModule
         || pkg.package_id.starts_with("com.unity.modules.")
     {
-        AssessedPackage {
-            package_id: pkg.package_id.clone(),
-            resolved_version: pkg.version.clone(),
-            tier: Some(Tier::Semantic),
-            state: CompatibilityState::Supported,
-            owning_spec: Some("scripting-runtime.md".to_string()),
-            owning_feature_id: Some("RUN-002".to_string()),
-            notes: "built-in engine module".to_string(),
-        }
+        built_in_module_assessment(pkg)
     } else {
         assess_package_for_baseline(
             &pkg.package_id,
@@ -638,17 +697,7 @@ fn project_package_finding(
         .unwrap_or_else(|| "PRJ-006".to_string());
     let capability = lookup_owned_feature_capability(&feature_id);
     let tier = owning_feature_tier(&feature_id, assessed.tier);
-    let relied_upon_unity_differences = if tier == Tier::Familiar {
-        lookup_familiar_behavior_differences(&feature_id).map_or_else(Vec::new, |entry| {
-            entry
-                .differences
-                .iter()
-                .map(|diff| (*diff).to_string())
-                .collect()
-        })
-    } else {
-        Vec::new()
-    };
+    let relied_upon_unity_differences = familiar_differences(&feature_id, tier);
     let finding = Finding {
         feature_id,
         tier,
@@ -661,19 +710,60 @@ fn project_package_finding(
         },
         behavior: format!("package {} ({})", pkg.package_id, pkg.version),
         relied_upon_unity_differences,
-        observable_consequence: if assessed.state == CompatibilityState::PartiallySupported {
-            format!(
-                "{}{}",
-                assessed.notes,
-                owned_capability_gap_suffix(&assessed.notes, capability)
-            )
-        } else {
-            assessed.notes.clone()
-        },
+        observable_consequence: consequence_with_capability_gap(
+            assessed.notes.clone(),
+            assessed.state,
+            capability,
+        ),
         conditions: vec!["package resolved in project manifest".to_string()],
         related_findings: Vec::new(),
     };
     (assessed, finding)
+}
+
+fn default_asset_state(
+    asset: &ProjectAssetEntry,
+    unsupported_entry: Option<&UnsupportedFamilyEntry>,
+    capability: Option<&'static OwnedFeatureCapability>,
+) -> CompatibilityState {
+    unsupported_entry.map_or_else(
+        || match (asset.owning_feature_id.as_deref(), capability) {
+            (Some(_), Some(capability)) => capability.state(),
+            _ => CompatibilityState::Unknown,
+        },
+        |entry| entry.state,
+    )
+}
+
+fn default_asset_consequence(
+    state: CompatibilityState,
+    unsupported_entry: Option<&UnsupportedFamilyEntry>,
+) -> String {
+    unsupported_entry.map_or_else(
+        || match state {
+            CompatibilityState::Supported => "content is editable and playable".to_string(),
+            CompatibilityState::PartiallySupported => {
+                "content is usable with stated exclusions".to_string()
+            }
+            CompatibilityState::Unsupported => {
+                "recognized content is unsupported; unrelated content remains usable".to_string()
+            }
+            CompatibilityState::Unknown
+            | CompatibilityState::PlatformLimited
+            | CompatibilityState::ExternallyUnavailable => {
+                "content compatibility requires target or behavioral classification".to_string()
+            }
+        },
+        |entry| entry.observable_consequence.to_string(),
+    )
+}
+
+fn collect_playable_scene(asset: &ProjectAssetEntry, playable_scenes: &mut Vec<String>) {
+    if let Some(path) = &asset.content.asset_path {
+        if path.ends_with(".unity") && !playable_scenes.contains(path) {
+            playable_scenes.push(path.clone());
+        }
+    }
 }
 
 fn project_asset_finding(asset: &ProjectAssetEntry, playable_scenes: &mut Vec<String>) -> Finding {
@@ -685,63 +775,19 @@ fn project_asset_finding(asset: &ProjectAssetEntry, playable_scenes: &mut Vec<St
         )
     });
     let capability = lookup_owned_feature_capability(&feature_id);
-    let state = asset.state.unwrap_or_else(|| {
-        unsupported_entry.map_or_else(
-            || match (asset.owning_feature_id.as_deref(), capability) {
-                (Some(_), Some(capability)) => capability.state(),
-                _ => CompatibilityState::Unknown,
-            },
-            |entry| entry.state,
-        )
-    });
+    let state = asset
+        .state
+        .unwrap_or_else(|| default_asset_state(asset, unsupported_entry, capability));
     let tier = owning_feature_tier(&feature_id, asset.tier);
-    let consequence = asset.observable_consequence.clone().unwrap_or_else(|| {
-        unsupported_entry.map_or_else(
-            || match state {
-                CompatibilityState::Supported => "content is editable and playable".to_string(),
-                CompatibilityState::PartiallySupported => {
-                    "content is usable with stated exclusions".to_string()
-                }
-                CompatibilityState::Unsupported => {
-                    "recognized content is unsupported; unrelated content remains usable"
-                        .to_string()
-                }
-                CompatibilityState::Unknown
-                | CompatibilityState::PlatformLimited
-                | CompatibilityState::ExternallyUnavailable => {
-                    "content compatibility requires target or behavioral classification".to_string()
-                }
-            },
-            |entry| entry.observable_consequence.to_string(),
-        )
-    });
-    let consequence = if state == CompatibilityState::PartiallySupported {
-        format!(
-            "{}{}",
-            consequence,
-            owned_capability_gap_suffix(&consequence, capability)
-        )
-    } else {
-        consequence
-    };
+    let consequence = asset
+        .observable_consequence
+        .clone()
+        .unwrap_or_else(|| default_asset_consequence(state, unsupported_entry));
+    let consequence = consequence_with_capability_gap(consequence, state, capability);
     if state == CompatibilityState::Supported {
-        if let Some(path) = &asset.content.asset_path {
-            if path.ends_with(".unity") && !playable_scenes.contains(path) {
-                playable_scenes.push(path.clone());
-            }
-        }
+        collect_playable_scene(asset, playable_scenes);
     }
-    let relied_upon_unity_differences = if tier == Tier::Familiar {
-        lookup_familiar_behavior_differences(&feature_id).map_or_else(Vec::new, |entry| {
-            entry
-                .differences
-                .iter()
-                .map(|diff| (*diff).to_string())
-                .collect()
-        })
-    } else {
-        Vec::new()
-    };
+    let relied_upon_unity_differences = familiar_differences(&feature_id, tier);
     Finding {
         feature_id,
         tier,
@@ -755,6 +801,34 @@ fn project_asset_finding(asset: &ProjectAssetEntry, playable_scenes: &mut Vec<St
     }
 }
 
+fn default_setting_state(
+    unsupported_entry: Option<&UnsupportedFamilyEntry>,
+    capability: Option<&'static OwnedFeatureCapability>,
+) -> CompatibilityState {
+    unsupported_entry.map_or_else(
+        || capability.map_or(CompatibilityState::Unknown, |capability| capability.state()),
+        |entry| entry.state,
+    )
+}
+
+fn default_setting_consequence(
+    state: CompatibilityState,
+    unsupported_entry: Option<&UnsupportedFamilyEntry>,
+) -> String {
+    unsupported_entry.map_or_else(
+        || match state {
+            CompatibilityState::Unknown
+            | CompatibilityState::PlatformLimited
+            | CompatibilityState::ExternallyUnavailable => {
+                "project setting compatibility requires target or behavioral classification"
+                    .to_string()
+            }
+            _ => "project setting is represented and honored".to_string(),
+        },
+        |entry| entry.observable_consequence.to_string(),
+    )
+}
+
 fn project_setting_finding(setting: &ProjectSettingEntry) -> Finding {
     let unsupported_entry = lookup_unsupported_family(&setting.family);
     let feature_id = setting.owning_feature_id.clone().unwrap_or_else(|| {
@@ -764,36 +838,15 @@ fn project_setting_finding(setting: &ProjectSettingEntry) -> Finding {
         )
     });
     let capability = lookup_owned_feature_capability(&feature_id);
-    let state = setting.state.unwrap_or_else(|| {
-        unsupported_entry.map_or_else(
-            || capability.map_or(CompatibilityState::Unknown, |capability| capability.state()),
-            |entry| entry.state,
-        )
-    });
+    let state = setting
+        .state
+        .unwrap_or_else(|| default_setting_state(unsupported_entry, capability));
     let tier = owning_feature_tier(&feature_id, setting.tier);
-    let consequence = setting.observable_consequence.clone().unwrap_or_else(|| {
-        unsupported_entry.map_or_else(
-            || match state {
-                CompatibilityState::Unknown
-                | CompatibilityState::PlatformLimited
-                | CompatibilityState::ExternallyUnavailable => {
-                    "project setting compatibility requires target or behavioral classification"
-                        .to_string()
-                }
-                _ => "project setting is represented and honored".to_string(),
-            },
-            |entry| entry.observable_consequence.to_string(),
-        )
-    });
-    let consequence = if state == CompatibilityState::PartiallySupported {
-        format!(
-            "{}{}",
-            consequence,
-            owned_capability_gap_suffix(&consequence, capability)
-        )
-    } else {
-        consequence
-    };
+    let consequence = setting
+        .observable_consequence
+        .clone()
+        .unwrap_or_else(|| default_setting_consequence(state, unsupported_entry));
+    let consequence = consequence_with_capability_gap(consequence, state, capability);
     Finding {
         feature_id,
         tier,
@@ -947,7 +1000,7 @@ impl CompatibilityReport {
 mod tests {
     use super::*;
     use std::fs;
-    use std::path::PathBuf;
+    use std::path::{Path, PathBuf};
 
     const PRESENTATION_PLAYER_OWNED_IDS: [&str; 23] = [
         "REN-001", "REN-002", "REN-003", "REN-004", "REN-005", "REN-006", "REN-007", "UI-001",
@@ -978,90 +1031,11 @@ mod tests {
         });
 
         for feature_id in PRESENTATION_PLAYER_OWNED_IDS {
-            let catalog_entry = lookup_catalog_feature(feature_id);
-            assert!(
-                catalog_entry.is_some(),
-                "catalog entry missing for {feature_id}"
-            );
-            let Some(catalog) = catalog_entry else {
+            let Some(capability) = assert_catalog_capability_and_state(feature_id) else {
                 continue;
             };
-
-            let capability_entry = lookup_owned_feature_capability(feature_id);
-            assert!(
-                capability_entry.is_some(),
-                "owned feature capability missing for {feature_id}"
-            );
-            let Some(capability) = capability_entry else {
-                continue;
-            };
-
-            assert_eq!(capability.owning_spec, catalog.owning_spec);
-            assert!(!capability.capability.trim().is_empty());
-            assert!(!capability.parts.is_empty());
-
             let derived_state = capability.state();
-            assert!(
-                matches!(
-                    derived_state,
-                    CompatibilityState::PartiallySupported | CompatibilityState::Unsupported
-                ),
-                "feature {feature_id} derived unexpected state {derived_state:?}"
-            );
-            assert!(capability.gap().is_some());
-
-            if catalog.tier == Tier::Familiar {
-                assert!(
-                    lookup_familiar_behavior_differences(feature_id).is_some(),
-                    "Familiar owned feature {feature_id} must list differences"
-                );
-            }
-
-            for part in capability.parts {
-                assert!(!part.behavior.trim().is_empty());
-                assert!(
-                    root.join(part.location).is_file(),
-                    "location {} does not exist for {feature_id}",
-                    part.location
-                );
-                if part.evidence.is_empty() {
-                    assert!(
-                        part.missing.is_some_and(|m| !m.trim().is_empty()),
-                        "missing text required for undemonstrated part in {feature_id}"
-                    );
-                } else {
-                    for item in part.evidence {
-                        let split = item.split_once("::");
-                        assert!(
-                            split.is_some(),
-                            "invalid evidence format {item} in {feature_id}"
-                        );
-                        let Some((file_rel, test_name)) = split else {
-                            continue;
-                        };
-                        let file_path = root.join(file_rel);
-                        assert!(
-                            file_path.is_file(),
-                            "evidence file {file_rel} does not exist for {feature_id}"
-                        );
-                        let text = fs::read_to_string(&file_path).unwrap_or_default();
-                        let found = if file_rel.ends_with(".rs") {
-                            text.contains(&format!("fn {test_name}("))
-                        } else if file_rel.ends_with(".cs") {
-                            text.contains(&format!("void {test_name}("))
-                                || text.contains(&format!("Task {test_name}("))
-                        } else if file_rel.ends_with(".json") {
-                            text.contains(&format!("\"{test_name}\""))
-                        } else {
-                            false
-                        };
-                        assert!(
-                            found,
-                            "evidence test {test_name} not found in {file_rel} for {feature_id}"
-                        );
-                    }
-                }
-            }
+            assert_capability_parts_are_evidenced(feature_id, capability, &root);
 
             assert!(
                 probed
@@ -1077,5 +1051,101 @@ mod tests {
                 "assess_project.owned_feature_states missing {feature_id}"
             );
         }
+    }
+
+    fn assert_catalog_capability_and_state(
+        feature_id: &str,
+    ) -> Option<&'static OwnedFeatureCapability> {
+        let catalog_entry = lookup_catalog_feature(feature_id);
+        assert!(
+            catalog_entry.is_some(),
+            "catalog entry missing for {feature_id}"
+        );
+        let catalog = catalog_entry?;
+
+        let capability_entry = lookup_owned_feature_capability(feature_id);
+        assert!(
+            capability_entry.is_some(),
+            "owned feature capability missing for {feature_id}"
+        );
+        let capability = capability_entry?;
+
+        assert_eq!(capability.owning_spec, catalog.owning_spec);
+        assert!(!capability.capability.trim().is_empty());
+        assert!(!capability.parts.is_empty());
+
+        let derived_state = capability.state();
+        assert!(
+            matches!(
+                derived_state,
+                CompatibilityState::PartiallySupported | CompatibilityState::Unsupported
+            ),
+            "feature {feature_id} derived unexpected state {derived_state:?}"
+        );
+        assert!(capability.gap().is_some());
+
+        if catalog.tier == Tier::Familiar {
+            assert!(
+                lookup_familiar_behavior_differences(feature_id).is_some(),
+                "Familiar owned feature {feature_id} must list differences"
+            );
+        }
+        Some(capability)
+    }
+
+    fn assert_capability_parts_are_evidenced(
+        feature_id: &str,
+        capability: &OwnedFeatureCapability,
+        root: &Path,
+    ) {
+        for part in capability.parts {
+            assert!(!part.behavior.trim().is_empty());
+            assert!(
+                root.join(part.location).is_file(),
+                "location {} does not exist for {feature_id}",
+                part.location
+            );
+            if part.evidence.is_empty() {
+                assert!(
+                    part.missing.is_some_and(|m| !m.trim().is_empty()),
+                    "missing text required for undemonstrated part in {feature_id}"
+                );
+            } else {
+                for item in part.evidence {
+                    assert_evidence_item_exists(feature_id, item, root);
+                }
+            }
+        }
+    }
+
+    fn assert_evidence_item_exists(feature_id: &str, item: &str, root: &Path) {
+        let split = item.split_once("::");
+        assert!(
+            split.is_some(),
+            "invalid evidence format {item} in {feature_id}"
+        );
+        let Some((file_rel, test_name)) = split else {
+            return;
+        };
+        let file_path = root.join(file_rel);
+        assert!(
+            file_path.is_file(),
+            "evidence file {file_rel} does not exist for {feature_id}"
+        );
+        let text = fs::read_to_string(&file_path).unwrap_or_default();
+        let found = if file_rel.ends_with(".rs") {
+            text.contains(&format!("fn {test_name}("))
+        } else if file_rel.ends_with(".cs") {
+            text.contains(&format!("void {test_name}("))
+                || text.contains(&format!("Task {test_name}("))
+        } else if file_rel.ends_with(".json") {
+            text.contains(&format!("\"{test_name}\""))
+        } else {
+            false
+        };
+        assert!(
+            found,
+            "evidence test {test_name} not found in {file_rel} for {feature_id}"
+        );
     }
 }

@@ -355,6 +355,55 @@ struct Body {
 }
 
 impl Body {
+    fn from_desc(entity: EntityId, handles: BackendHandles, desc: BodyDesc, role: BodyRole) -> Self {
+        let bounding_radius = match &desc.collider_shape {
+            ColliderShape::Primitive(shape) => shape.bounding_radius(),
+            ColliderShape::Mesh { .. } => f64::INFINITY,
+        };
+        Self {
+            entity,
+            handles,
+            collider_shape: desc.collider_shape,
+            bounding_radius,
+            mass: desc.mass,
+            role,
+            is_trigger: desc.is_trigger,
+            position: desc.position,
+            rotation: desc.rotation,
+            query_position: desc.position,
+            query_rotation: desc.rotation,
+            velocity: desc.velocity,
+            angular_velocity: [0.0; 3],
+            layer: desc.layer,
+            friction: desc.friction,
+            restitution: desc.restitution,
+            friction_combine: FrictionCombine::Average,
+            restitution_combine: BounceCombine::Average,
+            collision_detection_mode: desc.collision_detection_mode,
+            interpolation: BodyInterpolation::default(),
+            max_angular_velocity: None,
+            linear_drag: 0.0,
+            angular_drag: 0.0,
+            layer_include: None,
+            layer_exclude: None,
+            layer_priority: 0,
+            uses_default_material: false,
+            previous_position: desc.position,
+            previous_rotation: desc.rotation,
+            sweep_velocity: [0.0; 3],
+            pending_force: [0.0; 3],
+            pending_impulse: [0.0; 3],
+            pending_acceleration: [0.0; 3],
+            pending_torque: [0.0; 3],
+            pending_angular_acceleration: [0.0; 3],
+            pending_move_position: None,
+            pending_move_rotation: None,
+            sleeping: false,
+            sleep_timer: 0.0,
+            simulated: true,
+        }
+    }
+
     fn inverse_mass(&self) -> f64 {
         match self.role {
             BodyRole::Dynamic if self.mass > 0.0 => 1.0 / self.mass,
@@ -716,53 +765,9 @@ impl World {
             self.ccd_body_count += 1;
         }
         self.note_convex_hull_limit(entity, &desc.collider_shape);
-        let bounding_radius = match &desc.collider_shape {
-            ColliderShape::Primitive(shape) => shape.bounding_radius(),
-            ColliderShape::Mesh { .. } => f64::INFINITY,
-        };
         let index = self.bodies.len();
-        self.bodies.push(Body {
-            entity,
-            handles,
-            collider_shape: desc.collider_shape,
-            bounding_radius,
-            mass: desc.mass,
-            role,
-            is_trigger: desc.is_trigger,
-            position: desc.position,
-            rotation: desc.rotation,
-            query_position: desc.position,
-            query_rotation: desc.rotation,
-            velocity: desc.velocity,
-            angular_velocity: [0.0; 3],
-            layer: desc.layer,
-            friction: desc.friction,
-            restitution: desc.restitution,
-            friction_combine: FrictionCombine::Average,
-            restitution_combine: BounceCombine::Average,
-            collision_detection_mode: desc.collision_detection_mode,
-            interpolation: BodyInterpolation::default(),
-            max_angular_velocity: None,
-            linear_drag: 0.0,
-            angular_drag: 0.0,
-            layer_include: None,
-            layer_exclude: None,
-            layer_priority: 0,
-            uses_default_material: false,
-            previous_position: desc.position,
-            previous_rotation: desc.rotation,
-            sweep_velocity: [0.0; 3],
-            pending_force: [0.0; 3],
-            pending_impulse: [0.0; 3],
-            pending_acceleration: [0.0; 3],
-            pending_torque: [0.0; 3],
-            pending_angular_acceleration: [0.0; 3],
-            pending_move_position: None,
-            pending_move_rotation: None,
-            sleeping: false,
-            sleep_timer: 0.0,
-            simulated: true,
-        });
+        self.bodies
+            .push(Body::from_desc(entity, handles, desc, role));
         self.indices.insert(entity, index);
         Ok(())
     }
@@ -775,44 +780,40 @@ impl World {
         if sweep_distance > self.solver_settings.contact_offset {
             self.backend.set_prediction_distance(sweep_distance);
         }
+        self.prepare_bodies_for_step(delta_seconds);
+        if delta_seconds > 0.0 {
+            self.prepare_collision_detection(delta_seconds);
+            self.backend
+                .step(self.gravity, delta_seconds, &self.collision_matrix);
+            self.collect_collision_payloads();
+        }
+        if sweep_distance > self.solver_settings.contact_offset {
+            self.backend
+                .set_prediction_distance(self.solver_settings.contact_offset);
+        }
+        self.pull_bodies_after_step();
+        self.update_sweep_velocities(delta_seconds);
+        self.solve_joints_3d(delta_seconds);
+        self.update_sleeping(delta_seconds);
+        self.last_delta_seconds = delta_seconds;
+        if delta_seconds > 0.0 {
+            self.collect_events();
+        } else {
+            self.emit_events(&self.overlapping.clone());
+            self.emit_trigger_events(&self.overlapping_triggers.clone());
+        }
+        self.commit_kinematic_poses();
+        self.sync_transforms();
+        Ok(())
+    }
+
+    fn prepare_bodies_for_step(&mut self, delta_seconds: f64) {
         for body in &mut self.bodies {
             if !body.simulated {
                 continue;
             }
             if body.role == BodyRole::Kinematic {
-                if body.pending_move_position.is_some() || body.pending_move_rotation.is_some() {
-                    if delta_seconds > 0.0 {
-                        let current = self.backend.position(body.handles);
-                        let target = body.pending_move_position.unwrap_or(current);
-                        body.sweep_velocity = velocity_between(target, current, delta_seconds);
-                        self.backend.set_next_kinematic_pose(
-                            body.handles,
-                            body.pending_move_position,
-                            body.pending_move_rotation,
-                        );
-                    } else {
-                        let position = body.pending_move_position.unwrap_or(body.position);
-                        let rotation = body.pending_move_rotation.unwrap_or(body.rotation);
-                        self.backend.set_pose(body.handles, position, rotation);
-                    }
-                    body.pending_move_position = None;
-                    body.pending_move_rotation = None;
-                } else if delta_seconds > 0.0
-                    && (body.position != body.previous_position
-                        || body.rotation != body.previous_rotation)
-                {
-                    self.backend
-                        .set_translation(body.handles, body.previous_position, false);
-                    self.backend
-                        .set_rotation(body.handles, body.previous_rotation, false);
-                    body.sweep_velocity =
-                        velocity_between(body.position, body.previous_position, delta_seconds);
-                    self.backend.set_next_kinematic_pose(
-                        body.handles,
-                        Some(body.position),
-                        Some(body.rotation),
-                    );
-                }
+                Self::prepare_kinematic_body_for_step(&mut self.backend, body, delta_seconds);
                 continue;
             }
             if body.role != BodyRole::Dynamic {
@@ -846,16 +847,46 @@ impl World {
                 delta_seconds,
             );
         }
-        if delta_seconds > 0.0 {
-            self.prepare_collision_detection(delta_seconds);
-            self.backend
-                .step(self.gravity, delta_seconds, &self.collision_matrix);
-            self.collect_collision_payloads();
+    }
+
+    fn prepare_kinematic_body_for_step(
+        backend: &mut Backend,
+        body: &mut Body,
+        delta_seconds: f64,
+    ) {
+        if body.pending_move_position.is_some() || body.pending_move_rotation.is_some() {
+            if delta_seconds > 0.0 {
+                let current = backend.position(body.handles);
+                let target = body.pending_move_position.unwrap_or(current);
+                body.sweep_velocity = velocity_between(target, current, delta_seconds);
+                backend.set_next_kinematic_pose(
+                    body.handles,
+                    body.pending_move_position,
+                    body.pending_move_rotation,
+                );
+            } else {
+                let position = body.pending_move_position.unwrap_or(body.position);
+                let rotation = body.pending_move_rotation.unwrap_or(body.rotation);
+                backend.set_pose(body.handles, position, rotation);
+            }
+            body.pending_move_position = None;
+            body.pending_move_rotation = None;
+        } else if delta_seconds > 0.0
+            && (body.position != body.previous_position || body.rotation != body.previous_rotation)
+        {
+            backend.set_translation(body.handles, body.previous_position, false);
+            backend.set_rotation(body.handles, body.previous_rotation, false);
+            body.sweep_velocity =
+                velocity_between(body.position, body.previous_position, delta_seconds);
+            backend.set_next_kinematic_pose(
+                body.handles,
+                Some(body.position),
+                Some(body.rotation),
+            );
         }
-        if sweep_distance > self.solver_settings.contact_offset {
-            self.backend
-                .set_prediction_distance(self.solver_settings.contact_offset);
-        }
+    }
+
+    fn pull_bodies_after_step(&mut self) {
         for body in &mut self.bodies {
             if !body.simulated {
                 continue;
@@ -888,19 +919,6 @@ impl World {
                 BodyRole::Static => {}
             }
         }
-        self.update_sweep_velocities(delta_seconds);
-        self.solve_joints_3d(delta_seconds);
-        self.update_sleeping(delta_seconds);
-        self.last_delta_seconds = delta_seconds;
-        if delta_seconds > 0.0 {
-            self.collect_events();
-        } else {
-            self.emit_events(&self.overlapping.clone());
-            self.emit_trigger_events(&self.overlapping_triggers.clone());
-        }
-        self.commit_kinematic_poses();
-        self.sync_transforms();
-        Ok(())
     }
 
     fn kinematic_sweep_distance(&self) -> f64 {
@@ -2000,12 +2018,8 @@ impl World {
         let mut high = [f64::NEG_INFINITY; 3];
         for entry in &entries {
             for index in 0..3 {
-                if entry.position[index] < low[index] {
-                    low[index] = entry.position[index];
-                }
-                if entry.position[index] > high[index] {
-                    high[index] = entry.position[index];
-                }
+                low[index] = low[index].min(entry.position[index]);
+                high[index] = high[index].max(entry.position[index]);
             }
         }
         let mut axis = 0usize;
@@ -2020,9 +2034,7 @@ impl World {
         let mut max_broad_radius = 0.0f64;
         for entry in &mut entries {
             entry.axis_coord = entry.position[axis];
-            if entry.broad_radius > max_broad_radius {
-                max_broad_radius = entry.broad_radius;
-            }
+            max_broad_radius = max_broad_radius.max(entry.broad_radius);
         }
         entries.sort_unstable_by(|left, right| left.axis_coord.total_cmp(&right.axis_coord));
         QueryBodies {
@@ -2174,56 +2186,15 @@ impl World {
         let dispatcher = self.backend.dispatcher();
         let mut hits = Vec::new();
         for body in &self.bodies {
-            if !body.simulated {
-                continue;
+            if let Some(hit) = Self::cast_against_body(
+                dispatcher,
+                body,
+                cast_shape,
+                (origin, direction, max_distance),
+                (layer_mask, include_triggers, use_layer_index),
+            ) {
+                hits.push(hit);
             }
-            let layer_ok = if use_layer_index {
-                Self::layer_index_matches_mask(body.layer, layer_mask)
-            } else {
-                body.layer & layer_mask != 0
-            };
-            if !layer_ok {
-                continue;
-            }
-            if body.is_trigger && !include_triggers {
-                continue;
-            }
-            let hit = match cast_shape {
-                CastShape::Point => body.query_shape().and_then(|shape| {
-                    cast_ray_against(
-                        origin,
-                        direction,
-                        max_distance,
-                        body.query_position,
-                        body.query_rotation,
-                        &shape,
-                    )
-                }),
-                CastShape::Sphere { .. } | CastShape::Box { .. } => {
-                    body.query_shape().and_then(|shape| {
-                        cast_shape_against(
-                            dispatcher,
-                            cast_shape,
-                            origin,
-                            direction,
-                            max_distance,
-                            (body.query_position, body.query_rotation, &shape),
-                        )
-                    })
-                }
-            };
-            let Some(hit) = hit else {
-                continue;
-            };
-            if hit.distance > max_distance {
-                continue;
-            }
-            hits.push(QueryHit {
-                entity: body.entity,
-                point: hit.point,
-                normal: hit.normal,
-                distance: hit.distance,
-            });
         }
         hits.sort_by(|first, second| {
             first
@@ -2232,6 +2203,56 @@ impl World {
                 .then(first.entity.cmp(&second.entity))
         });
         hits
+    }
+
+    fn cast_against_body(
+        dispatcher: &dyn rapier3d::parry::query::QueryDispatcher,
+        body: &Body,
+        cast_shape: CastShape,
+        ray: ([f64; 3], [f64; 3], f64),
+        filter: (u32, bool, bool),
+    ) -> Option<QueryHit> {
+        let (origin, direction, max_distance) = ray;
+        let (layer_mask, include_triggers, use_layer_index) = filter;
+        if !body.simulated {
+            return None;
+        }
+        let layer_ok = if use_layer_index {
+            Self::layer_index_matches_mask(body.layer, layer_mask)
+        } else {
+            body.layer & layer_mask != 0
+        };
+        if !layer_ok || (body.is_trigger && !include_triggers) {
+            return None;
+        }
+        let shape = body.query_shape()?;
+        let hit = match cast_shape {
+            CastShape::Point => cast_ray_against(
+                origin,
+                direction,
+                max_distance,
+                body.query_position,
+                body.query_rotation,
+                &shape,
+            ),
+            CastShape::Sphere { .. } | CastShape::Box { .. } => cast_shape_against(
+                dispatcher,
+                cast_shape,
+                origin,
+                direction,
+                max_distance,
+                (body.query_position, body.query_rotation, &shape),
+            ),
+        }?;
+        if hit.distance > max_distance {
+            return None;
+        }
+        Some(QueryHit {
+            entity: body.entity,
+            point: hit.point,
+            normal: hit.normal,
+            distance: hit.distance,
+        })
     }
 
     fn update_sweep_velocities(&mut self, delta_seconds: f64) {
@@ -2499,6 +2520,28 @@ fn clamp_character_rotation(
     (combined, twist_err + swing_err)
 }
 
+fn clamp_configurable_axis_motion(
+    motion: ConfigurableJointMotion,
+    low: f64,
+    high: f64,
+    val: &mut f64,
+) -> bool {
+    match motion {
+        ConfigurableJointMotion::Locked => {
+            let clamped = val.abs() > 1e-6;
+            *val = 0.0;
+            clamped
+        }
+        ConfigurableJointMotion::Limited => {
+            let c = val.clamp(low.min(high), low.max(high));
+            let clamped = (c - *val).abs() > 1e-6;
+            *val = c;
+            clamped
+        }
+        ConfigurableJointMotion::Free => false,
+    }
+}
+
 fn clamp_configurable_rotation(
     rel_rot: [f64; 4],
     axes: ([f64; 3], [f64; 3], [f64; 3]),
@@ -2516,62 +2559,13 @@ fn clamp_configurable_rotation(
     let mut ry = dot(rot_vec, y_axis);
     let mut rz = dot(rot_vec, z_axis);
     let orig = (rx, ry, rz);
-    let mut clamped_any = false;
 
-    match motions.0 {
-        ConfigurableJointMotion::Locked => {
-            if rx.abs() > 1e-6 {
-                clamped_any = true;
-            }
-            rx = 0.0;
-        }
-        ConfigurableJointMotion::Limited => {
-            let low = limits.0.min(limits.1);
-            let high = limits.0.max(limits.1);
-            let c = rx.clamp(low, high);
-            if (c - rx).abs() > 1e-6 {
-                clamped_any = true;
-            }
-            rx = c;
-        }
-        ConfigurableJointMotion::Free => {}
-    }
-
-    match motions.1 {
-        ConfigurableJointMotion::Locked => {
-            if ry.abs() > 1e-6 {
-                clamped_any = true;
-            }
-            ry = 0.0;
-        }
-        ConfigurableJointMotion::Limited => {
-            let lim = limits.2.max(0.0);
-            let c = ry.clamp(-lim, lim);
-            if (c - ry).abs() > 1e-6 {
-                clamped_any = true;
-            }
-            ry = c;
-        }
-        ConfigurableJointMotion::Free => {}
-    }
-
-    match motions.2 {
-        ConfigurableJointMotion::Locked => {
-            if rz.abs() > 1e-6 {
-                clamped_any = true;
-            }
-            rz = 0.0;
-        }
-        ConfigurableJointMotion::Limited => {
-            let lim = limits.3.max(0.0);
-            let c = rz.clamp(-lim, lim);
-            if (c - rz).abs() > 1e-6 {
-                clamped_any = true;
-            }
-            rz = c;
-        }
-        ConfigurableJointMotion::Free => {}
-    }
+    let cx = clamp_configurable_axis_motion(motions.0, limits.0, limits.1, &mut rx);
+    let lim_y = limits.2.max(0.0);
+    let cy = clamp_configurable_axis_motion(motions.1, -lim_y, lim_y, &mut ry);
+    let lim_z = limits.3.max(0.0);
+    let cz = clamp_configurable_axis_motion(motions.2, -lim_z, lim_z, &mut rz);
+    let clamped_any = cx || cy || cz;
 
     let err = ((rx - orig.0).powi(2) + (ry - orig.1).powi(2) + (rz - orig.2).powi(2)).sqrt();
     let new_vec = add(

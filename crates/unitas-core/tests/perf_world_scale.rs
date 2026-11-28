@@ -1,7 +1,7 @@
 use std::error::Error;
 use std::time::Instant;
 
-use unitas_core::{ChangeKind, CoreError, EntityId, SceneGraph};
+use unitas_core::{ChangeKind, CoreError, EntityId, SceneChange, SceneGraph};
 
 type TestResult = Result<(), Box<dyn Error>>;
 
@@ -30,15 +30,7 @@ fn build_world(graph: &mut SceneGraph) -> Result<Vec<EntityId>, CoreError> {
     Ok(ids)
 }
 
-#[test]
-#[ignore = "perf measurement runs in the make verify-perf lane"]
-fn perf_world_scale_holds_a_hundred_thousand_game_object_world_within_the_ceiling() -> TestResult {
-    let started = Instant::now();
-    let mut graph = SceneGraph::new();
-    let ids = build_world(&mut graph)?;
-    let built = started.elapsed();
-
-    let lookup_started = Instant::now();
+fn assert_world_lookups(graph: &SceneGraph, ids: &[EntityId]) -> TestResult {
     for (index, id) in ids.iter().enumerate() {
         let entity = graph
             .entity(*id)
@@ -55,9 +47,10 @@ fn perf_world_scale_holds_a_hundred_thousand_game_object_world_within_the_ceilin
             return Err(format!("GameObject {index} carries the name {}", entity.name).into());
         }
     }
-    let looked_up = lookup_started.elapsed();
+    Ok(())
+}
 
-    let churn_started = Instant::now();
+fn churn_world(graph: &mut SceneGraph, ids: &[EntityId]) -> TestResult {
     for (index, stale) in ids.iter().copied().enumerate().take(CHURN_COUNT) {
         graph.mark_destroyed(stale)?;
         graph.sweep_destroyed();
@@ -72,25 +65,15 @@ fn perf_world_scale_holds_a_hundred_thousand_game_object_world_within_the_ceilin
             return Err(format!("the churned handle {fresh} resolved to {}", entity.id).into());
         }
     }
-    let churned = churn_started.elapsed();
+    Ok(())
+}
 
-    let reparent_started = Instant::now();
-    let group = graph.add_entity("ReparentedGroup");
-    for id in ids.iter().skip(CHURN_COUNT).take(REPARENT_BATCH) {
-        graph.attach(*id, group)?;
-    }
-    let reparented = reparent_started.elapsed();
-
-    let drain_started = Instant::now();
-    let changes = graph.take_changes();
-    let drained = drain_started.elapsed();
-    let value_ms = started.elapsed().as_secs_f64() * 1000.0;
-
+fn count_changes(changes: &[SceneChange]) -> (usize, usize, usize, usize) {
     let mut created = 0usize;
     let mut reparent_changes = 0usize;
     let mut destroyed = 0usize;
     let mut transformed = 0usize;
-    for change in &changes {
+    for change in changes {
         match change.kind {
             ChangeKind::Created => created += 1,
             ChangeKind::Reparented => reparent_changes += 1,
@@ -98,7 +81,17 @@ fn perf_world_scale_holds_a_hundred_thousand_game_object_world_within_the_ceilin
             ChangeKind::TransformChanged => transformed += 1,
         }
     }
+    (created, reparent_changes, destroyed, transformed)
+}
 
+fn assert_world_state(
+    graph: &mut SceneGraph,
+    ids: &[EntityId],
+    group: EntityId,
+    changes: &[SceneChange],
+    counts: (usize, usize, usize, usize),
+) {
+    let (created, reparent_changes, destroyed, transformed) = counts;
     assert_eq!(graph.len(), GAME_OBJECT_COUNT + SECTOR_COUNT + 2);
     assert_eq!(graph.children(group).len(), REPARENT_BATCH);
     assert_eq!(graph.parent(ids[CHURN_COUNT]), Some(group));
@@ -117,6 +110,38 @@ fn perf_world_scale_holds_a_hundred_thousand_game_object_world_within_the_ceilin
             && change.entity == ids[CHURN_COUNT]
             && change.parent == Some(group)));
     assert!(graph.take_changes().is_empty());
+}
+
+#[test]
+#[ignore = "perf measurement runs in the make verify-perf lane"]
+fn perf_world_scale_holds_a_hundred_thousand_game_object_world_within_the_ceiling() -> TestResult {
+    let started = Instant::now();
+    let mut graph = SceneGraph::new();
+    let ids = build_world(&mut graph)?;
+    let built = started.elapsed();
+
+    let lookup_started = Instant::now();
+    assert_world_lookups(&graph, &ids)?;
+    let looked_up = lookup_started.elapsed();
+
+    let churn_started = Instant::now();
+    churn_world(&mut graph, &ids)?;
+    let churned = churn_started.elapsed();
+
+    let reparent_started = Instant::now();
+    let group = graph.add_entity("ReparentedGroup");
+    for id in ids.iter().skip(CHURN_COUNT).take(REPARENT_BATCH) {
+        graph.attach(*id, group)?;
+    }
+    let reparented = reparent_started.elapsed();
+
+    let drain_started = Instant::now();
+    let changes = graph.take_changes();
+    let drained = drain_started.elapsed();
+    let value_ms = started.elapsed().as_secs_f64() * 1000.0;
+
+    let counts = count_changes(&changes);
+    assert_world_state(&mut graph, &ids, group, &changes, counts);
 
     println!(
         "world_scale_100k world: {GAME_OBJECT_COUNT} GameObjects in {SECTOR_COUNT} sectors, \

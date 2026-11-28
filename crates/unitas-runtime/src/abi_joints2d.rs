@@ -145,37 +145,89 @@ fn build_joint_2d_primary(
             break_force: bf,
             break_torque: bt,
         })),
-        3 => Some(Joint2D::Hinge(HingeJoint2D {
-            body_a,
-            body_b,
-            anchor_a,
-            anchor_b,
-            use_motor: v[15] != 0.0,
-            motor: JointMotor2D {
-                motor_speed: v[16] as f32,
-                max_motor_torque: v[17] as f32,
-            },
-            use_limits: v[18] != 0.0,
-            limits: JointLimits2D {
-                min: v[19] as f32,
-                max: v[20] as f32,
-            },
-            break_force: bf,
-            break_torque: bt,
-        })),
-        4 => Some(Joint2D::Relative(RelativeJoint2D {
-            body_a,
-            body_b,
-            linear_offset: [v[6] as f32, v[7] as f32],
-            angular_offset: v[10] as f32,
-            max_force: v[11] as f32,
-            max_torque: v[12] as f32,
-            correction_scale: v[13] as f32,
-            break_force: bf,
-            break_torque: bt,
-        })),
+        3 => Some(build_hinge_joint_2d(bodies, anchors, v, breaks)),
+        4 => Some(build_relative_joint_2d(bodies, v, breaks)),
         _ => None,
     }
+}
+
+fn build_hinge_joint_2d(
+    bodies: (BodyId2D, Option<BodyId2D>),
+    anchors: ([f32; 2], [f32; 2]),
+    v: &[f64],
+    breaks: (f32, f32),
+) -> Joint2D {
+    let (body_a, body_b) = bodies;
+    let (anchor_a, anchor_b) = anchors;
+    let (bf, bt) = breaks;
+    Joint2D::Hinge(HingeJoint2D {
+        body_a,
+        body_b,
+        anchor_a,
+        anchor_b,
+        use_motor: v[15] != 0.0,
+        motor: JointMotor2D {
+            motor_speed: v[16] as f32,
+            max_motor_torque: v[17] as f32,
+        },
+        use_limits: v[18] != 0.0,
+        limits: JointLimits2D {
+            min: v[19] as f32,
+            max: v[20] as f32,
+        },
+        break_force: bf,
+        break_torque: bt,
+    })
+}
+
+fn build_relative_joint_2d(
+    bodies: (BodyId2D, Option<BodyId2D>),
+    v: &[f64],
+    breaks: (f32, f32),
+) -> Joint2D {
+    let (body_a, body_b) = bodies;
+    let (bf, bt) = breaks;
+    Joint2D::Relative(RelativeJoint2D {
+        body_a,
+        body_b,
+        linear_offset: [v[6] as f32, v[7] as f32],
+        angular_offset: v[10] as f32,
+        max_force: v[11] as f32,
+        max_torque: v[12] as f32,
+        correction_scale: v[13] as f32,
+        break_force: bf,
+        break_torque: bt,
+    })
+}
+
+fn build_slider_joint_2d(
+    bodies: (BodyId2D, Option<BodyId2D>),
+    anchors: ([f32; 2], [f32; 2]),
+    v: &[f64],
+    breaks: (f32, f32),
+) -> Joint2D {
+    let (body_a, body_b) = bodies;
+    let (anchor_a, anchor_b) = anchors;
+    let (bf, bt) = breaks;
+    Joint2D::Slider(SliderJoint2D {
+        body_a,
+        body_b,
+        anchor_a,
+        anchor_b,
+        angle_degrees: v[14] as f32,
+        use_motor: v[15] != 0.0,
+        motor: JointMotor2D {
+            motor_speed: v[16] as f32,
+            max_motor_torque: v[17] as f32,
+        },
+        use_limits: v[18] != 0.0,
+        limits: JointLimits2D {
+            min: v[19] as f32,
+            max: v[20] as f32,
+        },
+        break_force: bf,
+        break_torque: bt,
+    })
 }
 
 fn build_joint_2d_secondary(
@@ -188,28 +240,8 @@ fn build_joint_2d_secondary(
     let (body_a, body_b) = bodies;
     let (anchor_a, anchor_b) = anchors;
     let (bf, bt) = breaks;
-    let motor = JointMotor2D {
-        motor_speed: v[16] as f32,
-        max_motor_torque: v[17] as f32,
-    };
-    let limits = JointLimits2D {
-        min: v[19] as f32,
-        max: v[20] as f32,
-    };
     match kind {
-        5 => Some(Joint2D::Slider(SliderJoint2D {
-            body_a,
-            body_b,
-            anchor_a,
-            anchor_b,
-            angle_degrees: v[14] as f32,
-            use_motor: v[15] != 0.0,
-            motor,
-            use_limits: v[18] != 0.0,
-            limits,
-            break_force: bf,
-            break_torque: bt,
-        })),
+        5 => Some(build_slider_joint_2d(bodies, anchors, v, breaks)),
         6 => Some(Joint2D::Spring(SpringJoint2D {
             body_a,
             body_b,
@@ -238,7 +270,10 @@ fn build_joint_2d_secondary(
             suspension_frequency: v[9] as f32,
             suspension_damping_ratio: v[8] as f32,
             use_motor: v[15] != 0.0,
-            motor,
+            motor: JointMotor2D {
+                motor_speed: v[16] as f32,
+                max_motor_torque: v[17] as f32,
+            },
             break_force: bf,
             break_torque: bt,
         })),

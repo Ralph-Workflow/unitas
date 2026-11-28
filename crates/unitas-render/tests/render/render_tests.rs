@@ -525,6 +525,85 @@ fn nearer_instance_occludes_farther_instance() -> Result<(), Box<dyn std::error:
     Ok(())
 }
 
+fn material_instances<'a>(
+    mesh: &'a Mesh,
+    attributes: &'a MeshAttributes,
+    flat: &'a Material,
+    textured: &'a Material,
+) -> [GpuMaterialInstance<'a>; 3] {
+    [
+        GpuMaterialInstance {
+            mesh,
+            attributes: Some(attributes),
+            model: scaled_translated_model(1.0, Vec3::new(-2.0, 0.0, 0.0)),
+            color: [1.0, 1.0, 1.0],
+            material: flat,
+        },
+        GpuMaterialInstance {
+            mesh,
+            attributes: Some(attributes),
+            model: scaled_translated_model(1.0, Vec3::new(0.0, 0.0, 0.0)),
+            color: [1.0, 1.0, 1.0],
+            material: flat,
+        },
+        GpuMaterialInstance {
+            mesh,
+            attributes: Some(attributes),
+            model: scaled_translated_model(1.0, Vec3::new(2.0, 0.0, 0.0)),
+            color: [1.0, 1.0, 1.0],
+            material: textured,
+        },
+    ]
+}
+
+fn render_and_count_uploads(
+    renderer: &Renderer,
+    instances: &[GpuMaterialInstance],
+    camera: &Camera,
+    view: Mat4,
+    light: &DirectionalLight,
+    mesh_delta: u32,
+    material_delta: u32,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let meshes_before = renderer.mesh_upload_count();
+    let materials_before = renderer.material_bind_group_count();
+    renderer.render_offscreen_materials(
+        instances,
+        camera,
+        view,
+        light,
+        [0.0, 0.0, 0.0],
+        (96, 96),
+    )?;
+    assert_eq!(renderer.mesh_upload_count(), meshes_before + mesh_delta);
+    assert_eq!(
+        renderer.material_bind_group_count(),
+        materials_before + material_delta
+    );
+    Ok(())
+}
+
+fn assert_material_instance_pixels(image: &Image) -> Result<(), Box<dyn std::error::Error>> {
+    let row = 48;
+    let textured_pixel = (0..96)
+        .map(|x| (x, image.get_pixel(x, row)))
+        .find(|(_, pixel)| pixel[0] > 200 && pixel[1] < 60 && pixel[2] < 60);
+    let flat_pixel = (0..96)
+        .map(|x| (x, image.get_pixel(x, row)))
+        .find(|(_, pixel)| pixel[0] > 200 && pixel[1] > 200 && pixel[2] > 200);
+    let (textured_x, textured_pixel) = match textured_pixel {
+        Some(found) => found,
+        None => return Err("the textured instance drew no red pixel".into()),
+    };
+    let (flat_x, flat_pixel) = match flat_pixel {
+        Some(found) => found,
+        None => return Err("the flat instances drew no white pixel".into()),
+    };
+    assert_ne!(textured_x, flat_x);
+    assert_ne!(textured_pixel, flat_pixel);
+    Ok(())
+}
+
 #[test]
 fn material_instances_upload_one_mesh_and_one_bind_group_per_material(
 ) -> Result<(), Box<dyn std::error::Error>> {
@@ -545,6 +624,7 @@ fn material_instances_upload_one_mesh_and_one_bind_group_per_material(
         smoothness: 0.5,
         ..Material::plain()
     };
+    let instances = material_instances(&mesh, &attributes, &flat, &textured);
     let camera = Camera::perspective(60.0, 1.0, 0.1, 100.0);
     let view = look_at(
         Vec3::new(0.0, 0.0, -5.0),
@@ -556,33 +636,9 @@ fn material_instances_upload_one_mesh_and_one_bind_group_per_material(
         color: [1.0, 1.0, 1.0],
         intensity: 0.0,
     };
-    let instances = [
-        GpuMaterialInstance {
-            mesh: &mesh,
-            attributes: Some(&attributes),
-            model: scaled_translated_model(1.0, Vec3::new(-2.0, 0.0, 0.0)),
-            color: [1.0, 1.0, 1.0],
-            material: &flat,
-        },
-        GpuMaterialInstance {
-            mesh: &mesh,
-            attributes: Some(&attributes),
-            model: scaled_translated_model(1.0, Vec3::new(0.0, 0.0, 0.0)),
-            color: [1.0, 1.0, 1.0],
-            material: &flat,
-        },
-        GpuMaterialInstance {
-            mesh: &mesh,
-            attributes: Some(&attributes),
-            model: scaled_translated_model(1.0, Vec3::new(2.0, 0.0, 0.0)),
-            color: [1.0, 1.0, 1.0],
-            material: &textured,
-        },
-    ];
 
     renderer.invalidate_resource_cache();
-    let meshes_before = renderer.mesh_upload_count();
-    let materials_before = renderer.material_bind_group_count();
+    render_and_count_uploads(&renderer, &instances, &camera, view, &light, 1, 2)?;
     let image = renderer.render_offscreen_materials(
         &instances,
         &camera,
@@ -591,72 +647,16 @@ fn material_instances_upload_one_mesh_and_one_bind_group_per_material(
         [0.0, 0.0, 0.0],
         (96, 96),
     )?;
-    assert_eq!(renderer.mesh_upload_count(), meshes_before + 1);
-    assert_eq!(renderer.material_bind_group_count(), materials_before + 2);
+    assert_material_instance_pixels(&image)?;
 
-    let row = 48;
-    let textured_pixel = (0..96)
-        .map(|x| (x, image.get_pixel(x, row)))
-        .find(|(_, pixel)| pixel[0] > 200 && pixel[1] < 60 && pixel[2] < 60);
-    let flat_pixel = (0..96)
-        .map(|x| (x, image.get_pixel(x, row)))
-        .find(|(_, pixel)| pixel[0] > 200 && pixel[1] > 200 && pixel[2] > 200);
-    let (textured_x, textured_pixel) = match textured_pixel {
-        Some(found) => found,
-        None => return Err("the textured instance drew no red pixel".into()),
-    };
-    let (flat_x, flat_pixel) = match flat_pixel {
-        Some(found) => found,
-        None => return Err("the flat instances drew no white pixel".into()),
-    };
-    assert_ne!(textured_x, flat_x);
-    assert_ne!(textured_pixel, flat_pixel);
-
-    let meshes_before = renderer.mesh_upload_count();
-    let materials_before = renderer.material_bind_group_count();
-    renderer.render_offscreen_materials(
-        &instances,
-        &camera,
-        view,
-        &light,
-        [0.0, 0.0, 0.0],
-        (96, 96),
-    )?;
-    assert_eq!(renderer.mesh_upload_count(), meshes_before);
-    assert_eq!(renderer.material_bind_group_count(), materials_before);
+    render_and_count_uploads(&renderer, &instances, &camera, view, &light, 0, 0)?;
 
     renderer.invalidate_resource_cache();
-    let meshes_before = renderer.mesh_upload_count();
-    let materials_before = renderer.material_bind_group_count();
-    renderer.render_offscreen_materials(
-        &instances,
-        &camera,
-        view,
-        &light,
-        [0.0, 0.0, 0.0],
-        (96, 96),
-    )?;
-    assert_eq!(renderer.mesh_upload_count(), meshes_before + 1);
-    assert_eq!(renderer.material_bind_group_count(), materials_before + 2);
+    render_and_count_uploads(&renderer, &instances, &camera, view, &light, 1, 2)?;
     Ok(())
 }
 
-#[test]
-fn overlapping_sprites_render_sorted_and_textured_offscreen(
-) -> Result<(), Box<dyn std::error::Error>> {
-    let renderer = shared_renderer()?;
-    let camera = Camera::orthographic(2.0, 1.0, 0.1, 100.0);
-    let view = look_at(
-        Vec3::new(0.0, 0.0, -5.0),
-        Vec3::new(0.0, 0.0, 0.0),
-        Vec3::new(0.0, 1.0, 0.0),
-    );
-    let light = DirectionalLight {
-        direction: Vec3::new(0.0, 0.0, -1.0),
-        color: [1.0, 1.0, 1.0],
-        intensity: 0.0,
-    };
-
+fn overlapping_sprites() -> Vec<Sprite> {
     let mut back_tex = Image::new(2, 2);
     for pixel in &mut back_tex.pixels {
         *pixel = [0, 0, 255];
@@ -682,7 +682,26 @@ fn overlapping_sprites_render_sorted_and_textured_offscreen(
         },
     ];
     sort_sprites(&mut sprites);
-    renderer.set_sprites(sprites);
+    sprites
+}
+
+#[test]
+fn overlapping_sprites_render_sorted_and_textured_offscreen(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let renderer = shared_renderer()?;
+    let camera = Camera::orthographic(2.0, 1.0, 0.1, 100.0);
+    let view = look_at(
+        Vec3::new(0.0, 0.0, -5.0),
+        Vec3::new(0.0, 0.0, 0.0),
+        Vec3::new(0.0, 1.0, 0.0),
+    );
+    let light = DirectionalLight {
+        direction: Vec3::new(0.0, 0.0, -1.0),
+        color: [1.0, 1.0, 1.0],
+        intensity: 0.0,
+    };
+
+    renderer.set_sprites(overlapping_sprites());
     let image = renderer.render_offscreen(&[], &camera, view, &light, [0.0, 0.0, 0.0], (64, 64))?;
     renderer.set_sprites(Vec::new());
 

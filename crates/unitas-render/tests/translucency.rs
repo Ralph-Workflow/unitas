@@ -196,52 +196,65 @@ fn translucent_quads_are_drawn_back_to_front() -> Result<(), Box<dyn std::error:
     Ok(())
 }
 
+fn blend_material(alpha: f32) -> Material {
+    Material {
+        alpha,
+        blend: BlendMode::Blend,
+        ..Material::plain()
+    }
+}
+
+fn assert_alpha_boundaries_and_pass_order(
+    opaque: &Material,
+    translucent: &Material,
+    invisible: &Material,
+    full_blend: &Material,
+) {
+    assert!((effective_alpha(opaque) - 1.0).abs() < 1e-6);
+    assert!((effective_alpha(translucent) - 0.5).abs() < 1e-6);
+    assert!(effective_alpha(invisible).abs() < 1e-6);
+    assert!((effective_alpha(full_blend) - 1.0).abs() < 1e-6);
+    assert_eq!(
+        RenderGraph::offscreen(false, false).pass_order(),
+        vec![RenderPassKind::Opaque, RenderPassKind::Transparent]
+    );
+}
+
+fn translucent_and_opaque_instances<'a>(
+    mesh: &'a Mesh,
+    translucent: &'a Material,
+    opaque: &'a Material,
+) -> [GpuMaterialInstance<'a>; 2] {
+    [
+        GpuMaterialInstance {
+            mesh,
+            attributes: None,
+            model: translated(0.0, 0.0, 1.0),
+            color: [1.0, 0.0, 0.0],
+            material: translucent,
+        },
+        GpuMaterialInstance {
+            mesh,
+            attributes: None,
+            model: translated(0.0, 0.0, -0.5),
+            color: [0.0, 0.0, 1.0],
+            material: opaque,
+        },
+    ]
+}
+
 #[test]
 fn nearer_opaque_occludes_farther_translucent_and_alpha_boundaries_hold(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let renderer = shared_renderer()?;
     let mesh = quad(2.0);
     let opaque = Material::plain();
-    let translucent = Material {
-        alpha: 0.5,
-        blend: BlendMode::Blend,
-        ..Material::plain()
-    };
-    let invisible = Material {
-        alpha: 0.0,
-        blend: BlendMode::Blend,
-        ..Material::plain()
-    };
-    let full_blend = Material {
-        alpha: 1.0,
-        blend: BlendMode::Blend,
-        ..Material::plain()
-    };
-    assert!((effective_alpha(&opaque) - 1.0).abs() < 1e-6);
-    assert!((effective_alpha(&translucent) - 0.5).abs() < 1e-6);
-    assert!(effective_alpha(&invisible).abs() < 1e-6);
-    assert!((effective_alpha(&full_blend) - 1.0).abs() < 1e-6);
-    assert_eq!(
-        RenderGraph::offscreen(false, false).pass_order(),
-        vec![RenderPassKind::Opaque, RenderPassKind::Transparent]
-    );
+    let translucent = blend_material(0.5);
+    let invisible = blend_material(0.0);
+    let full_blend = blend_material(1.0);
+    assert_alpha_boundaries_and_pass_order(&opaque, &translucent, &invisible, &full_blend);
 
-    let occluded_instances = [
-        GpuMaterialInstance {
-            mesh: &mesh,
-            attributes: None,
-            model: translated(0.0, 0.0, 1.0),
-            color: [1.0, 0.0, 0.0],
-            material: &translucent,
-        },
-        GpuMaterialInstance {
-            mesh: &mesh,
-            attributes: None,
-            model: translated(0.0, 0.0, -0.5),
-            color: [0.0, 0.0, 1.0],
-            material: &opaque,
-        },
-    ];
+    let occluded_instances = translucent_and_opaque_instances(&mesh, &translucent, &opaque);
     let occluded = renderer.render_offscreen_materials(
         &occluded_instances,
         &camera(),

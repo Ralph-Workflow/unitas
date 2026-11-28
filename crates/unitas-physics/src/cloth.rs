@@ -123,62 +123,8 @@ pub struct Cloth {
 
 impl Cloth {
     pub fn new(desc: ClothDesc) -> Result<Self, ClothError> {
-        if !desc.position.iter().all(|value| value.is_finite())
-            || !desc.width.is_finite()
-            || desc.width <= 0.0
-            || !desc.height.is_finite()
-            || desc.height <= 0.0
-            || desc.resolution_x < 2
-            || desc.resolution_y < 2
-            || !desc.mass.is_finite()
-            || desc.mass <= 0.0
-            || !desc.damping.is_finite()
-            || desc.damping < 0.0
-            || desc.damping > 1.0
-            || !desc.particle_radius.is_finite()
-            || desc.particle_radius < 0.0
-        {
-            return Err(ClothError::InvalidDescription);
-        }
-        let spacing_x = desc.width / (desc.resolution_x - 1) as f64;
-        let spacing_y = desc.height / (desc.resolution_y - 1) as f64;
-        let count = desc.resolution_x * desc.resolution_y;
-        let inverse_mass = count as f64 / desc.mass;
-        let mut particles = Vec::with_capacity(count);
-        for row in 0..desc.resolution_y {
-            for column in 0..desc.resolution_x {
-                let position = [
-                    desc.position[0] + column as f64 * spacing_x,
-                    desc.position[1] + row as f64 * spacing_y,
-                    desc.position[2],
-                ];
-                particles.push(ClothParticle {
-                    position,
-                    previous_position: position,
-                    inverse_mass,
-                });
-            }
-        }
-        let mut constraints = Vec::new();
-        for row in 0..desc.resolution_y {
-            for column in 0..desc.resolution_x {
-                let index = row * desc.resolution_x + column;
-                if column + 1 < desc.resolution_x {
-                    constraints.push(ClothConstraint {
-                        first: index,
-                        second: index + 1,
-                        rest_length: spacing_x,
-                    });
-                }
-                if row + 1 < desc.resolution_y {
-                    constraints.push(ClothConstraint {
-                        first: index,
-                        second: index + desc.resolution_x,
-                        rest_length: spacing_y,
-                    });
-                }
-            }
-        }
+        validate_cloth_desc(&desc)?;
+        let (particles, constraints) = build_cloth_grid(&desc);
         Ok(Self {
             desc,
             particles,
@@ -336,6 +282,70 @@ impl Cloth {
         }
         Ok(())
     }
+}
+
+fn validate_cloth_desc(desc: &ClothDesc) -> Result<(), ClothError> {
+    if !desc.position.iter().all(|value| value.is_finite())
+        || !desc.width.is_finite()
+        || desc.width <= 0.0
+        || !desc.height.is_finite()
+        || desc.height <= 0.0
+        || desc.resolution_x < 2
+        || desc.resolution_y < 2
+        || !desc.mass.is_finite()
+        || desc.mass <= 0.0
+        || !desc.damping.is_finite()
+        || desc.damping < 0.0
+        || desc.damping > 1.0
+        || !desc.particle_radius.is_finite()
+        || desc.particle_radius < 0.0
+    {
+        return Err(ClothError::InvalidDescription);
+    }
+    Ok(())
+}
+
+fn build_cloth_grid(desc: &ClothDesc) -> (Vec<ClothParticle>, Vec<ClothConstraint>) {
+    let spacing_x = desc.width / (desc.resolution_x - 1) as f64;
+    let spacing_y = desc.height / (desc.resolution_y - 1) as f64;
+    let count = desc.resolution_x * desc.resolution_y;
+    let inverse_mass = count as f64 / desc.mass;
+    let mut particles = Vec::with_capacity(count);
+    for row in 0..desc.resolution_y {
+        for column in 0..desc.resolution_x {
+            let position = [
+                desc.position[0] + column as f64 * spacing_x,
+                desc.position[1] + row as f64 * spacing_y,
+                desc.position[2],
+            ];
+            particles.push(ClothParticle {
+                position,
+                previous_position: position,
+                inverse_mass,
+            });
+        }
+    }
+    let mut constraints = Vec::new();
+    for row in 0..desc.resolution_y {
+        for column in 0..desc.resolution_x {
+            let index = row * desc.resolution_x + column;
+            if column + 1 < desc.resolution_x {
+                constraints.push(ClothConstraint {
+                    first: index,
+                    second: index + 1,
+                    rest_length: spacing_x,
+                });
+            }
+            if row + 1 < desc.resolution_y {
+                constraints.push(ClothConstraint {
+                    first: index,
+                    second: index + desc.resolution_x,
+                    rest_length: spacing_y,
+                });
+            }
+        }
+    }
+    (particles, constraints)
 }
 
 fn scale(vector: [f64; 3], factor: f64) -> [f64; 3] {

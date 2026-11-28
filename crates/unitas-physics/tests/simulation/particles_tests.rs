@@ -424,80 +424,89 @@ fn set_emit_position_and_set_emit_rotation_transform_spawn_pose_and_velocity() {
     assert!(particles[0].velocity[2].abs() < 1e-5);
 }
 
+fn run_seeded_playback_cycle(seed: u64) -> (usize, Vec<[f32; 3]>) {
+    let mut system = ParticleSystem::new(seed);
+    system.set_shape(ParticleShape::Sphere { radius: 2.5 });
+    system.set_emission_rate(12.0);
+    system.set_emit_params(EmitParams {
+        start_speed: 3.5,
+        start_size: 0.4,
+        start_lifetime: 4.0,
+        start_color: [1.0, 0.5, 0.25, 1.0],
+    });
+    assert_eq!(
+        system.state(),
+        ParticleSystemState::Playing,
+        "REN-004 outcome 15: initial playback state must report Playing"
+    );
+    system.simulate(0.25);
+    system.pause();
+    assert_eq!(
+        system.state(),
+        ParticleSystemState::Paused,
+        "REN-004 outcome 15: paused system must report Paused state"
+    );
+    system.simulate(0.5);
+    system.play();
+    assert_eq!(
+        system.state(),
+        ParticleSystemState::Playing,
+        "REN-004 outcome 15: resumed system must report Playing state"
+    );
+    system.simulate(0.25);
+    let first_pass_count = system.get_particles().len();
+    let first_pass_positions: Vec<[f32; 3]> =
+        system.get_particles().iter().map(|p| p.position).collect();
+
+    assert_system_restart_reproduces(&mut system, first_pass_count, &first_pass_positions)
+}
+
+fn assert_system_restart_reproduces(
+    system: &mut ParticleSystem,
+    first_pass_count: usize,
+    first_pass_positions: &[[f32; 3]],
+) -> (usize, Vec<[f32; 3]>) {
+    system.stop(StopAction::None);
+    assert_eq!(
+        system.state(),
+        ParticleSystemState::Stopped,
+        "REN-004 outcome 15: stopped system must report Stopped state"
+    );
+    system.clear();
+    assert_eq!(
+        system.get_particles().len(),
+        0,
+        "REN-004 outcome 15: cleared system must have zero live particles"
+    );
+    system.play();
+    assert_eq!(
+        system.state(),
+        ParticleSystemState::Playing,
+        "REN-004 outcome 15: restarted system must report Playing state"
+    );
+    system.simulate(0.25);
+    system.simulate(0.25);
+    let restarted_count = system.get_particles().len();
+    let restarted_positions: Vec<[f32; 3]> =
+        system.get_particles().iter().map(|p| p.position).collect();
+    assert_eq!(
+        first_pass_count, restarted_count,
+        "REN-004 outcome 15: restart with fixed seed must produce identical particle count"
+    );
+    assert_eq!(
+        first_pass_positions,
+        restarted_positions.as_slice(),
+        "REN-004 outcome 15: restart with fixed seed must produce identical particle positions"
+    );
+    (restarted_count, restarted_positions)
+}
+
 #[test]
 fn ren_004_outcome_15_playback_state_and_fixed_seed_parity_across_preview_play_mode_and_player_and_vfx_graph_unsupported(
 ) {
-    let run_mode = |seed: u64| {
-        let mut system = ParticleSystem::new(seed);
-        system.set_shape(ParticleShape::Sphere { radius: 2.5 });
-        system.set_emission_rate(12.0);
-        system.set_emit_params(EmitParams {
-            start_speed: 3.5,
-            start_size: 0.4,
-            start_lifetime: 4.0,
-            start_color: [1.0, 0.5, 0.25, 1.0],
-        });
-        assert_eq!(
-            system.state(),
-            ParticleSystemState::Playing,
-            "REN-004 outcome 15: initial playback state must report Playing"
-        );
-        system.simulate(0.25);
-        system.pause();
-        assert_eq!(
-            system.state(),
-            ParticleSystemState::Paused,
-            "REN-004 outcome 15: paused system must report Paused state"
-        );
-        system.simulate(0.5);
-        system.play();
-        assert_eq!(
-            system.state(),
-            ParticleSystemState::Playing,
-            "REN-004 outcome 15: resumed system must report Playing state"
-        );
-        system.simulate(0.25);
-        let first_pass_count = system.get_particles().len();
-        let first_pass_positions: Vec<[f32; 3]> =
-            system.get_particles().iter().map(|p| p.position).collect();
-
-        system.stop(StopAction::None);
-        assert_eq!(
-            system.state(),
-            ParticleSystemState::Stopped,
-            "REN-004 outcome 15: stopped system must report Stopped state"
-        );
-        system.clear();
-        assert_eq!(
-            system.get_particles().len(),
-            0,
-            "REN-004 outcome 15: cleared system must have zero live particles"
-        );
-        system.play();
-        assert_eq!(
-            system.state(),
-            ParticleSystemState::Playing,
-            "REN-004 outcome 15: restarted system must report Playing state"
-        );
-        system.simulate(0.25);
-        system.simulate(0.25);
-        let restarted_count = system.get_particles().len();
-        let restarted_positions: Vec<[f32; 3]> =
-            system.get_particles().iter().map(|p| p.position).collect();
-        assert_eq!(
-            first_pass_count, restarted_count,
-            "REN-004 outcome 15: restart with fixed seed must produce identical particle count"
-        );
-        assert_eq!(
-            first_pass_positions, restarted_positions,
-            "REN-004 outcome 15: restart with fixed seed must produce identical particle positions"
-        );
-        (restarted_count, restarted_positions)
-    };
-
-    let preview = run_mode(202_203);
-    let play_mode = run_mode(202_203);
-    let built_player = run_mode(202_203);
+    let preview = run_seeded_playback_cycle(202_203);
+    let play_mode = run_seeded_playback_cycle(202_203);
+    let built_player = run_seeded_playback_cycle(202_203);
     assert!(
         preview.0 > 0,
         "REN-004 outcome 15: seeded simulation must emit live particles"
@@ -557,7 +566,10 @@ fn ren_004_outcome_16_emits_and_custom_data(system: &mut ParticleSystem) {
         [0.2, 0.4, 0.6, 1.0],
         "REN-004 outcome 16: EmitParams start_color override must apply to spawned particles"
     );
+    ren_004_outcome_16_set_custom_data_and_positions(system);
+}
 
+fn ren_004_outcome_16_set_custom_data_and_positions(system: &mut ParticleSystem) {
     let custom1_input = vec![
         [1.0, 2.0, 3.0, 4.0],
         [5.0, 6.0, 7.0, 8.0],

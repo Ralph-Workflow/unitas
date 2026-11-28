@@ -1,8 +1,8 @@
 use super::assess_package;
 use super::compat_catalog::lookup_catalog_feature;
-use super::compat_familiar::lookup_familiar_behavior_differences;
 use super::compat_finding::sanitize_content_identity;
-use super::{CompatibilityState, ContentIdentity, Finding, Tier};
+use super::familiar_differences;
+use super::{AssessedPackage, CompatibilityState, ContentIdentity, Finding, Tier};
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum PackageBehaviorClassification {
@@ -11,14 +11,7 @@ pub enum PackageBehaviorClassification {
     NeitherNamedNorExcluded,
 }
 
-pub fn assess_package_behavior(
-    package_id: &str,
-    resolved_version: &str,
-    content: ContentIdentity,
-    behavior_description: &str,
-    classification: PackageBehaviorClassification,
-) -> Finding {
-    let assessed_pkg = assess_package(package_id, resolved_version, false);
+fn package_behavior_context(assessed_pkg: &AssessedPackage) -> (String, Tier, String) {
     let feature_id = assessed_pkg
         .owning_feature_id
         .clone()
@@ -32,45 +25,63 @@ pub fn assess_package_behavior(
         .clone()
         .or_else(|| lookup_catalog_feature(&feature_id).map(|entry| entry.owning_spec.to_string()))
         .unwrap_or_else(|| "compatibility-contract.md".to_string());
+    (feature_id, tier, owning_spec)
+}
+
+fn behavior_outcome(
+    package_id: &str,
+    resolved_version: &str,
+    owning_spec: &str,
+    feature_id: &str,
+    classification: PackageBehaviorClassification,
+) -> (CompatibilityState, String) {
+    match classification {
+        PackageBehaviorClassification::NamedSupported => (
+            CompatibilityState::Supported,
+            format!(
+                "package {package_id} ({resolved_version}) behavior is named and supported by {owning_spec} ({feature_id})"
+            ),
+        ),
+        PackageBehaviorClassification::NamedExcluded(exclusion) => (
+            CompatibilityState::PartiallySupported,
+            format!(
+                "package {package_id} ({resolved_version}) behavior is excluded by {owning_spec} ({feature_id}): {exclusion}"
+            ),
+        ),
+        PackageBehaviorClassification::NeitherNamedNorExcluded => (
+            CompatibilityState::Unknown,
+            format!(
+                "behavior in Supported package {package_id} ({resolved_version}) is neither named nor excluded by {owning_spec} ({feature_id}) and is Unknown until assessed"
+            ),
+        ),
+    }
+}
+
+pub fn assess_package_behavior(
+    package_id: &str,
+    resolved_version: &str,
+    content: ContentIdentity,
+    behavior_description: &str,
+    classification: PackageBehaviorClassification,
+) -> Finding {
+    let assessed_pkg = assess_package(package_id, resolved_version, false);
+    let (feature_id, tier, owning_spec) = package_behavior_context(&assessed_pkg);
 
     let (state, consequence) = if assessed_pkg.state != CompatibilityState::Supported
         && assessed_pkg.state != CompatibilityState::PartiallySupported
     {
         (assessed_pkg.state, assessed_pkg.notes)
     } else {
-        match classification {
-            PackageBehaviorClassification::NamedSupported => (
-                CompatibilityState::Supported,
-                format!(
-                    "package {package_id} ({resolved_version}) behavior is named and supported by {owning_spec} ({feature_id})"
-                ),
-            ),
-            PackageBehaviorClassification::NamedExcluded(exclusion) => (
-                CompatibilityState::PartiallySupported,
-                format!(
-                    "package {package_id} ({resolved_version}) behavior is excluded by {owning_spec} ({feature_id}): {exclusion}"
-                ),
-            ),
-            PackageBehaviorClassification::NeitherNamedNorExcluded => (
-                CompatibilityState::Unknown,
-                format!(
-                    "behavior in Supported package {package_id} ({resolved_version}) is neither named nor excluded by {owning_spec} ({feature_id}) and is Unknown until assessed"
-                ),
-            ),
-        }
+        behavior_outcome(
+            package_id,
+            resolved_version,
+            &owning_spec,
+            &feature_id,
+            classification,
+        )
     };
 
-    let relied_upon_unity_differences = if tier == Tier::Familiar {
-        lookup_familiar_behavior_differences(&feature_id).map_or_else(Vec::new, |entry| {
-            entry
-                .differences
-                .iter()
-                .map(|diff| (*diff).to_string())
-                .collect()
-        })
-    } else {
-        Vec::new()
-    };
+    let relied_upon_unity_differences = familiar_differences(&feature_id, tier);
 
     Finding {
         feature_id,

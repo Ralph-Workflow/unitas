@@ -370,18 +370,11 @@ fn collider_offset(center: [f64; 3], first_center: [f64; 3], scale: [f32; 3]) ->
     ]
 }
 
-fn body_spec(
+fn resolve_body_role_params(
     graph: &SceneGraph,
     binding: &PhysicsBinding,
     rigid_entities: &std::collections::BTreeSet<EntityId>,
-    diagnostics: &mut Vec<(EntityId, String)>,
-) -> Option<BodySpec> {
-    let (translation, rotation, scale) = match graph.world_transform(binding.entity) {
-        Some(world) => (world.translation, world.rotation, world.scale),
-        None => ([0.0f32; 3], IDENTITY_ROTATION, [1.0f32; 3]),
-    };
-    let plans = collider_plans(graph, binding, scale, diagnostics);
-    let first_center = plans.first()?.center;
+) -> (f64, bool, bool, BodyRole, CollisionDetectionMode3D) {
     let (mass, use_gravity, rigidbody_trigger, role) = match &binding.rigidbody {
         Some(rigidbody) if rigidbody.is_kinematic => (
             rigidbody.mass,
@@ -406,6 +399,64 @@ fn body_spec(
         .map_or(CollisionDetectionMode3D::Discrete, |rigidbody| {
             collision_detection_of(rigidbody.collision_detection)
         });
+    (
+        mass,
+        use_gravity,
+        rigidbody_trigger,
+        role,
+        collision_detection_mode,
+    )
+}
+
+fn build_body_desc(
+    translation: [f32; 3],
+    rotation: [f32; 4],
+    offset: [f32; 3],
+    role_params: (f64, bool, bool, BodyRole, CollisionDetectionMode3D),
+    layer: u32,
+    first: &ColliderDesc,
+) -> BodyDesc {
+    let (mass, use_gravity, _, role, collision_detection_mode) = role_params;
+    let material = first.material;
+    BodyDesc {
+        position: [
+            f64::from(translation[0]) + f64::from(offset[0]),
+            f64::from(translation[1]) + f64::from(offset[1]),
+            f64::from(translation[2]) + f64::from(offset[2]),
+        ],
+        rotation: [
+            f64::from(rotation[0]),
+            f64::from(rotation[1]),
+            f64::from(rotation[2]),
+            f64::from(rotation[3]),
+        ],
+        mass,
+        velocity: [0.0; 3],
+        use_gravity,
+        is_trigger: first.is_trigger,
+        collider_shape: first.shape.clone(),
+        layer,
+        role,
+        friction: material.map_or(0.6, |m| m.friction),
+        restitution: material.map_or(0.0, |m| m.restitution),
+        collision_detection_mode,
+    }
+}
+
+fn body_spec(
+    graph: &SceneGraph,
+    binding: &PhysicsBinding,
+    rigid_entities: &std::collections::BTreeSet<EntityId>,
+    diagnostics: &mut Vec<(EntityId, String)>,
+) -> Option<BodySpec> {
+    let (translation, rotation, scale) = match graph.world_transform(binding.entity) {
+        Some(world) => (world.translation, world.rotation, world.scale),
+        None => ([0.0f32; 3], IDENTITY_ROTATION, [1.0f32; 3]),
+    };
+    let plans = collider_plans(graph, binding, scale, diagnostics);
+    let first_center = plans.first()?.center;
+    let role_params = resolve_body_role_params(graph, binding, rigid_entities);
+    let rigidbody_trigger = role_params.2;
     let layer = layer_bits(binding.layer);
     let colliders: Vec<ColliderDesc> = plans
         .into_iter()
@@ -425,38 +476,15 @@ fn body_spec(
         .collect();
     let first = colliders.first()?;
     let material = first.material;
-    let friction = material.map_or(0.6, |m| m.friction);
-    let restitution = material.map_or(0.0, |m| m.restitution);
     let scaled_center = [
         first_center[0] as f32 * scale[0],
         first_center[1] as f32 * scale[1],
         first_center[2] as f32 * scale[2],
     ];
     let offset = rotate_vector(rotation, scaled_center);
+    let desc = build_body_desc(translation, rotation, offset, role_params, layer, first);
     Some(BodySpec {
-        desc: BodyDesc {
-            position: [
-                translation[0] as f64 + offset[0] as f64,
-                translation[1] as f64 + offset[1] as f64,
-                translation[2] as f64 + offset[2] as f64,
-            ],
-            rotation: [
-                rotation[0] as f64,
-                rotation[1] as f64,
-                rotation[2] as f64,
-                rotation[3] as f64,
-            ],
-            mass,
-            velocity: [0.0; 3],
-            use_gravity,
-            is_trigger: first.is_trigger,
-            collider_shape: first.shape.clone(),
-            layer,
-            role,
-            friction,
-            restitution,
-            collision_detection_mode,
-        },
+        desc,
         colliders,
         offset,
         material,

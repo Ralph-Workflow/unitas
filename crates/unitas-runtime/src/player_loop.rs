@@ -340,96 +340,91 @@ pub fn builtin_work_for(type_name: &str) -> Option<BuiltinWork> {
     }
 }
 
-/// Unity's default phase tree.
-///
-/// The phase order and the subsystem type names follow Unity 2022.3. The three
-/// post late update systems the engine drives are ordered the way the engine
-/// ran them before the tree existed, so the migration keeps the observable
-/// frame order.
+const DEFAULT_PHASE_SPECS: [(&str, &[&str]); 7] = [
+    (
+        INITIALIZATION,
+        &[
+            "PlayerUpdateTime",
+            "AsyncUploadTimeSlicedUpdate",
+            "SynchronizeInputs",
+            "SynchronizeState",
+            "XREarlyUpdate",
+        ],
+    ),
+    (
+        EARLY_UPDATE,
+        &[
+            "PollPlayerConnection",
+            "GpuTimestamp",
+            "AnalyticsDirector",
+            "AsyncUploadTimeSlicedUpdate",
+            "UpdateRectTransform",
+            "UpdateCanvasRectTransform",
+            "ClearLines",
+            "DirectorUpdateAnimationBegin",
+            "LegacyAnimationUpdate",
+            "DirectorUpdateAnimationEnd",
+            "DirectorDeferredEvaluate",
+            "AudioUpdate",
+            "ScriptRunBehaviourEarlyUpdate",
+        ],
+    ),
+    (
+        FIXED_UPDATE,
+        &[
+            "PhysicsFixedUpdate",
+            "Physics2DFixedUpdate",
+            "ScriptRunBehaviourFixedUpdate",
+            "DirectorFixedUpdate",
+            "LegacyFixedAnimationUpdate",
+            "XRFixedUpdate",
+            "NewInputFixedUpdate",
+        ],
+    ),
+    (
+        PRE_UPDATE,
+        &["AIUpdate", "NewInputUpdate", "ScriptRunBehaviourPreUpdate"],
+    ),
+    (
+        UPDATE,
+        &[
+            "ScriptRunBehaviourUpdate",
+            "ScriptRunDelayedTasks",
+            "DirectorUpdate",
+            "AudioUpdate",
+        ],
+    ),
+    (
+        PRE_LATE_UPDATE,
+        &[
+            "DirectorUpdateAnimationBegin",
+            "LegacyAnimationUpdate",
+            "DirectorUpdateAnimationEnd",
+            "DirectorDeferredEvaluate",
+            "ScriptRunBehaviourLateUpdate",
+            "NewInputLateUpdate",
+        ],
+    ),
+    (
+        POST_LATE_UPDATE,
+        &[
+            "PlayerSendFrameStarted",
+            "UpdateRectTransform",
+            "UpdateCanvasRectTransform",
+            "VFXUpdate",
+            "UpdateAudio",
+            "UpdateCanvas",
+            "UpdateVideo",
+            "NewInputPostLateUpdate",
+            "DirectorLateUpdate",
+            "ScriptRunDelayedTasks",
+        ],
+    ),
+];
+
 pub fn default_tree() -> PlayerLoopSystem {
-    let phases: [(&str, &[&str]); 7] = [
-        (
-            INITIALIZATION,
-            &[
-                "PlayerUpdateTime",
-                "AsyncUploadTimeSlicedUpdate",
-                "SynchronizeInputs",
-                "SynchronizeState",
-                "XREarlyUpdate",
-            ],
-        ),
-        (
-            EARLY_UPDATE,
-            &[
-                "PollPlayerConnection",
-                "GpuTimestamp",
-                "AnalyticsDirector",
-                "AsyncUploadTimeSlicedUpdate",
-                "UpdateRectTransform",
-                "UpdateCanvasRectTransform",
-                "ClearLines",
-                "DirectorUpdateAnimationBegin",
-                "LegacyAnimationUpdate",
-                "DirectorUpdateAnimationEnd",
-                "DirectorDeferredEvaluate",
-                "AudioUpdate",
-                "ScriptRunBehaviourEarlyUpdate",
-            ],
-        ),
-        (
-            FIXED_UPDATE,
-            &[
-                "PhysicsFixedUpdate",
-                "Physics2DFixedUpdate",
-                "ScriptRunBehaviourFixedUpdate",
-                "DirectorFixedUpdate",
-                "LegacyFixedAnimationUpdate",
-                "XRFixedUpdate",
-                "NewInputFixedUpdate",
-            ],
-        ),
-        (
-            PRE_UPDATE,
-            &["AIUpdate", "NewInputUpdate", "ScriptRunBehaviourPreUpdate"],
-        ),
-        (
-            UPDATE,
-            &[
-                "ScriptRunBehaviourUpdate",
-                "ScriptRunDelayedTasks",
-                "DirectorUpdate",
-                "AudioUpdate",
-            ],
-        ),
-        (
-            PRE_LATE_UPDATE,
-            &[
-                "DirectorUpdateAnimationBegin",
-                "LegacyAnimationUpdate",
-                "DirectorUpdateAnimationEnd",
-                "DirectorDeferredEvaluate",
-                "ScriptRunBehaviourLateUpdate",
-                "NewInputLateUpdate",
-            ],
-        ),
-        (
-            POST_LATE_UPDATE,
-            &[
-                "PlayerSendFrameStarted",
-                "UpdateRectTransform",
-                "UpdateCanvasRectTransform",
-                "VFXUpdate",
-                "UpdateAudio",
-                "UpdateCanvas",
-                "UpdateVideo",
-                "NewInputPostLateUpdate",
-                "DirectorLateUpdate",
-                "ScriptRunDelayedTasks",
-            ],
-        ),
-    ];
     let mut root = PlayerLoopSystem::new("PlayerLoop", ROOT_TYPE);
-    for (phase, systems) in phases {
+    for (phase, systems) in DEFAULT_PHASE_SPECS {
         let mut node = PlayerLoopSystem::new(short_name(phase), phase);
         for system in systems {
             node.children
@@ -444,7 +439,6 @@ fn short_name(type_name: &str) -> &str {
     type_name.rsplit('.').next().unwrap_or(type_name)
 }
 
-/// Compiles the tree into the flat list of steps the runtime walks.
 fn compile(
     root: &PlayerLoopSystem,
     customs: &BTreeMap<String, CustomSystem>,

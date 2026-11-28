@@ -354,10 +354,7 @@ mod tests {
         Ok(dir)
     }
 
-    #[test]
-    fn scan_discovers_nested_resources_strips_extensions_and_ignores_meta()
-    -> Result<(), Box<dyn Error>> {
-        let root = unique_temp_dir("scan")?;
+    fn write_sample_resources_tree(root: &Path) -> Result<PathBuf, Box<dyn Error>> {
         let res_a = root.join("Assets").join("Resources").join("Config");
         let res_b = root
             .join("Assets")
@@ -382,6 +379,14 @@ mod tests {
             "%YAML 1.1\n--- !u!1 &1\nGameObject:\n  m_Name: Enemy\n",
         )?;
         fs::write(&outside_path, "not in resources")?;
+        Ok(json_path)
+    }
+
+    #[test]
+    fn scan_discovers_nested_resources_strips_extensions_and_ignores_meta()
+    -> Result<(), Box<dyn Error>> {
+        let root = unique_temp_dir("scan")?;
+        let json_path = write_sample_resources_tree(&root)?;
 
         let index = ResourcesIndex::scan(&root)?;
         let _ = fs::remove_dir_all(&root);
@@ -421,12 +426,8 @@ mod tests {
                 .load_with_kind("Config/balance", ResourceKind::Text)
                 .is_some()
         );
-
-        let all_in_config = index.load_all("Config");
-        assert_eq!(all_in_config.len(), 1);
-        let all_root = index.load_all("");
-        assert_eq!(all_root.len(), 2);
-
+        assert_eq!(index.load_all("Config").len(), 1);
+        assert_eq!(index.load_all("").len(), 2);
         Ok(())
     }
 

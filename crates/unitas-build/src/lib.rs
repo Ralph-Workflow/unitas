@@ -8,6 +8,7 @@ pub mod player;
 pub mod report;
 pub mod sample;
 pub mod scripted;
+mod sha256;
 pub mod targets;
 pub mod toolchain;
 

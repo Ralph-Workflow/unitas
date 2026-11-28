@@ -565,7 +565,15 @@ impl Runtime {
         graph: &SceneGraph,
     ) -> Vec<(EntityId, String)> {
         let mut diagnostics = Vec::new();
-        for camera in &binding.cameras {
+        self.populate_scene_cameras(&binding.cameras, entity_base);
+        self.populate_scene_renderers(&binding.renderers, entity_base, &mut diagnostics);
+        self.populate_scene_sprites(&binding.sprites, entity_base, &mut diagnostics);
+        self.populate_scene_lights(&binding.lights, entity_base, graph, &mut diagnostics);
+        diagnostics
+    }
+
+    fn populate_scene_cameras(&mut self, cameras: &[CameraComponent], entity_base: u64) {
+        for camera in cameras {
             let entity = EntityId::new(entity_base + camera.entity.as_u64());
             let params = RenderCameraParams {
                 orthographic: camera.orthographic,
@@ -579,7 +587,15 @@ impl Runtime {
             let handle = self.create_render_camera(Some(entity));
             self.update_render_camera(handle, params);
         }
-        for renderer in &binding.renderers {
+    }
+
+    fn populate_scene_renderers(
+        &mut self,
+        renderers: &[MeshRendererComponent],
+        entity_base: u64,
+        diagnostics: &mut Vec<(EntityId, String)>,
+    ) {
+        for renderer in renderers {
             let entity = EntityId::new(entity_base + renderer.entity.as_u64());
             let material = self.create_render_material();
             self.set_render_material(material, render_material_for(renderer));
@@ -616,7 +632,15 @@ impl Runtime {
                 ));
             }
         }
-        for sprite in &binding.sprites {
+    }
+
+    fn populate_scene_sprites(
+        &mut self,
+        sprites: &[SpriteRendererComponent],
+        entity_base: u64,
+        diagnostics: &mut Vec<(EntityId, String)>,
+    ) {
+        for sprite in sprites {
             let entity = EntityId::new(entity_base + sprite.entity.as_u64());
             if let (Some(guid), Some(path)) = (&sprite.sprite_guid, &sprite.sprite_path) {
                 self.register_sprite_asset_root(path);
@@ -645,13 +669,12 @@ impl Runtime {
                     ),
                 ));
             }
-            let size = match texture.as_ref() {
-                Some(image) => [
+            let size = texture.as_ref().map_or([0.0, 0.0], |image| {
+                [
                     image.width as f32 / SPRITE_PIXELS_PER_UNIT,
                     image.height as f32 / SPRITE_PIXELS_PER_UNIT,
-                ],
-                None => [0.0, 0.0],
-            };
+                ]
+            });
             self.render.sprites.push(RenderSprite {
                 entity,
                 texture,
@@ -667,7 +690,16 @@ impl Runtime {
                 slices: None,
             });
         }
-        for light in &binding.lights {
+    }
+
+    fn populate_scene_lights(
+        &mut self,
+        lights: &[LightComponent],
+        entity_base: u64,
+        graph: &SceneGraph,
+        diagnostics: &mut Vec<(EntityId, String)>,
+    ) {
+        for light in lights {
             let entity = EntityId::new(entity_base + light.entity.as_u64());
             let Some(kind) = scene_light_kind(light) else {
                 if let Some(diagnostic) = &light.unsupported_diagnostic {
@@ -699,7 +731,6 @@ impl Runtime {
             let handle = self.create_render_light(Some(entity));
             self.update_render_light_full(handle, render_light);
         }
-        diagnostics
     }
 
     fn import_scene_mesh(&mut self, renderer: &MeshRendererComponent) -> Option<u64> {
@@ -1004,34 +1035,45 @@ impl Runtime {
                 });
                 continue;
             }
-            let source_size = [texture.width as f32, texture.height as f32];
-            let target_size = [
-                source_size[0] * transform.scale[0].abs(),
-                source_size[1] * transform.scale[1].abs(),
-            ];
-            let parts = match adjusted.draw_mode {
-                SpriteDrawMode::Tiled => {
-                    unitas_render::sprite::tiled_parts(source_size, target_size)
-                }
-                _ => unitas_render::sprite::nine_slice_parts(
-                    adjusted.border,
-                    source_size,
-                    target_size,
-                ),
-            };
-            let textures = self.sprite_part_textures(index, &texture, adjusted.draw_mode, &parts);
-            for (part, part_texture) in parts.iter().zip(textures.iter()) {
-                sprites.push(unitas_render::Sprite {
-                    texture: Arc::clone(part_texture),
-                    model: sprite_part_model(&transform, &adjusted, target_size, part),
-                    color: adjusted.color,
-                    sorting_layer: adjusted.sorting_layer,
-                    sorting_order: adjusted.sorting_order,
-                });
-            }
+            self.append_sliced_sprite_instances(
+                index,
+                &texture,
+                &transform,
+                &adjusted,
+                &mut sprites,
+            );
         }
         unitas_render::sort_sprites(&mut sprites);
         sprites
+    }
+
+    fn append_sliced_sprite_instances(
+        &mut self,
+        index: usize,
+        texture: &Arc<Image>,
+        transform: &Transform,
+        adjusted: &RenderSprite,
+        sprites: &mut Vec<unitas_render::Sprite>,
+    ) {
+        let source_size = [texture.width as f32, texture.height as f32];
+        let target_size = [
+            source_size[0] * transform.scale[0].abs(),
+            source_size[1] * transform.scale[1].abs(),
+        ];
+        let parts = match adjusted.draw_mode {
+            SpriteDrawMode::Tiled => unitas_render::sprite::tiled_parts(source_size, target_size),
+            _ => unitas_render::sprite::nine_slice_parts(adjusted.border, source_size, target_size),
+        };
+        let textures = self.sprite_part_textures(index, texture, adjusted.draw_mode, &parts);
+        for (part, part_texture) in parts.iter().zip(textures.iter()) {
+            sprites.push(unitas_render::Sprite {
+                texture: Arc::clone(part_texture),
+                model: sprite_part_model(transform, adjusted, target_size, part),
+                color: adjusted.color,
+                sorting_layer: adjusted.sorting_layer,
+                sorting_order: adjusted.sorting_order,
+            });
+        }
     }
 
     fn sprite_part_textures(
@@ -1098,19 +1140,30 @@ impl Runtime {
                 ),
             );
         }
-        let size = match texture.as_ref() {
-            Some(image) => [
+        let size = texture.as_ref().map_or([0.0, 0.0], |image| {
+            [
                 image.width as f32 / SPRITE_PIXELS_PER_UNIT,
                 image.height as f32 / SPRITE_PIXELS_PER_UNIT,
-            ],
-            None => [0.0, 0.0],
-        };
+            ]
+        });
+        let border = sprite_border_from_meta(texture_path);
+        self.upsert_runtime_sprite_entry(entity, texture, size, border);
+        true
+    }
+
+    fn upsert_runtime_sprite_entry(
+        &mut self,
+        entity: EntityId,
+        texture: Option<Arc<Image>>,
+        size: [f32; 2],
+        border: [f32; 4],
+    ) {
         match self.runtime_sprite_index(entity) {
             Some(index) => {
                 let sprite = &mut self.render.sprites[index];
                 sprite.texture = texture;
                 sprite.size = size;
-                sprite.border = sprite_border_from_meta(texture_path);
+                sprite.border = border;
                 sprite.slices = None;
             }
             None => self.render.sprites.push(RenderSprite {
@@ -1124,11 +1177,10 @@ impl Runtime {
                 flip_y: false,
                 enabled: true,
                 draw_mode: SpriteDrawMode::Simple,
-                border: sprite_border_from_meta(texture_path),
+                border,
                 slices: None,
             }),
         }
-        true
     }
 
     pub fn set_runtime_sprite_color(&mut self, entity: EntityId, color: [f32; 4]) -> bool {
@@ -1795,6 +1847,23 @@ mod tests {
         std::fs::write(path, bytes)
     }
 
+    fn write_sprite_extraction_scene(
+        dir: &Path,
+    ) -> Result<std::path::PathBuf, Box<dyn std::error::Error>> {
+        let _ = std::fs::remove_dir_all(dir);
+        std::fs::create_dir_all(dir)?;
+        let tex_path = dir.join("sprite.tga");
+        write_test_tga(&tex_path, 100, 50, [255, 0, 0])?;
+        std::fs::write(
+            dir.join("sprite.tga.meta"),
+            "fileFormatVersion: 2\nguid: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n",
+        )?;
+        let scene_path = dir.join("SpriteScene.unity");
+        let scene_yaml = "%YAML 1.1\n%TAG !u! tag:unity3d.com,2011:\n--- !u!1 &1\nGameObject:\n  m_Name: FrontSprite\n  m_Layer: 0\n--- !u!4 &2\nTransform:\n  m_GameObject: {fileID: 1}\n  m_LocalPosition: {x: 1, y: 2, z: 0}\n  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}\n  m_LocalScale: {x: 2, y: 3, z: 1}\n  m_Children: []\n  m_Father: {fileID: 0}\n--- !u!212 &3\nSpriteRenderer:\n  m_GameObject: {fileID: 1}\n  m_Enabled: 1\n  m_Sprite: {fileID: 21300000, guid: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa, type: 3}\n  m_Color: {r: 0.25, g: 0.5, b: 0.75, a: 1}\n  m_FlipX: 1\n  m_FlipY: 0\n  m_DrawMode: 0\n  m_SortingLayerID: 2\n  m_SortingOrder: 1\n--- !u!1 &4\nGameObject:\n  m_Name: BackSprite\n  m_Layer: 0\n--- !u!4 &5\nTransform:\n  m_GameObject: {fileID: 4}\n  m_LocalPosition: {x: -1, y: 0, z: 0}\n  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}\n  m_LocalScale: {x: 1, y: 1, z: 1}\n  m_Children: []\n  m_Father: {fileID: 0}\n--- !u!212 &6\nSpriteRenderer:\n  m_GameObject: {fileID: 4}\n  m_Enabled: 1\n  m_Sprite: {fileID: 21300000, guid: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa, type: 3}\n  m_Color: {r: 1, g: 1, b: 1, a: 0.5}\n  m_FlipX: 0\n  m_FlipY: 1\n  m_DrawMode: 0\n  m_SortingLayerID: 1\n  m_SortingOrder: 5\n--- !u!1 &7\nGameObject:\n  m_Name: DisabledSprite\n  m_Layer: 0\n--- !u!4 &8\nTransform:\n  m_GameObject: {fileID: 7}\n  m_LocalPosition: {x: 0, y: 0, z: 0}\n  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}\n  m_LocalScale: {x: 1, y: 1, z: 1}\n  m_Children: []\n  m_Father: {fileID: 0}\n--- !u!212 &9\nSpriteRenderer:\n  m_GameObject: {fileID: 7}\n  m_Enabled: 0\n  m_Sprite: {fileID: 21300000, guid: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa, type: 3}\n  m_Color: {r: 1, g: 0, b: 0, a: 1}\n  m_SortingLayerID: 0\n  m_SortingOrder: 0\n";
+        std::fs::write(&scene_path, scene_yaml)?;
+        Ok(scene_path)
+    }
+
     #[test]
     fn sprite_renderer_scene_extracts_sorted_sprite_instances()
     -> Result<(), Box<dyn std::error::Error>> {
@@ -1802,88 +1871,7 @@ mod tests {
             "unitas_runtime_sprite_extract_{}",
             std::process::id()
         ));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir)?;
-
-        let tex_path = dir.join("sprite.tga");
-        write_test_tga(&tex_path, 100, 50, [255, 0, 0])?;
-        let tex_meta_path = dir.join("sprite.tga.meta");
-        std::fs::write(
-            &tex_meta_path,
-            "fileFormatVersion: 2\nguid: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n",
-        )?;
-
-        let scene_path = dir.join("SpriteScene.unity");
-        let scene_yaml = "%YAML 1.1
-%TAG !u! tag:unity3d.com,2011:
---- !u!1 &1
-GameObject:
-  m_Name: FrontSprite
-  m_Layer: 0
---- !u!4 &2
-Transform:
-  m_GameObject: {fileID: 1}
-  m_LocalPosition: {x: 1, y: 2, z: 0}
-  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
-  m_LocalScale: {x: 2, y: 3, z: 1}
-  m_Children: []
-  m_Father: {fileID: 0}
---- !u!212 &3
-SpriteRenderer:
-  m_GameObject: {fileID: 1}
-  m_Enabled: 1
-  m_Sprite: {fileID: 21300000, guid: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa, type: 3}
-  m_Color: {r: 0.25, g: 0.5, b: 0.75, a: 1}
-  m_FlipX: 1
-  m_FlipY: 0
-  m_DrawMode: 0
-  m_SortingLayerID: 2
-  m_SortingOrder: 1
---- !u!1 &4
-GameObject:
-  m_Name: BackSprite
-  m_Layer: 0
---- !u!4 &5
-Transform:
-  m_GameObject: {fileID: 4}
-  m_LocalPosition: {x: -1, y: 0, z: 0}
-  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
-  m_LocalScale: {x: 1, y: 1, z: 1}
-  m_Children: []
-  m_Father: {fileID: 0}
---- !u!212 &6
-SpriteRenderer:
-  m_GameObject: {fileID: 4}
-  m_Enabled: 1
-  m_Sprite: {fileID: 21300000, guid: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa, type: 3}
-  m_Color: {r: 1, g: 1, b: 1, a: 0.5}
-  m_FlipX: 0
-  m_FlipY: 1
-  m_DrawMode: 0
-  m_SortingLayerID: 1
-  m_SortingOrder: 5
---- !u!1 &7
-GameObject:
-  m_Name: DisabledSprite
-  m_Layer: 0
---- !u!4 &8
-Transform:
-  m_GameObject: {fileID: 7}
-  m_LocalPosition: {x: 0, y: 0, z: 0}
-  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
-  m_LocalScale: {x: 1, y: 1, z: 1}
-  m_Children: []
-  m_Father: {fileID: 0}
---- !u!212 &9
-SpriteRenderer:
-  m_GameObject: {fileID: 7}
-  m_Enabled: 0
-  m_Sprite: {fileID: 21300000, guid: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa, type: 3}
-  m_Color: {r: 1, g: 0, b: 0, a: 1}
-  m_SortingLayerID: 0
-  m_SortingOrder: 0
-";
-        std::fs::write(&scene_path, scene_yaml)?;
+        let scene_path = write_sprite_extraction_scene(&dir)?;
 
         let mut runtime = Runtime::new()?;
         runtime.load_scene(&scene_path)?;
@@ -2003,6 +1991,15 @@ SpriteRenderer:
         Ok(())
     }
 
+    fn write_multilight_scene(dir: &Path) -> Result<std::path::PathBuf, Box<dyn std::error::Error>> {
+        let _ = std::fs::remove_dir_all(dir);
+        std::fs::create_dir_all(dir)?;
+        let scene_path = dir.join("MultiLightScene.unity");
+        let scene_yaml = "%YAML 1.1\n%TAG !u! tag:unity3d.com,2011:\n--- !u!1 &10\nGameObject:\n  m_Name: Sun\n  m_Layer: 0\n--- !u!4 &11\nTransform:\n  m_GameObject: {fileID: 10}\n  m_LocalPosition: {x: 0, y: 10, z: 0}\n  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}\n  m_LocalScale: {x: 1, y: 1, z: 1}\n  m_Children: []\n  m_Father: {fileID: 0}\n--- !u!108 &12\nLight:\n  m_GameObject: {fileID: 10}\n  m_Enabled: 1\n  m_Type: 1\n  m_Color: {r: 1, g: 0.9, b: 0.8, a: 1}\n  m_Intensity: 0.8\n--- !u!1 &20\nGameObject:\n  m_Name: PointLamp\n  m_Layer: 0\n--- !u!4 &21\nTransform:\n  m_GameObject: {fileID: 20}\n  m_LocalPosition: {x: 1, y: 2, z: 3}\n  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}\n  m_LocalScale: {x: 1, y: 1, z: 1}\n  m_Children: []\n  m_Father: {fileID: 0}\n--- !u!108 &22\nLight:\n  m_GameObject: {fileID: 20}\n  m_Enabled: 1\n  m_Type: 2\n  m_Color: {r: 1, g: 0, b: 0, a: 1}\n  m_Intensity: 2.5\n--- !u!1 &30\nGameObject:\n  m_Name: SpotLamp\n  m_Layer: 0\n--- !u!4 &31\nTransform:\n  m_GameObject: {fileID: 30}\n  m_LocalPosition: {x: 4, y: 5, z: 6}\n  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}\n  m_LocalScale: {x: 1, y: 1, z: 1}\n  m_Children: []\n  m_Father: {fileID: 0}\n--- !u!108 &32\nLight:\n  m_GameObject: {fileID: 30}\n  m_Enabled: 1\n  m_Type: 0\n  m_Color: {r: 0, g: 1, b: 0, a: 1}\n  m_Intensity: 3.0\n";
+        std::fs::write(&scene_path, scene_yaml)?;
+        Ok(scene_path)
+    }
+
     #[test]
     fn point_and_spot_lights_are_collected_without_runtime_unsupported_diagnostics()
     -> Result<(), Box<dyn std::error::Error>> {
@@ -2010,70 +2007,7 @@ SpriteRenderer:
             "unitas_runtime_multilight_extract_{}",
             std::process::id()
         ));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir)?;
-        let scene_path = dir.join("MultiLightScene.unity");
-        let scene_yaml = "%YAML 1.1
-%TAG !u! tag:unity3d.com,2011:
---- !u!1 &10
-GameObject:
-  m_Name: Sun
-  m_Layer: 0
---- !u!4 &11
-Transform:
-  m_GameObject: {fileID: 10}
-  m_LocalPosition: {x: 0, y: 10, z: 0}
-  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
-  m_LocalScale: {x: 1, y: 1, z: 1}
-  m_Children: []
-  m_Father: {fileID: 0}
---- !u!108 &12
-Light:
-  m_GameObject: {fileID: 10}
-  m_Enabled: 1
-  m_Type: 1
-  m_Color: {r: 1, g: 0.9, b: 0.8, a: 1}
-  m_Intensity: 0.8
---- !u!1 &20
-GameObject:
-  m_Name: PointLamp
-  m_Layer: 0
---- !u!4 &21
-Transform:
-  m_GameObject: {fileID: 20}
-  m_LocalPosition: {x: 1, y: 2, z: 3}
-  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
-  m_LocalScale: {x: 1, y: 1, z: 1}
-  m_Children: []
-  m_Father: {fileID: 0}
---- !u!108 &22
-Light:
-  m_GameObject: {fileID: 20}
-  m_Enabled: 1
-  m_Type: 2
-  m_Color: {r: 1, g: 0, b: 0, a: 1}
-  m_Intensity: 2.5
---- !u!1 &30
-GameObject:
-  m_Name: SpotLamp
-  m_Layer: 0
---- !u!4 &31
-Transform:
-  m_GameObject: {fileID: 30}
-  m_LocalPosition: {x: 4, y: 5, z: 6}
-  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
-  m_LocalScale: {x: 1, y: 1, z: 1}
-  m_Children: []
-  m_Father: {fileID: 0}
---- !u!108 &32
-Light:
-  m_GameObject: {fileID: 30}
-  m_Enabled: 1
-  m_Type: 0
-  m_Color: {r: 0, g: 1, b: 0, a: 1}
-  m_Intensity: 3.0
-";
-        std::fs::write(&scene_path, scene_yaml)?;
+        let scene_path = write_multilight_scene(&dir)?;
 
         let mut runtime = Runtime::new()?;
         runtime.load_scene(&scene_path)?;
@@ -2102,6 +2036,38 @@ Light:
         Ok(())
     }
 
+    fn write_urp_lit_material_assets(
+        dir: &Path,
+    ) -> Result<std::path::PathBuf, Box<dyn std::error::Error>> {
+        let _ = std::fs::remove_dir_all(dir);
+        let assets_dir = dir.join("Assets");
+        std::fs::create_dir_all(&assets_dir)?;
+        std::fs::create_dir_all(dir.join("ProjectSettings"))?;
+        for (name, guid, rgb, tex_type) in [
+            ("Base.tga", "11111111111111111111111111111111", [255, 0, 255], 0),
+            ("Normal.tga", "22222222222222222222222222222222", [0, 0, 255], 1),
+            ("Emissive.tga", "33333333333333333333333333333333", [255, 255, 0], 0),
+        ] {
+            write_test_tga(&assets_dir.join(name), 4, 4, rgb)?;
+            std::fs::write(
+                assets_dir.join(format!("{name}.meta")),
+                format!(
+                    "fileFormatVersion: 2\nguid: {guid}\nTextureImporter:\n  sRGBTexture: 0\n  textureType: {tex_type}\n"
+                ),
+            )?;
+        }
+        let mat_yaml = "%YAML 1.1\n%TAG !u! tag:unity3d.com,2011:\n--- !u!21 &2100000\nMaterial:\n  m_Name: UrpLitMat\n  m_Shader: {fileID: 4800000, guid: 933532a4fcc9baf4fa0491de14d08ed7, type: 3}\n  m_SavedProperties:\n    serializedVersion: 3\n    m_TexEnvs:\n    - _BaseMap:\n        m_Texture: {fileID: 2800000, guid: 11111111111111111111111111111111, type: 3}\n        m_Scale: {x: 1, y: 1}\n        m_Offset: {x: 0, y: 0}\n    - _MainTex:\n        m_Texture: {fileID: 0}\n        m_Scale: {x: 1, y: 1}\n        m_Offset: {x: 0, y: 0}\n    - _BumpMap:\n        m_Texture: {fileID: 2800000, guid: 22222222222222222222222222222222, type: 3}\n        m_Scale: {x: 1, y: 1}\n        m_Offset: {x: 0, y: 0}\n    - _EmissionMap:\n        m_Texture: {fileID: 2800000, guid: 33333333333333333333333333333333, type: 3}\n        m_Scale: {x: 1, y: 1}\n        m_Offset: {x: 0, y: 0}\n    m_Floats:\n    - _Smoothness: 0.7\n    - _Metallic: 0.35\n    m_Colors:\n    - _BaseColor: {r: 0.25, g: 0.5, b: 0.75, a: 0.8}\n    - _EmissionColor: {r: 0.4, g: 0.2, b: 0.1, a: 1}\n";
+        std::fs::write(assets_dir.join("UrpLitMat.mat"), mat_yaml)?;
+        std::fs::write(
+            assets_dir.join("UrpLitMat.mat.meta"),
+            "fileFormatVersion: 2\nguid: 44444444444444444444444444444444\n",
+        )?;
+        let scene_path = assets_dir.join("UrpScene.unity");
+        let scene_yaml = "%YAML 1.1\n%TAG !u! tag:unity3d.com,2011:\n--- !u!1 &10\nGameObject:\n  m_Name: UrpCube\n  m_Layer: 0\n--- !u!4 &11\nTransform:\n  m_GameObject: {fileID: 10}\n  m_LocalPosition: {x: 0, y: 0, z: 0}\n  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}\n  m_LocalScale: {x: 1, y: 1, z: 1}\n  m_Children: []\n  m_Father: {fileID: 0}\n--- !u!33 &12\nMeshFilter:\n  m_GameObject: {fileID: 10}\n  m_Mesh: {fileID: 10202, guid: 0000000000000000e000000000000000, type: 0}\n--- !u!23 &13\nMeshRenderer:\n  m_GameObject: {fileID: 10}\n  m_Enabled: 1\n  m_Materials:\n  - {fileID: 2100000, guid: 44444444444444444444444444444444, type: 2}\n";
+        std::fs::write(&scene_path, scene_yaml)?;
+        Ok(scene_path)
+    }
+
     #[test]
     fn urp_lit_material_in_scene_binds_base_map_base_color_normal_emission_and_pbr_into_render_material()
     -> Result<(), Box<dyn std::error::Error>> {
@@ -2109,97 +2075,7 @@ Light:
             "unitas_runtime_urp_material_bind_{}",
             std::process::id()
         ));
-        let _ = std::fs::remove_dir_all(&dir);
-        let assets_dir = dir.join("Assets");
-        std::fs::create_dir_all(&assets_dir)?;
-        std::fs::create_dir_all(dir.join("ProjectSettings"))?;
-
-        let base_tex = assets_dir.join("Base.tga");
-        write_test_tga(&base_tex, 4, 4, [255, 0, 255])?;
-        std::fs::write(
-            assets_dir.join("Base.tga.meta"),
-            "fileFormatVersion: 2\nguid: 11111111111111111111111111111111\nTextureImporter:\n  sRGBTexture: 0\n  textureType: 0\n",
-        )?;
-
-        let normal_tex = assets_dir.join("Normal.tga");
-        write_test_tga(&normal_tex, 4, 4, [0, 0, 255])?;
-        std::fs::write(
-            assets_dir.join("Normal.tga.meta"),
-            "fileFormatVersion: 2\nguid: 22222222222222222222222222222222\nTextureImporter:\n  sRGBTexture: 0\n  textureType: 1\n",
-        )?;
-
-        let emissive_tex = assets_dir.join("Emissive.tga");
-        write_test_tga(&emissive_tex, 4, 4, [255, 255, 0])?;
-        std::fs::write(
-            assets_dir.join("Emissive.tga.meta"),
-            "fileFormatVersion: 2\nguid: 33333333333333333333333333333333\nTextureImporter:\n  sRGBTexture: 0\n  textureType: 0\n",
-        )?;
-
-        let mat_yaml = "%YAML 1.1
-%TAG !u! tag:unity3d.com,2011:
---- !u!21 &2100000
-Material:
-  m_Name: UrpLitMat
-  m_Shader: {fileID: 4800000, guid: 933532a4fcc9baf4fa0491de14d08ed7, type: 3}
-  m_SavedProperties:
-    serializedVersion: 3
-    m_TexEnvs:
-    - _BaseMap:
-        m_Texture: {fileID: 2800000, guid: 11111111111111111111111111111111, type: 3}
-        m_Scale: {x: 1, y: 1}
-        m_Offset: {x: 0, y: 0}
-    - _MainTex:
-        m_Texture: {fileID: 0}
-        m_Scale: {x: 1, y: 1}
-        m_Offset: {x: 0, y: 0}
-    - _BumpMap:
-        m_Texture: {fileID: 2800000, guid: 22222222222222222222222222222222, type: 3}
-        m_Scale: {x: 1, y: 1}
-        m_Offset: {x: 0, y: 0}
-    - _EmissionMap:
-        m_Texture: {fileID: 2800000, guid: 33333333333333333333333333333333, type: 3}
-        m_Scale: {x: 1, y: 1}
-        m_Offset: {x: 0, y: 0}
-    m_Floats:
-    - _Smoothness: 0.7
-    - _Metallic: 0.35
-    m_Colors:
-    - _BaseColor: {r: 0.25, g: 0.5, b: 0.75, a: 0.8}
-    - _EmissionColor: {r: 0.4, g: 0.2, b: 0.1, a: 1}
-";
-        std::fs::write(assets_dir.join("UrpLitMat.mat"), mat_yaml)?;
-        std::fs::write(
-            assets_dir.join("UrpLitMat.mat.meta"),
-            "fileFormatVersion: 2\nguid: 44444444444444444444444444444444\n",
-        )?;
-
-        let scene_path = assets_dir.join("UrpScene.unity");
-        let scene_yaml = "%YAML 1.1
-%TAG !u! tag:unity3d.com,2011:
---- !u!1 &10
-GameObject:
-  m_Name: UrpCube
-  m_Layer: 0
---- !u!4 &11
-Transform:
-  m_GameObject: {fileID: 10}
-  m_LocalPosition: {x: 0, y: 0, z: 0}
-  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
-  m_LocalScale: {x: 1, y: 1, z: 1}
-  m_Children: []
-  m_Father: {fileID: 0}
---- !u!33 &12
-MeshFilter:
-  m_GameObject: {fileID: 10}
-  m_Mesh: {fileID: 10202, guid: 0000000000000000e000000000000000, type: 0}
---- !u!23 &13
-MeshRenderer:
-  m_GameObject: {fileID: 10}
-  m_Enabled: 1
-  m_Materials:
-  - {fileID: 2100000, guid: 44444444444444444444444444444444, type: 2}
-";
-        std::fs::write(&scene_path, scene_yaml)?;
+        let scene_path = write_urp_lit_material_assets(&dir)?;
 
         let mut runtime = Runtime::new()?;
         runtime.load_scene(&scene_path)?;
@@ -2243,74 +2119,53 @@ MeshRenderer:
         Ok(())
     }
 
-    #[test]
-    fn ani_001_object_reference_curve_swaps_sprite_renderer_sprite_at_keyed_time()
-    -> Result<(), Box<dyn std::error::Error>> {
-        use unitas_animation::curve::{AssetReference, ObjectReferenceCurve, ObjectReferenceKey};
-        use unitas_animation::{
-            AnimationClip, AnimatorController, AnimatorState, CurveBinding, CurveBindingTarget,
-            PropertyCurve, StateMotion, WrapMode,
-        };
-
-        let dir = std::env::temp_dir().join(format!(
-            "unitas_runtime_sprite_swap_anim_{}",
-            std::process::id()
-        ));
-        let _ = std::fs::remove_dir_all(&dir);
+    fn write_sprite_swap_scene(
+        dir: &Path,
+        guid_a: &str,
+        guid_b: Option<&str>,
+    ) -> Result<std::path::PathBuf, Box<dyn std::error::Error>> {
+        let _ = std::fs::remove_dir_all(dir);
         let assets_dir = dir.join("Assets");
         std::fs::create_dir_all(&assets_dir)?;
         std::fs::create_dir_all(dir.join("ProjectSettings"))?;
-
-        let guid_a = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
-        let guid_b = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
-        let tex_a = assets_dir.join("SpriteA.tga");
-        write_test_tga(&tex_a, 100, 50, [255, 0, 0])?;
+        write_test_tga(&assets_dir.join("SpriteA.tga"), 100, 50, [255, 0, 0])?;
         std::fs::write(
             assets_dir.join("SpriteA.tga.meta"),
             format!("fileFormatVersion: 2\nguid: {guid_a}\nTextureImporter:\n  sRGBTexture: 0\n"),
         )?;
-        let tex_b = assets_dir.join("SpriteB.tga");
-        write_test_tga(&tex_b, 200, 80, [0, 255, 0])?;
-        std::fs::write(
-            assets_dir.join("SpriteB.tga.meta"),
-            format!("fileFormatVersion: 2\nguid: {guid_b}\nTextureImporter:\n  sRGBTexture: 0\n"),
-        )?;
-
+        if let Some(gb) = guid_b {
+            write_test_tga(&assets_dir.join("SpriteB.tga"), 200, 80, [0, 255, 0])?;
+            std::fs::write(
+                assets_dir.join("SpriteB.tga.meta"),
+                format!("fileFormatVersion: 2\nguid: {gb}\nTextureImporter:\n  sRGBTexture: 0\n"),
+            )?;
+        }
         let scene_path = assets_dir.join("SpriteSwapScene.unity");
         let scene_yaml = format!(
-            "%YAML 1.1
-%TAG !u! tag:unity3d.com,2011:
---- !u!1 &1
-GameObject:
-  m_Name: HeroSprite
-  m_Layer: 0
---- !u!4 &2
-Transform:
-  m_GameObject: {{fileID: 1}}
-  m_LocalPosition: {{x: 0, y: 0, z: 0}}
-  m_LocalRotation: {{x: 0, y: 0, z: 0, w: 1}}
-  m_LocalScale: {{x: 1, y: 1, z: 1}}
-  m_Children: []
-  m_Father: {{fileID: 0}}
---- !u!212 &3
-SpriteRenderer:
-  m_GameObject: {{fileID: 1}}
-  m_Enabled: 1
-  m_Sprite: {{fileID: 21300000, guid: {guid_a}, type: 3}}
-  m_Color: {{r: 1, g: 1, b: 1, a: 1}}
-  m_SortingLayerID: 0
-  m_SortingOrder: 0
-"
+            "%YAML 1.1\n%TAG !u! tag:unity3d.com,2011:\n--- !u!1 &1\nGameObject:\n  m_Name: HeroSprite\n  m_Layer: 0\n--- !u!4 &2\nTransform:\n  m_GameObject: {{fileID: 1}}\n  m_LocalPosition: {{x: 0, y: 0, z: 0}}\n  m_LocalRotation: {{x: 0, y: 0, z: 0, w: 1}}\n  m_LocalScale: {{x: 1, y: 1, z: 1}}\n  m_Children: []\n  m_Father: {{fileID: 0}}\n--- !u!212 &3\nSpriteRenderer:\n  m_GameObject: {{fileID: 1}}\n  m_Enabled: 1\n  m_Sprite: {{fileID: 21300000, guid: {guid_a}, type: 3}}\n  m_Color: {{r: 1, g: 1, b: 1, a: 1}}\n  m_SortingLayerID: 0\n  m_SortingOrder: 0\n"
         );
         std::fs::write(&scene_path, scene_yaml)?;
+        Ok(scene_path)
+    }
 
+    fn build_sprite_swap_controller(
+        guid_a: &str,
+        guid_b: &str,
+        file_id_b: i64,
+        wrap: unitas_animation::WrapMode,
+    ) -> Result<unitas_animation::AnimatorController, Box<dyn std::error::Error>> {
+        use unitas_animation::curve::{AssetReference, ObjectReferenceCurve, ObjectReferenceKey};
+        use unitas_animation::{
+            AnimationClip, AnimatorController, AnimatorState, CurveBinding, CurveBindingTarget,
+            PropertyCurve, StateMotion,
+        };
         let ref_a = AssetReference::from_hex(guid_a, 21300000).ok_or("invalid guid_a")?;
-        let ref_b = AssetReference::from_hex(guid_b, 21300000).ok_or("invalid guid_b")?;
+        let ref_b = AssetReference::from_hex(guid_b, file_id_b).ok_or("invalid guid_b")?;
         let clip = AnimationClip::new(
             "SwapSprites",
             2.0,
             60.0,
-            WrapMode::Loop,
+            wrap,
             vec![CurveBinding::new(
                 CurveBindingTarget::new("", "SpriteRenderer", "m_Sprite"),
                 PropertyCurve::ObjectReference(ObjectReferenceCurve::new(vec![
@@ -2320,13 +2175,31 @@ SpriteRenderer:
             )],
             Vec::new(),
         );
-        let controller = AnimatorController::new(
+        Ok(AnimatorController::new(
             "HeroController",
             Vec::new(),
             vec![AnimatorState::new("SwapSprites", StateMotion::Clip(clip))],
             0,
             Vec::new(),
-        );
+        ))
+    }
+
+    #[test]
+    fn ani_001_object_reference_curve_swaps_sprite_renderer_sprite_at_keyed_time()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let dir = std::env::temp_dir().join(format!(
+            "unitas_runtime_sprite_swap_anim_{}",
+            std::process::id()
+        ));
+        let guid_a = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        let guid_b = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+        let scene_path = write_sprite_swap_scene(&dir, guid_a, Some(guid_b))?;
+        let controller = build_sprite_swap_controller(
+            guid_a,
+            guid_b,
+            21300000,
+            unitas_animation::WrapMode::Loop,
+        )?;
 
         let mut runtime = Runtime::new()?;
         runtime.load_scene(&scene_path)?;
@@ -2361,82 +2234,19 @@ SpriteRenderer:
     #[test]
     fn ani_001_unresolvable_sprite_reference_produces_diagnostic_naming_asset_and_member_without_crash()
     -> Result<(), Box<dyn std::error::Error>> {
-        use unitas_animation::curve::{AssetReference, ObjectReferenceCurve, ObjectReferenceKey};
-        use unitas_animation::{
-            AnimationClip, AnimatorController, AnimatorState, CurveBinding, CurveBindingTarget,
-            PropertyCurve, StateMotion, WrapMode,
-        };
-
         let dir = std::env::temp_dir().join(format!(
             "unitas_runtime_sprite_swap_missing_{}",
             std::process::id()
         ));
-        let _ = std::fs::remove_dir_all(&dir);
-        let assets_dir = dir.join("Assets");
-        std::fs::create_dir_all(&assets_dir)?;
-        std::fs::create_dir_all(dir.join("ProjectSettings"))?;
-
         let guid_a = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
         let missing_guid = "deadbeefdeadbeefdeadbeefdeadbeef";
-        let tex_a = assets_dir.join("SpriteA.tga");
-        write_test_tga(&tex_a, 64, 64, [255, 0, 0])?;
-        std::fs::write(
-            assets_dir.join("SpriteA.tga.meta"),
-            format!("fileFormatVersion: 2\nguid: {guid_a}\nTextureImporter:\n  sRGBTexture: 0\n"),
+        let scene_path = write_sprite_swap_scene(&dir, guid_a, None)?;
+        let controller = build_sprite_swap_controller(
+            guid_a,
+            missing_guid,
+            21300099,
+            unitas_animation::WrapMode::Once,
         )?;
-
-        let scene_path = assets_dir.join("MissingSpriteSwapScene.unity");
-        let scene_yaml = format!(
-            "%YAML 1.1
-%TAG !u! tag:unity3d.com,2011:
---- !u!1 &1
-GameObject:
-  m_Name: HeroSprite
-  m_Layer: 0
---- !u!4 &2
-Transform:
-  m_GameObject: {{fileID: 1}}
-  m_LocalPosition: {{x: 0, y: 0, z: 0}}
-  m_LocalRotation: {{x: 0, y: 0, z: 0, w: 1}}
-  m_LocalScale: {{x: 1, y: 1, z: 1}}
-  m_Children: []
-  m_Father: {{fileID: 0}}
---- !u!212 &3
-SpriteRenderer:
-  m_GameObject: {{fileID: 1}}
-  m_Enabled: 1
-  m_Sprite: {{fileID: 21300000, guid: {guid_a}, type: 3}}
-  m_Color: {{r: 1, g: 1, b: 1, a: 1}}
-  m_SortingLayerID: 0
-  m_SortingOrder: 0
-"
-        );
-        std::fs::write(&scene_path, scene_yaml)?;
-
-        let ref_a = AssetReference::from_hex(guid_a, 21300000).ok_or("invalid guid_a")?;
-        let ref_missing =
-            AssetReference::from_hex(missing_guid, 21300099).ok_or("invalid missing_guid")?;
-        let clip = AnimationClip::new(
-            "BrokenSwap",
-            2.0,
-            60.0,
-            WrapMode::Once,
-            vec![CurveBinding::new(
-                CurveBindingTarget::new("", "SpriteRenderer", "m_Sprite"),
-                PropertyCurve::ObjectReference(ObjectReferenceCurve::new(vec![
-                    ObjectReferenceKey::new(0.0, ref_a),
-                    ObjectReferenceKey::new(1.0, ref_missing),
-                ])),
-            )],
-            Vec::new(),
-        );
-        let controller = AnimatorController::new(
-            "BrokenController",
-            Vec::new(),
-            vec![AnimatorState::new("BrokenSwap", StateMotion::Clip(clip))],
-            0,
-            Vec::new(),
-        );
 
         let mut runtime = Runtime::new()?;
         runtime.load_scene(&scene_path)?;

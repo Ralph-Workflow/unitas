@@ -166,25 +166,15 @@ pub(crate) fn route_pair_messages_2d(
     let kind = MessageKind2D::from_phase(phase, is_trigger);
     let mut routed = Vec::new();
     if endpoint_receives_2d(a, b, is_trigger) {
-        for recipient in a.recipients() {
-            routed.push(RoutedMessage2D {
-                recipient,
-                kind,
-                self_collider: a.collider_id,
-                other_collider: b.collider_id,
-                other_body: b.body_id,
-                contacts: if is_trigger {
-                    Vec::new()
-                } else {
-                    contacts_for_a.to_vec()
-                },
-                relative_velocity: if is_trigger {
-                    [0.0, 0.0]
-                } else {
-                    rel_vel_for_a
-                },
-            });
-        }
+        push_routed_messages_for_endpoint(
+            &mut routed,
+            kind,
+            is_trigger,
+            a,
+            b,
+            contacts_for_a,
+            rel_vel_for_a,
+        );
     }
     if endpoint_receives_2d(b, a, is_trigger) {
         let contacts_for_b: Vec<ContactPoint2D> = if is_trigger {
@@ -201,21 +191,41 @@ pub(crate) fn route_pair_messages_2d(
                 .collect()
         };
         let rel_vel_for_b = [-rel_vel_for_a[0], -rel_vel_for_a[1]];
-        for recipient in b.recipients() {
-            routed.push(RoutedMessage2D {
-                recipient,
-                kind,
-                self_collider: b.collider_id,
-                other_collider: a.collider_id,
-                other_body: a.body_id,
-                contacts: contacts_for_b.clone(),
-                relative_velocity: if is_trigger {
-                    [0.0, 0.0]
-                } else {
-                    rel_vel_for_b
-                },
-            });
-        }
+        push_routed_messages_for_endpoint(
+            &mut routed,
+            kind,
+            is_trigger,
+            b,
+            a,
+            &contacts_for_b,
+            rel_vel_for_b,
+        );
     }
     routed
+}
+
+fn push_routed_messages_for_endpoint(
+    routed: &mut Vec<RoutedMessage2D>,
+    kind: MessageKind2D,
+    is_trigger: bool,
+    receiver: Endpoint2D,
+    other: Endpoint2D,
+    contacts: &[ContactPoint2D],
+    rel_vel: [f32; 2],
+) {
+    for recipient in receiver.recipients() {
+        routed.push(RoutedMessage2D {
+            recipient,
+            kind,
+            self_collider: receiver.collider_id,
+            other_collider: other.collider_id,
+            other_body: other.body_id,
+            contacts: if is_trigger {
+                Vec::new()
+            } else {
+                contacts.to_vec()
+            },
+            relative_velocity: if is_trigger { [0.0, 0.0] } else { rel_vel },
+        });
+    }
 }

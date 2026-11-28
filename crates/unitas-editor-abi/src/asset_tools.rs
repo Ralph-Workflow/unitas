@@ -17,6 +17,18 @@ use unitas_asset::unity_yaml::{self, Node};
 static SESSIONS: OnceLock<Mutex<HashMap<PathBuf, Project>>> = OnceLock::new();
 
 pub fn register(builder: DispatchTableBuilder) -> Result<DispatchTableBuilder, AbiError> {
+    let builder = register_asset_inspection_tools(builder)?;
+    let builder = register_asset_write_tools(builder)?;
+    let builder = register_asset_restore_tools(builder)?;
+    let builder = register_asset_listing_tools(builder)?;
+    let builder = register_project_query_tools(builder)?;
+    let builder = register_settings_write_tools(builder)?;
+    Ok(builder)
+}
+
+fn register_asset_inspection_tools(
+    builder: DispatchTableBuilder,
+) -> Result<DispatchTableBuilder, AbiError> {
     let builder = builder.tool(
         tool_descriptor(
             "assets.search",
@@ -51,6 +63,12 @@ pub fn register(builder: DispatchTableBuilder) -> Result<DispatchTableBuilder, A
         ),
         Box::new(preview_asset),
     )?;
+    Ok(builder)
+}
+
+fn register_asset_write_tools(
+    builder: DispatchTableBuilder,
+) -> Result<DispatchTableBuilder, AbiError> {
     let builder = builder.tool(
         tool_descriptor(
             "assets.move",
@@ -80,6 +98,12 @@ pub fn register(builder: DispatchTableBuilder) -> Result<DispatchTableBuilder, A
         ),
         Box::new(delete_asset),
     )?;
+    Ok(builder)
+}
+
+fn register_asset_restore_tools(
+    builder: DispatchTableBuilder,
+) -> Result<DispatchTableBuilder, AbiError> {
     let builder = builder.tool(
         tool_descriptor(
             "assets.restore",
@@ -109,6 +133,12 @@ pub fn register(builder: DispatchTableBuilder) -> Result<DispatchTableBuilder, A
         ),
         Box::new(duplicate_asset),
     )?;
+    Ok(builder)
+}
+
+fn register_asset_listing_tools(
+    builder: DispatchTableBuilder,
+) -> Result<DispatchTableBuilder, AbiError> {
     let builder = builder.tool(
         tool_descriptor(
             "assets.favorites",
@@ -137,6 +167,12 @@ pub fn register(builder: DispatchTableBuilder) -> Result<DispatchTableBuilder, A
         ),
         Box::new(recents),
     )?;
+    Ok(builder)
+}
+
+fn register_project_query_tools(
+    builder: DispatchTableBuilder,
+) -> Result<DispatchTableBuilder, AbiError> {
     let builder = builder.tool(
         tool_descriptor(
             "assets.dependencies",
@@ -164,6 +200,12 @@ pub fn register(builder: DispatchTableBuilder) -> Result<DispatchTableBuilder, A
         ),
         Box::new(inspect_settings),
     )?;
+    Ok(builder)
+}
+
+fn register_settings_write_tools(
+    builder: DispatchTableBuilder,
+) -> Result<DispatchTableBuilder, AbiError> {
     let builder = builder.tool(
         tool_descriptor(
             "settings.update",

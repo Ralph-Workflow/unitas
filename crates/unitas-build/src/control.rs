@@ -444,41 +444,8 @@ fn parse_request(line: &str) -> Result<Request, ProtocolError> {
                 .ok_or(ProtocolError::InvalidStep)?;
             Ok(Request::Step { frames })
         }
-        "inject_input" => {
-            let events = object
-                .get("events")
-                .and_then(Value::as_array)
-                .ok_or(ProtocolError::InvalidInputEvent)?;
-            let parsed = events
-                .iter()
-                .map(parse_input_event)
-                .collect::<Result<Vec<InjectedInput>, ProtocolError>>()?;
-            Ok(Request::InjectInput { events: parsed })
-        }
-        "capture" => {
-            let width = object
-                .get("width")
-                .and_then(Value::as_u64)
-                .ok_or(ProtocolError::InvalidCapture)?;
-            let height = object
-                .get("height")
-                .and_then(Value::as_u64)
-                .ok_or(ProtocolError::InvalidCapture)?;
-            let width = u32::try_from(width).map_err(|_| ProtocolError::InvalidCapture)?;
-            let height = u32::try_from(height).map_err(|_| ProtocolError::InvalidCapture)?;
-            if width == 0 || height == 0 {
-                return Err(ProtocolError::InvalidCapture);
-            }
-            let id_map = object
-                .get("id_map")
-                .and_then(Value::as_bool)
-                .unwrap_or(true);
-            Ok(Request::Capture {
-                width,
-                height,
-                id_map,
-            })
-        }
+        "inject_input" => parse_inject_input_request(object),
+        "capture" => parse_capture_request(object),
         "quality" => {
             let level = object
                 .get("level")
@@ -488,22 +455,61 @@ fn parse_request(line: &str) -> Result<Request, ProtocolError> {
             Ok(Request::Quality { level })
         }
         "tools_describe" => Ok(Request::ToolsDescribe),
-        "tool_invoke" => {
-            let name = object
-                .get("name")
-                .and_then(Value::as_str)
-                .ok_or(ProtocolError::InvalidRequest)?;
-            let arguments = object
-                .get("arguments")
-                .cloned()
-                .unwrap_or_else(|| Value::Object(Map::new()));
-            Ok(Request::ToolInvoke {
-                name: String::from(name),
-                arguments,
-            })
-        }
+        "tool_invoke" => parse_tool_invoke_request(object),
         _ => Err(ProtocolError::UnknownCommand),
     }
+}
+
+fn parse_inject_input_request(object: &Map<String, Value>) -> Result<Request, ProtocolError> {
+    let events = object
+        .get("events")
+        .and_then(Value::as_array)
+        .ok_or(ProtocolError::InvalidInputEvent)?;
+    let parsed = events
+        .iter()
+        .map(parse_input_event)
+        .collect::<Result<Vec<InjectedInput>, ProtocolError>>()?;
+    Ok(Request::InjectInput { events: parsed })
+}
+
+fn parse_capture_request(object: &Map<String, Value>) -> Result<Request, ProtocolError> {
+    let width = object
+        .get("width")
+        .and_then(Value::as_u64)
+        .ok_or(ProtocolError::InvalidCapture)?;
+    let height = object
+        .get("height")
+        .and_then(Value::as_u64)
+        .ok_or(ProtocolError::InvalidCapture)?;
+    let width = u32::try_from(width).map_err(|_| ProtocolError::InvalidCapture)?;
+    let height = u32::try_from(height).map_err(|_| ProtocolError::InvalidCapture)?;
+    if width == 0 || height == 0 {
+        return Err(ProtocolError::InvalidCapture);
+    }
+    let id_map = object
+        .get("id_map")
+        .and_then(Value::as_bool)
+        .unwrap_or(true);
+    Ok(Request::Capture {
+        width,
+        height,
+        id_map,
+    })
+}
+
+fn parse_tool_invoke_request(object: &Map<String, Value>) -> Result<Request, ProtocolError> {
+    let name = object
+        .get("name")
+        .and_then(Value::as_str)
+        .ok_or(ProtocolError::InvalidRequest)?;
+    let arguments = object
+        .get("arguments")
+        .cloned()
+        .unwrap_or_else(|| Value::Object(Map::new()));
+    Ok(Request::ToolInvoke {
+        name: String::from(name),
+        arguments,
+    })
 }
 
 fn parse_input_event(value: &Value) -> Result<InjectedInput, ProtocolError> {

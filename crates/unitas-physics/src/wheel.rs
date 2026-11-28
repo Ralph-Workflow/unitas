@@ -579,46 +579,120 @@ fn step_wheel(
         rotate_vector(frame.rotation, wheel.local_position),
     );
     let down = rotate_vector(frame.rotation, [0.0, -1.0, 0.0]);
-    let reach = desc.suspension_distance;
     let hit = world
         .sphere_cast(
             attachment,
             desc.radius,
             down,
-            reach,
+            desc.suspension_distance,
             frame.layer_mask,
             false,
         )
         .into_iter()
         .find(|candidate| Some(candidate.entity) != frame.excluded_entity);
-
     let motor_torque = if desc.has_motor {
         desc.motor_torque
     } else {
         0.0
     };
     let Some(hit) = hit else {
-        wheel.is_grounded = false;
-        wheel.compression = 0.0;
-        wheel.ground_hit = None;
-        let brake_torque = desc.brake_torque * sign_of(wheel.angular_velocity);
-        wheel.angular_velocity += (motor_torque - brake_torque) / inertia * delta_seconds;
-        wheel.rotation_angle += wheel.angular_velocity * delta_seconds;
-        return ([0.0; 3], [0.0; 3]);
+        return step_airborne_wheel(wheel, motor_torque, inertia, delta_seconds);
     };
+    step_grounded_wheel(
+        wheel,
+        frame,
+        world,
+        delta_seconds,
+        (motor_torque, inertia),
+        (attachment, down),
+        &hit,
+    )
+}
 
+fn step_grounded_wheel(
+    wheel: &mut WheelCollider,
+    frame: &VehicleFrame,
+    world: &World,
+    delta_seconds: f64,
+    drive: (f64, f64),
+    pose: ([f64; 3], [f64; 3]),
+    hit: &crate::query::QueryHit,
+) -> ([f64; 3], [f64; 3]) {
+    let (motor_torque, inertia) = drive;
+    let (attachment, down) = pose;
+    let desc = wheel.desc;
+    let (normal, forward_dir, sideways_dir) = wheel_contact_axes(&desc, frame, down, hit.normal);
+    let (compression, normal_force) =
+        compute_wheel_suspension(&desc, frame, world, hit, attachment, down);
+    let contact_lever = subtract(hit.point, frame.position);
+    let contact_velocity = add(frame.velocity, cross(frame.angular_velocity, contact_lever));
+    let (forward_speed, sideways_speed) = (
+        dot(contact_velocity, forward_dir),
+        dot(contact_velocity, sideways_dir),
+    );
+    let (forward_slip, sideways_slip) = (
+        wheel.angular_velocity * desc.radius - forward_speed,
+        -sideways_speed,
+    );
+    let (longitudinal, lateral) = compute_wheel_tire_forces(
+        wheel,
+        motor_torque,
+        inertia,
+        delta_seconds,
+        normal_force.max(0.0),
+        (forward_speed, sideways_speed),
+        (forward_slip, sideways_slip),
+    );
+    wheel.is_grounded = true;
+    wheel.compression = compression;
+    wheel.ground_hit = Some(GroundHit {
+        entity: hit.entity,
+        point: hit.point,
+        normal,
+        forward_dir,
+        sideways_dir,
+        forward_slip,
+        sideways_slip,
+        compression,
+    });
+    let force = add(
+        add(
+            scale(forward_dir, longitudinal),
+            scale(sideways_dir, lateral),
+        ),
+        scale(normal, normal_force),
+    );
+    (force, cross(contact_lever, force))
+}
+
+fn step_airborne_wheel(
+    wheel: &mut WheelCollider,
+    motor_torque: f64,
+    inertia: f64,
+    delta_seconds: f64,
+) -> ([f64; 3], [f64; 3]) {
+    wheel.is_grounded = false;
+    wheel.compression = 0.0;
+    wheel.ground_hit = None;
+    let brake_torque = wheel.desc.brake_torque * sign_of(wheel.angular_velocity);
+    wheel.angular_velocity += (motor_torque - brake_torque) / inertia * delta_seconds;
+    wheel.rotation_angle += wheel.angular_velocity * delta_seconds;
+    ([0.0; 3], [0.0; 3])
+}
+
+fn wheel_contact_axes(
+    desc: &WheelDesc,
+    frame: &VehicleFrame,
+    down: [f64; 3],
+    hit_normal: [f64; 3],
+) -> ([f64; 3], [f64; 3], [f64; 3]) {
     let up = [-down[0], -down[1], -down[2]];
-    let contact_normal = normalize(hit.normal).unwrap_or(up);
+    let contact_normal = normalize(hit_normal).unwrap_or(up);
     let normal = if dot(contact_normal, up) < 0.0 {
         [-contact_normal[0], -contact_normal[1], -contact_normal[2]]
     } else {
         contact_normal
     };
-    let surface_height = dot(subtract(hit.point, attachment), down);
-    let suspension_length = hit.distance.clamp(0.0, desc.suspension_distance);
-    let compression =
-        (desc.suspension_distance - suspension_length).clamp(0.0, desc.suspension_distance);
-
     let steer_radians = if desc.has_steer {
         desc.steer_angle_deg.to_radians()
     } else {
@@ -631,10 +705,21 @@ fn step_wheel(
     let forward_dir =
         normalize(subtract(steered, scale(normal, dot(steered, normal)))).unwrap_or(steered);
     let sideways_dir = normalize(cross(normal, forward_dir)).unwrap_or([1.0, 0.0, 0.0]);
+    (normal, forward_dir, sideways_dir)
+}
 
-    let contact_point = hit.point;
-    let contact_lever = subtract(contact_point, frame.position);
-    let contact_velocity = add(frame.velocity, cross(frame.angular_velocity, contact_lever));
+fn compute_wheel_suspension(
+    desc: &WheelDesc,
+    frame: &VehicleFrame,
+    world: &World,
+    hit: &crate::query::QueryHit,
+    attachment: [f64; 3],
+    down: [f64; 3],
+) -> (f64, f64) {
+    let surface_height = dot(subtract(hit.point, attachment), down);
+    let suspension_length = hit.distance.clamp(0.0, desc.suspension_distance);
+    let compression =
+        (desc.suspension_distance - suspension_length).clamp(0.0, desc.suspension_distance);
     let attachment_lever = subtract(attachment, frame.position);
     let attachment_velocity = add(
         frame.velocity,
@@ -649,13 +734,21 @@ fn step_wheel(
     let normal_force = desc.suspension_spring.spring * (compression - rest_compression)
         + desc.suspension_spring.damper * compression_rate
         + bump_stop;
-    let load = normal_force.max(0.0);
+    (compression, normal_force)
+}
 
-    let forward_speed = dot(contact_velocity, forward_dir);
-    let sideways_speed = dot(contact_velocity, sideways_dir);
-    let forward_slip = wheel.angular_velocity * desc.radius - forward_speed;
-    let sideways_slip = -sideways_speed;
-
+fn compute_wheel_tire_forces(
+    wheel: &mut WheelCollider,
+    motor_torque: f64,
+    inertia: f64,
+    delta_seconds: f64,
+    load: f64,
+    speeds: (f64, f64),
+    slips: (f64, f64),
+) -> (f64, f64) {
+    let (forward_speed, sideways_speed) = speeds;
+    let (forward_slip, sideways_slip) = slips;
+    let desc = wheel.desc;
     let motion_sign = if forward_speed > 0.0 {
         1.0
     } else if forward_speed < 0.0 {
@@ -692,29 +785,7 @@ fn step_wheel(
         wheel.angular_velocity = forward_speed / desc.radius;
     }
     wheel.rotation_angle += wheel.angular_velocity * delta_seconds;
-
-    wheel.is_grounded = true;
-    wheel.compression = compression;
-    wheel.ground_hit = Some(GroundHit {
-        entity: hit.entity,
-        point: hit.point,
-        normal,
-        forward_dir,
-        sideways_dir,
-        forward_slip,
-        sideways_slip,
-        compression,
-    });
-
-    let force = add(
-        add(
-            scale(forward_dir, longitudinal),
-            scale(sideways_dir, lateral),
-        ),
-        scale(normal, normal_force),
-    );
-    let torque = cross(contact_lever, force);
-    (force, torque)
+    (longitudinal, lateral)
 }
 
 fn rotation_derivative(rotation: [f64; 4], angular_velocity: [f64; 3]) -> [f64; 4] {

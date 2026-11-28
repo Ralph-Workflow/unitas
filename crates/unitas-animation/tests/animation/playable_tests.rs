@@ -5,8 +5,9 @@ use std::rc::Rc;
 use unitas_animation::avatar_mask::AvatarMask;
 use unitas_animation::playable::{
     AnimationClipPlayable, AnimationLayerMixerPlayable, AnimationMixerPlayable, AudioClipPlayable,
-    AudioMixerPlayable, AudioPlayableOutput, AudioSourceBinding, DirectorUpdateMode, PlayState,
-    PlayableBehaviour, PlayableError, PlayableFrameData, PlayableGraph, ScriptPlayable,
+    AudioMixerPlayable, AudioOutputState, AudioPlayableOutput, AudioSourceBinding,
+    DirectorUpdateMode, PlayState, PlayableBehaviour, PlayableError, PlayableFrameData,
+    PlayableGraph, PlayableHandle, PlayableOutputHandle, ScriptPlayable,
 };
 use unitas_animation::{
     AnimatedValue, AnimationClip, CurveBinding, CurveBindingTarget, FloatCurve, Keyframe,
@@ -118,6 +119,277 @@ fn binding_value(pose: &[SampledBinding], object_path: &str) -> Option<AnimatedV
     pose.iter()
         .find(|binding| binding.target.object_path == object_path)
         .map(|binding| binding.value)
+}
+
+fn float_pose_value(
+    graph: &PlayableGraph,
+    output: PlayableOutputHandle,
+    missing: &'static str,
+    not_float: &'static str,
+) -> Result<f32, Box<dyn Error>> {
+    let AnimatedValue::Float(value) =
+        binding_value(graph.output_pose(output), "").ok_or(missing)?
+    else {
+        return Err(String::from(not_float).into());
+    };
+    Ok(value)
+}
+
+fn root_float_pose(
+    graph: &PlayableGraph,
+    output: PlayableOutputHandle,
+) -> Result<f32, Box<dyn Error>> {
+    float_pose_value(
+        graph,
+        output,
+        "missing root binding",
+        "root binding is not a float",
+    )
+}
+
+fn make_ramp_clip() -> AnimationClip {
+    AnimationClip::new(
+        "Ramp",
+        1.0,
+        60.0,
+        WrapMode::Once,
+        vec![CurveBinding::float(
+            CurveBindingTarget::new("", "Transform", "localPosition.x"),
+            FloatCurve::new(vec![
+                Keyframe::linear(0.0, 0.0),
+                Keyframe::linear(1.0, 10.0),
+            ]),
+        )],
+        Vec::new(),
+    )
+}
+
+fn make_speed_ramp_clip(name: &str) -> AnimationClip {
+    AnimationClip::new(
+        name,
+        2.0,
+        60.0,
+        WrapMode::Once,
+        vec![CurveBinding::float(
+            CurveBindingTarget::new("", "Transform", "localPosition.x"),
+            FloatCurve::new(vec![
+                Keyframe::linear(0.0, 0.0),
+                Keyframe::linear(2.0, 20.0),
+            ]),
+        )],
+        Vec::new(),
+    )
+}
+
+fn assert_update_modes_round_trip(graph: &mut PlayableGraph) {
+    for mode in [
+        DirectorUpdateMode::GameTime,
+        DirectorUpdateMode::UnscaledGameTime,
+        DirectorUpdateMode::DspClock,
+        DirectorUpdateMode::Manual,
+    ] {
+        graph.set_time_update_mode(mode);
+        assert_eq!(graph.time_update_mode(), mode);
+    }
+}
+
+fn assert_playable_speeds(
+    graph: &PlayableGraph,
+    half: PlayableHandle,
+    normal: PlayableHandle,
+    double: PlayableHandle,
+) {
+    assert_eq!(graph.playable_speed(half), Some(0.5));
+    assert_eq!(graph.playable_speed(normal), Some(1.0));
+    assert_eq!(graph.playable_speed(double), Some(2.0));
+}
+
+fn assert_playable_times(
+    graph: &PlayableGraph,
+    half: PlayableHandle,
+    normal: PlayableHandle,
+    double: PlayableHandle,
+) -> Result<(), Box<dyn Error>> {
+    let half_time = graph.playable_time(half).ok_or("missing half time")?;
+    let normal_time = graph.playable_time(normal).ok_or("missing normal time")?;
+    let double_time = graph.playable_time(double).ok_or("missing double time")?;
+
+    assert!((half_time - 0.2).abs() < 1e-6, "half time was {half_time}");
+    assert!(
+        (normal_time - 0.4).abs() < 1e-6,
+        "normal time was {normal_time}"
+    );
+    assert!(
+        (double_time - 0.8).abs() < 1e-6,
+        "double time was {double_time}"
+    );
+    Ok(())
+}
+
+fn assert_speed_poses(
+    graph: &PlayableGraph,
+    half_output: PlayableOutputHandle,
+    normal_output: PlayableOutputHandle,
+    double_output: PlayableOutputHandle,
+) -> Result<(), Box<dyn Error>> {
+    let half_pose = float_pose_value(
+        graph,
+        half_output,
+        "missing half binding",
+        "half binding is not a float",
+    )?;
+    let normal_pose = float_pose_value(
+        graph,
+        normal_output,
+        "missing normal binding",
+        "normal binding is not a float",
+    )?;
+    let double_pose = float_pose_value(
+        graph,
+        double_output,
+        "missing double binding",
+        "double binding is not a float",
+    )?;
+
+    assert!((half_pose - 2.0).abs() < 1e-5, "half pose was {half_pose}");
+    assert!(
+        (normal_pose - 4.0).abs() < 1e-5,
+        "normal pose was {normal_pose}"
+    );
+    assert!(
+        (double_pose - 8.0).abs() < 1e-5,
+        "double pose was {double_pose}"
+    );
+    Ok(())
+}
+
+fn connect_audio_graph(
+    graph: &mut PlayableGraph,
+    voice_clip: AudioClipPlayable,
+    music_clip: AudioClipPlayable,
+    audio_mixer: AudioMixerPlayable,
+) -> Result<AudioPlayableOutput, Box<dyn Error>> {
+    graph.connect(voice_clip.handle(), 0, audio_mixer.handle(), 0, 0.25)?;
+    graph.connect(music_clip.handle(), 0, audio_mixer.handle(), 1, 0.75)?;
+    let source_binding = AudioSourceBinding::new("DialogAudioSource", "Master/Dialog");
+    Ok(AudioPlayableOutput::create(
+        graph,
+        "DialogAudio",
+        audio_mixer.handle(),
+        source_binding,
+    )?)
+}
+
+fn assert_audio_state_before_play(before_play: &AudioOutputState) {
+    assert!(!before_play.is_playing);
+    assert_eq!(before_play.audio_source.source_name, "DialogAudioSource");
+    assert_eq!(before_play.audio_source.mixer_group, "Master/Dialog");
+}
+
+fn assert_audio_state_playing(state: &AudioOutputState) {
+    assert!(state.is_playing);
+    assert_eq!(state.audio_source.source_name, "DialogAudioSource");
+    assert_eq!(state.audio_source.mixer_group, "Master/Dialog");
+    assert_eq!(
+        state.audio_source.assigned_clip.as_deref(),
+        Some("Assets/Audio/Theme.ogg")
+    );
+    assert_eq!(state.active_clips.len(), 2);
+    assert_eq!(state.active_clips[0].clip_id, "Assets/Audio/VoiceLine.ogg");
+    assert!((state.active_clips[0].weight - 0.25).abs() < 1e-5);
+    assert!((state.active_clips[0].time - 0.5).abs() < 1e-6);
+    assert!(!state.active_clips[0].looping);
+    assert_eq!(state.active_clips[1].clip_id, "Assets/Audio/Theme.ogg");
+    assert!((state.active_clips[1].weight - 0.75).abs() < 1e-5);
+    assert!((state.active_clips[1].time - 0.5).abs() < 1e-6);
+    assert!(state.active_clips[1].looping);
+    assert!((state.effective_volume - 1.0).abs() < 1e-5);
+}
+
+fn assert_audio_state_switched(switched: &AudioOutputState) {
+    assert_eq!(switched.audio_source.mixer_group, "Master/Voiceover");
+    assert_eq!(
+        switched.audio_source.assigned_clip.as_deref(),
+        Some("Assets/Audio/VoiceLine.ogg")
+    );
+    assert!((switched.active_clips[0].time - 0.75).abs() < 1e-6);
+}
+
+fn assert_audio_clip_completion(
+    graph: &mut PlayableGraph,
+    voice: PlayableHandle,
+    music: PlayableHandle,
+) {
+    assert_eq!(graph.playable_is_done(voice), Some(false));
+    assert_eq!(graph.playable_is_done(music), Some(false));
+    graph.evaluate(1.5);
+    assert_eq!(graph.playable_is_done(voice), Some(true));
+    assert_eq!(graph.playable_is_done(music), Some(false));
+}
+
+fn assert_foreign_audio_outputs_rejected(
+    graph: &mut PlayableGraph,
+    audio_output: AudioPlayableOutput,
+) -> Result<(), Box<dyn Error>> {
+    let anim_clip = AnimationClipPlayable::create(graph, constant_position_clip("Anim", 1.0));
+    let anim_output = graph.create_output("AnimOut", anim_clip.handle())?;
+    assert_eq!(
+        graph.set_audio_output_target(
+            anim_output,
+            AudioSourceBinding::new("DialogAudioSource", "Master/Voiceover")
+        ),
+        Err(PlayableError::UnknownOutput)
+    );
+
+    let mut foreign_graph = PlayableGraph::new("ForeignAudio");
+    let foreign_clip =
+        AudioClipPlayable::create(&mut foreign_graph, "Assets/Audio/Foreign.ogg", 1.0, false);
+    assert_eq!(
+        AudioPlayableOutput::create(
+            graph,
+            "ForeignOut",
+            foreign_clip.handle(),
+            AudioSourceBinding::new("ForeignSource", "Master")
+        ),
+        Err(PlayableError::UnknownPlayable)
+    );
+    assert_eq!(
+        audio_output.set_target(
+            &mut foreign_graph,
+            AudioSourceBinding::new("ForeignSource", "Master")
+        ),
+        Err(PlayableError::UnknownOutput)
+    );
+    assert_eq!(
+        PlayableError::UnknownOutput.to_string(),
+        "the playable output handle is not in the graph"
+    );
+    Ok(())
+}
+
+fn assert_destroyed_graph_audio_outputs_rejected(
+    graph: &mut PlayableGraph,
+    audio_output: AudioPlayableOutput,
+    mixer: PlayableHandle,
+) -> Result<(), Box<dyn Error>> {
+    graph.destroy();
+    assert_eq!(
+        audio_output.set_target(
+            graph,
+            AudioSourceBinding::new("DialogAudioSource", "Master/Muted")
+        ),
+        Err(PlayableError::GraphDestroyed)
+    );
+    assert_eq!(
+        AudioPlayableOutput::create(
+            graph,
+            "DestroyedAudio",
+            mixer,
+            AudioSourceBinding::new("DialogAudioSource", "Master/Muted")
+        ),
+        Err(PlayableError::GraphDestroyed)
+    );
+    Ok(())
 }
 
 #[test]
@@ -476,33 +748,9 @@ fn playable_time_update_mode_round_trips_and_controls_stepping() -> Result<(), B
     let mut graph = PlayableGraph::new("UpdateMode");
     assert_eq!(graph.time_update_mode(), DirectorUpdateMode::GameTime);
 
-    for mode in [
-        DirectorUpdateMode::GameTime,
-        DirectorUpdateMode::UnscaledGameTime,
-        DirectorUpdateMode::DspClock,
-        DirectorUpdateMode::Manual,
-    ] {
-        graph.set_time_update_mode(mode);
-        assert_eq!(graph.time_update_mode(), mode);
-    }
+    assert_update_modes_round_trip(&mut graph);
 
-    let clip = AnimationClipPlayable::create(
-        &mut graph,
-        AnimationClip::new(
-            "Ramp",
-            1.0,
-            60.0,
-            WrapMode::Once,
-            vec![CurveBinding::float(
-                CurveBindingTarget::new("", "Transform", "localPosition.x"),
-                FloatCurve::new(vec![
-                    Keyframe::linear(0.0, 0.0),
-                    Keyframe::linear(1.0, 10.0),
-                ]),
-            )],
-            Vec::new(),
-        ),
-    );
+    let clip = AnimationClipPlayable::create(&mut graph, make_ramp_clip());
     let output = graph.create_output("Animation", clip.handle())?;
 
     graph.evaluate(0.25);
@@ -517,11 +765,7 @@ fn playable_time_update_mode_round_trips_and_controls_stepping() -> Result<(), B
     graph.evaluate(0.0);
     assert_eq!(graph.time(), 0.4);
     assert_eq!(graph.playable_time(clip.handle()), Some(0.4));
-    let AnimatedValue::Float(manual_value) =
-        binding_value(graph.output_pose(output), "").ok_or("missing root binding")?
-    else {
-        return Err(String::from("root binding is not a float").into());
-    };
+    let manual_value = root_float_pose(&graph, output)?;
     assert!(
         (manual_value - 4.0).abs() < 1e-5,
         "manual pose was {manual_value}"
@@ -534,11 +778,7 @@ fn playable_time_update_mode_round_trips_and_controls_stepping() -> Result<(), B
         .playable_time(clip.handle())
         .ok_or("missing playable time")?;
     assert!((time - 0.6).abs() < 1e-6, "playable time was {time}");
-    let AnimatedValue::Float(stepped_value) =
-        binding_value(graph.output_pose(output), "").ok_or("missing root binding")?
-    else {
-        return Err(String::from("root binding is not a float").into());
-    };
+    let stepped_value = root_float_pose(&graph, output)?;
     assert!(
         (stepped_value - 6.0).abs() < 1e-5,
         "stepped pose was {stepped_value}"
@@ -548,35 +788,16 @@ fn playable_time_update_mode_round_trips_and_controls_stepping() -> Result<(), B
 
 #[test]
 fn playable_speed_scales_evaluated_time() -> Result<(), Box<dyn Error>> {
-    let make_ramp_clip = |name: &str| {
-        AnimationClip::new(
-            name,
-            2.0,
-            60.0,
-            WrapMode::Once,
-            vec![CurveBinding::float(
-                CurveBindingTarget::new("", "Transform", "localPosition.x"),
-                FloatCurve::new(vec![
-                    Keyframe::linear(0.0, 0.0),
-                    Keyframe::linear(2.0, 20.0),
-                ]),
-            )],
-            Vec::new(),
-        )
-    };
-
     let mut graph = PlayableGraph::new("Speed");
-    let half = AnimationClipPlayable::create(&mut graph, make_ramp_clip("Half"));
-    let normal = AnimationClipPlayable::create(&mut graph, make_ramp_clip("Normal"));
-    let double = AnimationClipPlayable::create(&mut graph, make_ramp_clip("Double"));
+    let half = AnimationClipPlayable::create(&mut graph, make_speed_ramp_clip("Half"));
+    let normal = AnimationClipPlayable::create(&mut graph, make_speed_ramp_clip("Normal"));
+    let double = AnimationClipPlayable::create(&mut graph, make_speed_ramp_clip("Double"));
 
     graph.set_playable_speed(half.handle(), 0.5)?;
     graph.set_playable_speed(normal.handle(), 1.0)?;
     graph.set_playable_speed(double.handle(), 2.0)?;
 
-    assert_eq!(graph.playable_speed(half.handle()), Some(0.5));
-    assert_eq!(graph.playable_speed(normal.handle()), Some(1.0));
-    assert_eq!(graph.playable_speed(double.handle()), Some(2.0));
+    assert_playable_speeds(&graph, half.handle(), normal.handle(), double.handle());
 
     let half_output = graph.create_output("HalfOutput", half.handle())?;
     let normal_output = graph.create_output("NormalOutput", normal.handle())?;
@@ -585,51 +806,8 @@ fn playable_speed_scales_evaluated_time() -> Result<(), Box<dyn Error>> {
     graph.play();
     graph.evaluate(0.4);
 
-    let half_time = graph
-        .playable_time(half.handle())
-        .ok_or("missing half time")?;
-    let normal_time = graph
-        .playable_time(normal.handle())
-        .ok_or("missing normal time")?;
-    let double_time = graph
-        .playable_time(double.handle())
-        .ok_or("missing double time")?;
-
-    assert!((half_time - 0.2).abs() < 1e-6, "half time was {half_time}");
-    assert!(
-        (normal_time - 0.4).abs() < 1e-6,
-        "normal time was {normal_time}"
-    );
-    assert!(
-        (double_time - 0.8).abs() < 1e-6,
-        "double time was {double_time}"
-    );
-
-    let AnimatedValue::Float(half_pose) =
-        binding_value(graph.output_pose(half_output), "").ok_or("missing half binding")?
-    else {
-        return Err(String::from("half binding is not a float").into());
-    };
-    let AnimatedValue::Float(normal_pose) =
-        binding_value(graph.output_pose(normal_output), "").ok_or("missing normal binding")?
-    else {
-        return Err(String::from("normal binding is not a float").into());
-    };
-    let AnimatedValue::Float(double_pose) =
-        binding_value(graph.output_pose(double_output), "").ok_or("missing double binding")?
-    else {
-        return Err(String::from("double binding is not a float").into());
-    };
-
-    assert!((half_pose - 2.0).abs() < 1e-5, "half pose was {half_pose}");
-    assert!(
-        (normal_pose - 4.0).abs() < 1e-5,
-        "normal pose was {normal_pose}"
-    );
-    assert!(
-        (double_pose - 8.0).abs() < 1e-5,
-        "double pose was {double_pose}"
-    );
+    assert_playable_times(&graph, half.handle(), normal.handle(), double.handle())?;
+    assert_speed_poses(&graph, half_output, normal_output, double_output)?;
     Ok(())
 }
 
@@ -677,17 +855,7 @@ fn audio_playable_output_plays_through_audio_source_and_mixer_group() -> Result<
         AudioClipPlayable::create(&mut graph, "Assets/Audio/VoiceLine.ogg", 2.0, false);
     let music_clip = AudioClipPlayable::create(&mut graph, "Assets/Audio/Theme.ogg", 4.0, true);
     let audio_mixer = AudioMixerPlayable::create(&mut graph, 2);
-
-    graph.connect(voice_clip.handle(), 0, audio_mixer.handle(), 0, 0.25)?;
-    graph.connect(music_clip.handle(), 0, audio_mixer.handle(), 1, 0.75)?;
-
-    let source_binding = AudioSourceBinding::new("DialogAudioSource", "Master/Dialog");
-    let audio_output = AudioPlayableOutput::create(
-        &mut graph,
-        "DialogAudio",
-        audio_mixer.handle(),
-        source_binding,
-    )?;
+    let audio_output = connect_audio_graph(&mut graph, voice_clip, music_clip, audio_mixer)?;
 
     assert_eq!(
         graph.output_name(audio_output.handle()),
@@ -697,9 +865,7 @@ fn audio_playable_output_plays_through_audio_source_and_mixer_group() -> Result<
     let before_play = audio_output
         .state(&graph)
         .ok_or("missing audio output state before play")?;
-    assert!(!before_play.is_playing);
-    assert_eq!(before_play.audio_source.source_name, "DialogAudioSource");
-    assert_eq!(before_play.audio_source.mixer_group, "Master/Dialog");
+    assert_audio_state_before_play(before_play);
 
     graph.play();
     graph.evaluate(0.5);
@@ -707,23 +873,7 @@ fn audio_playable_output_plays_through_audio_source_and_mixer_group() -> Result<
     let state = audio_output
         .state(&graph)
         .ok_or("missing audio output state during play")?;
-    assert!(state.is_playing);
-    assert_eq!(state.audio_source.source_name, "DialogAudioSource");
-    assert_eq!(state.audio_source.mixer_group, "Master/Dialog");
-    assert_eq!(
-        state.audio_source.assigned_clip.as_deref(),
-        Some("Assets/Audio/Theme.ogg")
-    );
-    assert_eq!(state.active_clips.len(), 2);
-    assert_eq!(state.active_clips[0].clip_id, "Assets/Audio/VoiceLine.ogg");
-    assert!((state.active_clips[0].weight - 0.25).abs() < 1e-5);
-    assert!((state.active_clips[0].time - 0.5).abs() < 1e-6);
-    assert!(!state.active_clips[0].looping);
-    assert_eq!(state.active_clips[1].clip_id, "Assets/Audio/Theme.ogg");
-    assert!((state.active_clips[1].weight - 0.75).abs() < 1e-5);
-    assert!((state.active_clips[1].time - 0.5).abs() < 1e-6);
-    assert!(state.active_clips[1].looping);
-    assert!((state.effective_volume - 1.0).abs() < 1e-5);
+    assert_audio_state_playing(state);
 
     graph.set_input_weight(audio_mixer.handle(), 0, 0.8)?;
     graph.set_input_weight(audio_mixer.handle(), 1, 0.2)?;
@@ -736,18 +886,9 @@ fn audio_playable_output_plays_through_audio_source_and_mixer_group() -> Result<
     let switched = audio_output
         .state(&graph)
         .ok_or("missing audio output state after weight switch")?;
-    assert_eq!(switched.audio_source.mixer_group, "Master/Voiceover");
-    assert_eq!(
-        switched.audio_source.assigned_clip.as_deref(),
-        Some("Assets/Audio/VoiceLine.ogg")
-    );
-    assert!((switched.active_clips[0].time - 0.75).abs() < 1e-6);
+    assert_audio_state_switched(switched);
 
-    assert_eq!(graph.playable_is_done(voice_clip.handle()), Some(false));
-    assert_eq!(graph.playable_is_done(music_clip.handle()), Some(false));
-    graph.evaluate(1.5);
-    assert_eq!(graph.playable_is_done(voice_clip.handle()), Some(true));
-    assert_eq!(graph.playable_is_done(music_clip.handle()), Some(false));
+    assert_audio_clip_completion(&mut graph, voice_clip.handle(), music_clip.handle());
 
     graph.stop();
     let stopped = audio_output
@@ -755,56 +896,7 @@ fn audio_playable_output_plays_through_audio_source_and_mixer_group() -> Result<
         .ok_or("missing audio output state after stop")?;
     assert!(!stopped.is_playing);
 
-    let anim_clip = AnimationClipPlayable::create(&mut graph, constant_position_clip("Anim", 1.0));
-    let anim_output = graph.create_output("AnimOut", anim_clip.handle())?;
-    assert_eq!(
-        graph.set_audio_output_target(
-            anim_output,
-            AudioSourceBinding::new("DialogAudioSource", "Master/Voiceover")
-        ),
-        Err(PlayableError::UnknownOutput)
-    );
-
-    let mut foreign_graph = PlayableGraph::new("ForeignAudio");
-    let foreign_clip =
-        AudioClipPlayable::create(&mut foreign_graph, "Assets/Audio/Foreign.ogg", 1.0, false);
-    assert_eq!(
-        AudioPlayableOutput::create(
-            &mut graph,
-            "ForeignOut",
-            foreign_clip.handle(),
-            AudioSourceBinding::new("ForeignSource", "Master")
-        ),
-        Err(PlayableError::UnknownPlayable)
-    );
-    assert_eq!(
-        audio_output.set_target(
-            &mut foreign_graph,
-            AudioSourceBinding::new("ForeignSource", "Master")
-        ),
-        Err(PlayableError::UnknownOutput)
-    );
-    assert_eq!(
-        PlayableError::UnknownOutput.to_string(),
-        "the playable output handle is not in the graph"
-    );
-
-    graph.destroy();
-    assert_eq!(
-        audio_output.set_target(
-            &mut graph,
-            AudioSourceBinding::new("DialogAudioSource", "Master/Muted")
-        ),
-        Err(PlayableError::GraphDestroyed)
-    );
-    assert_eq!(
-        AudioPlayableOutput::create(
-            &mut graph,
-            "DestroyedAudio",
-            audio_mixer.handle(),
-            AudioSourceBinding::new("DialogAudioSource", "Master/Muted")
-        ),
-        Err(PlayableError::GraphDestroyed)
-    );
+    assert_foreign_audio_outputs_rejected(&mut graph, audio_output)?;
+    assert_destroyed_graph_audio_outputs_rejected(&mut graph, audio_output, audio_mixer.handle())?;
     Ok(())
 }

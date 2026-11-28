@@ -39,7 +39,7 @@ fn end_to_end_build_report_determinism_and_headless_player_launch(
 
     let host = BuildTarget::host();
     let dev_config = BuildConfiguration::new(
-        vec![alpha.clone(), beta.clone()],
+        vec![alpha, beta],
         "Unitas",
         "E2EPlayerGame",
         "com.unitas.e2eplayer",
@@ -60,50 +60,15 @@ fn end_to_end_build_report_determinism_and_headless_player_launch(
         Err(boxed) => return Err(Box::new(boxed.0)),
     };
 
-    assert_eq!(dev_bundle_1.manifest, dev_bundle_2.manifest);
-    assert_eq!(
-        fs::read(&dev_bundle_1.manifest_path)?,
-        fs::read(&dev_bundle_2.manifest_path)?
-    );
-    assert!(dev_out_1
-        .join(DEVELOPMENT_DIAGNOSTICS_MARKER_FILENAME)
-        .is_file());
-    assert_eq!(dev_report_1.outcome, BuildOutcome::Succeeded);
-    assert_eq!(dev_report_2.outcome, BuildOutcome::Succeeded);
-    assert!(dev_report_1.development_diagnostics_included);
-    assert!(dev_report_1.total_size_bytes > 0);
-    assert_eq!(
-        dev_report_1.output_location.as_deref(),
-        Some(dev_out_1.as_path())
-    );
-    assert_eq!(
-        dev_report_1.launch_artifact.as_deref(),
-        Some(dev_bundle_1.launch_artifact_path.as_path())
-    );
-    assert!(dev_report_1
-        .category_sizes
-        .iter()
-        .any(|entry| entry.category == "scenes" && entry.size_bytes > 0));
-    assert!(dev_report_1
-        .category_sizes
-        .iter()
-        .any(|entry| entry.category == "metadata" && entry.size_bytes > 0));
-    assert!(dev_report_1
-        .category_sizes
-        .iter()
-        .any(|entry| entry.category == "launcher" && entry.size_bytes > 0));
-    assert!(dev_report_1
-        .category_sizes
-        .iter()
-        .any(|entry| entry.category == "diagnostics" && entry.size_bytes > 0));
-    assert!(dev_report_1.major_contributors.len() >= 4);
+    assert_dev_bundle_determinism_and_report(
+        &dev_out_1,
+        &dev_bundle_1,
+        &dev_bundle_2,
+        &dev_report_1,
+        &dev_report_2,
+    )?;
 
-    let report_file = dev_out_1.join(BUILD_REPORT_FILENAME);
-    assert!(report_file.is_file());
-    let loaded_report = BuildReport::read_from_file(&report_file)?;
-    assert_eq!(loaded_report, dev_report_1);
-
-    let release_config = dev_config.clone().with_mode(BuildMode::Release);
+    let release_config = dev_config.with_mode(BuildMode::Release);
     let release_out = workspace.join("release_out");
     let (release_bundle, release_report) = match build_project(&release_config, &release_out, 35) {
         Ok(pair) => pair,
@@ -118,25 +83,73 @@ fn end_to_end_build_report_determinism_and_headless_player_launch(
         release_bundle.manifest.manifest_hash
     );
 
-    let dev_session = launch_bundle(&dev_out_1, 5, 1.0 / 60.0)?;
+    assert_headless_and_cli_launches(&dev_out_1, &release_out, &dev_bundle_1)?;
+    fs::remove_dir_all(&workspace)?;
+    Ok(())
+}
+
+fn assert_dev_bundle_determinism_and_report(
+    dev_out_1: &std::path::Path,
+    dev_bundle_1: &unitas_build::StagedBundle,
+    dev_bundle_2: &unitas_build::StagedBundle,
+    dev_report_1: &BuildReport,
+    dev_report_2: &BuildReport,
+) -> Result<(), Box<dyn std::error::Error>> {
+    assert_eq!(dev_bundle_1.manifest, dev_bundle_2.manifest);
+    assert_eq!(
+        fs::read(&dev_bundle_1.manifest_path)?,
+        fs::read(&dev_bundle_2.manifest_path)?
+    );
+    assert!(dev_out_1
+        .join(DEVELOPMENT_DIAGNOSTICS_MARKER_FILENAME)
+        .is_file());
+    assert_eq!(dev_report_1.outcome, BuildOutcome::Succeeded);
+    assert_eq!(dev_report_2.outcome, BuildOutcome::Succeeded);
+    assert!(dev_report_1.development_diagnostics_included);
+    assert!(dev_report_1.total_size_bytes > 0);
+    assert_eq!(dev_report_1.output_location.as_deref(), Some(dev_out_1));
+    assert_eq!(
+        dev_report_1.launch_artifact.as_deref(),
+        Some(dev_bundle_1.launch_artifact_path.as_path())
+    );
+    for cat in ["scenes", "metadata", "launcher", "diagnostics"] {
+        assert!(dev_report_1
+            .category_sizes
+            .iter()
+            .any(|entry| entry.category == cat && entry.size_bytes > 0));
+    }
+    assert!(dev_report_1.major_contributors.len() >= 4);
+
+    let report_file = dev_out_1.join(BUILD_REPORT_FILENAME);
+    assert!(report_file.is_file());
+    let loaded_report = BuildReport::read_from_file(&report_file)?;
+    assert_eq!(&loaded_report, dev_report_1);
+    Ok(())
+}
+
+fn assert_headless_and_cli_launches(
+    dev_out_1: &std::path::Path,
+    release_out: &std::path::Path,
+    dev_bundle_1: &unitas_build::StagedBundle,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let dev_session = launch_bundle(dev_out_1, 5, 1.0 / 60.0)?;
     assert_eq!(dev_session.frames_stepped, 5);
     assert_eq!(dev_session.loaded_scene_count, 1);
     assert!(dev_session.root_object_count >= 1);
     assert!(dev_session.development_diagnostics_enabled);
     assert_eq!(dev_session.manifest, dev_bundle_1.manifest);
 
-    let release_session = launch_bundle(&release_out, 5, 1.0 / 60.0)?;
+    let release_session = launch_bundle(release_out, 5, 1.0 / 60.0)?;
     assert_eq!(release_session.frames_stepped, 5);
     assert_eq!(release_session.loaded_scene_count, 1);
     assert!(release_session.root_object_count >= 1);
     assert!(!release_session.development_diagnostics_enabled);
 
     let Some(bin_path) = unitas_build::package::locate_player_binary() else {
-        fs::remove_dir_all(&workspace)?;
         return Ok(());
     };
     let cli_ok = std::process::Command::new(&bin_path)
-        .arg(&dev_out_1)
+        .arg(dev_out_1)
         .arg("--frames")
         .arg("3")
         .arg("--dt")
@@ -146,8 +159,6 @@ fn end_to_end_build_report_determinism_and_headless_player_launch(
     let stdout = String::from_utf8(cli_ok.stdout)?;
     assert!(stdout.contains("launched_product=E2EPlayerGame"));
     assert!(stdout.contains("frames_stepped=3"));
-
-    fs::remove_dir_all(&workspace)?;
     Ok(())
 }
 
@@ -167,8 +178,29 @@ fn startup_failures_are_distinct_for_missing_manifest_missing_scene_and_corrupt_
     let alpha = fixture_scene("scene_alpha.unity");
     let config = BuildConfiguration::for_host(vec![alpha], "StartupErrorsGame");
 
+    let missing_scene_dir = assert_missing_scene_failure(&workspace, &config)?;
+    let staged_corrupt = assert_corrupt_scene_failure(&workspace, &config)?;
+    assert_no_startup_scene_failure(&workspace, &staged_corrupt.manifest)?;
+
+    if let Some(bin_path) = unitas_build::package::locate_player_binary() {
+        let cli_fail = std::process::Command::new(&bin_path)
+            .arg(&missing_scene_dir)
+            .output()?;
+        assert!(!cli_fail.status.success());
+        let stderr = String::from_utf8(cli_fail.stderr)?;
+        assert!(stderr.contains("startup scene does not exist"));
+    }
+
+    fs::remove_dir_all(&workspace)?;
+    Ok(())
+}
+
+fn assert_missing_scene_failure(
+    workspace: &std::path::Path,
+    config: &BuildConfiguration,
+) -> Result<PathBuf, Box<dyn std::error::Error>> {
     let missing_scene_dir = workspace.join("missing_scene_bundle");
-    let (staged_missing, _) = match build_project(&config, &missing_scene_dir, 10) {
+    let (staged_missing, _) = match build_project(config, &missing_scene_dir, 10) {
         Ok(pair) => pair,
         Err(boxed) => return Err(Box::new(boxed.0)),
     };
@@ -181,9 +213,15 @@ fn startup_failures_are_distinct_for_missing_manifest_missing_scene_and_corrupt_
         missing_scene_result,
         Err(PlayerStartupError::StartupSceneMissing { ref scene_path }) if scene_path == &staged_scene_path
     ));
+    Ok(missing_scene_dir)
+}
 
+fn assert_corrupt_scene_failure(
+    workspace: &std::path::Path,
+    config: &BuildConfiguration,
+) -> Result<unitas_build::StagedBundle, Box<dyn std::error::Error>> {
     let corrupt_scene_dir = workspace.join("corrupt_scene_bundle");
-    let (staged_corrupt, _) = match build_project(&config, &corrupt_scene_dir, 10) {
+    let (staged_corrupt, _) = match build_project(config, &corrupt_scene_dir, 10) {
         Ok(pair) => pair,
         Err(boxed) => return Err(Box::new(boxed.0)),
     };
@@ -197,10 +235,16 @@ fn startup_failures_are_distinct_for_missing_manifest_missing_scene_and_corrupt_
         Err(PlayerStartupError::SceneLoadFailed { ref scene_path, ref message })
             if scene_path == &corrupt_scene_path && !message.is_empty()
     ));
+    Ok(staged_corrupt)
+}
 
+fn assert_no_startup_scene_failure(
+    workspace: &std::path::Path,
+    base_manifest: &BundleManifest,
+) -> Result<(), Box<dyn std::error::Error>> {
     let no_scene_dir = workspace.join("no_scene_bundle");
     fs::create_dir_all(&no_scene_dir)?;
-    let mut empty_manifest = staged_corrupt.manifest.clone();
+    let mut empty_manifest = base_manifest.clone();
     empty_manifest.startup_scene_staged_path.clear();
     empty_manifest.entries.clear();
     empty_manifest.total_content_bytes = 0;
@@ -215,19 +259,6 @@ fn startup_failures_are_distinct_for_missing_manifest_missing_scene_and_corrupt_
         no_startup_result,
         Err(PlayerStartupError::NoStartupSceneConfigured { ref bundle_dir }) if bundle_dir == &no_scene_dir
     ));
-
-    let Some(bin_path) = unitas_build::package::locate_player_binary() else {
-        fs::remove_dir_all(&workspace)?;
-        return Ok(());
-    };
-    let cli_fail = std::process::Command::new(&bin_path)
-        .arg(&missing_scene_dir)
-        .output()?;
-    assert!(!cli_fail.status.success());
-    let stderr = String::from_utf8(cli_fail.stderr)?;
-    assert!(stderr.contains("startup scene does not exist"));
-
-    fs::remove_dir_all(&workspace)?;
     Ok(())
 }
 
@@ -291,12 +322,6 @@ fn failed_build_validation_and_missing_source_scene_produce_failed_build_report(
 #[test]
 fn staged_bundle_cooks_textures_under_cooked_with_manifest_excludes_raw_textures_and_reuses_cache(
 ) -> Result<(), Box<dyn std::error::Error>> {
-    use unitas_build::cooked::{
-        stage_project_cooked_audio_with_cache, stage_project_cooked_meshes_with_cache,
-        stage_project_cooked_textures_with_cache, CookedAudio, CookedAudioManifest, CookedMesh,
-        CookedMeshManifest, CookedTexture, CookedTextureManifest, COOKED_DIR_NAME,
-        COOKED_MANIFEST_FILENAME, COOKED_MESH_MANIFEST_FILENAME,
-    };
     use unitas_build::player::install_project_trust;
     use unitas_build::sample::stage_roll_a_ball_bundle_for_host;
 
@@ -305,7 +330,27 @@ fn staged_bundle_cooks_textures_under_cooked_with_manifest_excludes_raw_textures
     let staged = stage_roll_a_ball_bundle_for_host(&bundle_dir, None)?;
     install_project_trust(&bundle_dir)?;
 
-    let cooked_dir = staged.output_dir.join(COOKED_DIR_NAME);
+    assert_staged_cooked_textures_and_meshes(&staged.output_dir)?;
+    assert_staged_raw_assets_excluded(&staged.output_dir);
+    assert_staged_cooked_audio(&staged.output_dir)?;
+    assert_cooked_cache_reuse(&workspace)?;
+
+    let session = launch_bundle(&bundle_dir, 2, 1.0 / 60.0)?;
+    assert!(session.root_object_count > 0);
+
+    fs::remove_dir_all(&workspace)?;
+    Ok(())
+}
+
+fn assert_staged_cooked_textures_and_meshes(
+    output_dir: &std::path::Path,
+) -> Result<(), Box<dyn std::error::Error>> {
+    use unitas_build::cooked::{
+        CookedMesh, CookedMeshManifest, CookedTexture, CookedTextureManifest, COOKED_DIR_NAME,
+        COOKED_MANIFEST_FILENAME, COOKED_MESH_MANIFEST_FILENAME,
+    };
+
+    let cooked_dir = output_dir.join(COOKED_DIR_NAME);
     assert!(cooked_dir.is_dir());
     assert!(cooked_dir.join(COOKED_MANIFEST_FILENAME).is_file());
     assert!(cooked_dir.join(COOKED_MESH_MANIFEST_FILENAME).is_file());
@@ -323,79 +368,40 @@ fn staged_bundle_cooks_textures_under_cooked_with_manifest_excludes_raw_textures
 
     let mesh_manifest = CookedMeshManifest::load_from_dir(&cooked_dir)
         .ok_or("expected cooked mesh manifest in bundle")?;
-    let obj_entry = mesh_manifest
-        .get_by_asset_path("Assets/Models/ConcaveFrame.obj")
-        .ok_or("expected Assets/Models/ConcaveFrame.obj in cooked mesh manifest")?;
-    let cooked_obj = cooked_dir.join(&obj_entry.cooked_path);
-    assert!(cooked_obj.is_file());
-    let decoded_obj = CookedMesh::decode(&fs::read(&cooked_obj)?)?;
-    assert_eq!(decoded_obj.vertex_count(), obj_entry.vertex_count);
-    assert_eq!(decoded_obj.index_count(), obj_entry.index_count);
+    for asset_path in [
+        "Assets/Models/ConcaveFrame.obj",
+        "Assets/Models/ArenaProp.fbx",
+    ] {
+        let entry = mesh_manifest
+            .get_by_asset_path(asset_path)
+            .ok_or("expected mesh entry in cooked mesh manifest")?;
+        let cooked_mesh_path = cooked_dir.join(&entry.cooked_path);
+        assert!(cooked_mesh_path.is_file());
+        let decoded_mesh = CookedMesh::decode(&fs::read(&cooked_mesh_path)?)?;
+        assert_eq!(decoded_mesh.vertex_count(), entry.vertex_count);
+        assert_eq!(decoded_mesh.index_count(), entry.index_count);
+    }
+    Ok(())
+}
 
-    let fbx_entry = mesh_manifest
-        .get_by_asset_path("Assets/Models/ArenaProp.fbx")
-        .ok_or("expected Assets/Models/ArenaProp.fbx in cooked mesh manifest")?;
-    let cooked_fbx = cooked_dir.join(&fbx_entry.cooked_path);
-    assert!(cooked_fbx.is_file());
-    let decoded_fbx = CookedMesh::decode(&fs::read(&cooked_fbx)?)?;
-    assert_eq!(decoded_fbx.vertex_count(), fbx_entry.vertex_count);
-    assert_eq!(decoded_fbx.index_count(), fbx_entry.index_count);
+fn assert_staged_raw_assets_excluded(output_dir: &std::path::Path) {
+    for rel in [
+        "Assets/Textures/Pickup.png",
+        "Assets/Models/ConcaveFrame.obj",
+        "Assets/Models/ArenaProp.fbx",
+        "Assets/Audio/CollectChime.wav",
+    ] {
+        assert!(!output_dir.join(rel).exists());
+        assert!(output_dir.join(format!("{rel}.meta")).is_file());
+    }
+}
 
-    assert!(
-        !staged
-            .output_dir
-            .join("Assets")
-            .join("Textures")
-            .join("Pickup.png")
-            .exists(),
-        "raw source texture must not be copied into bundle Assets/"
-    );
-    assert!(
-        staged
-            .output_dir
-            .join("Assets")
-            .join("Textures")
-            .join("Pickup.png.meta")
-            .is_file(),
-        "texture .meta sidecar remains in bundle Assets/ for GUID resolution"
-    );
-    assert!(
-        !staged
-            .output_dir
-            .join("Assets")
-            .join("Models")
-            .join("ConcaveFrame.obj")
-            .exists(),
-        "raw source .obj model must not be copied into bundle Assets/"
-    );
-    assert!(
-        staged
-            .output_dir
-            .join("Assets")
-            .join("Models")
-            .join("ConcaveFrame.obj.meta")
-            .is_file(),
-        "model .meta sidecar remains in bundle Assets/ for GUID resolution"
-    );
-    assert!(
-        !staged
-            .output_dir
-            .join("Assets")
-            .join("Models")
-            .join("ArenaProp.fbx")
-            .exists(),
-        "raw source .fbx model must not be copied into bundle Assets/"
-    );
-    assert!(
-        staged
-            .output_dir
-            .join("Assets")
-            .join("Models")
-            .join("ArenaProp.fbx.meta")
-            .is_file(),
-        "model .meta sidecar remains in bundle Assets/ for GUID resolution"
-    );
+fn assert_staged_cooked_audio(
+    output_dir: &std::path::Path,
+) -> Result<(), Box<dyn std::error::Error>> {
+    use unitas_build::cooked::{CookedAudio, CookedAudioManifest, COOKED_DIR_NAME};
 
+    let cooked_dir = output_dir.join(COOKED_DIR_NAME);
     let audio_manifest = CookedAudioManifest::load_from_dir(&cooked_dir)
         .ok_or("expected cooked audio manifest in bundle")?;
     let chime_entry = audio_manifest
@@ -410,25 +416,17 @@ fn staged_bundle_cooks_textures_under_cooked_with_manifest_excludes_raw_textures
         u32::try_from(decoded_audio.samples.len()).unwrap_or(0),
         chime_entry.sample_count
     );
+    Ok(())
+}
 
-    assert!(
-        !staged
-            .output_dir
-            .join("Assets")
-            .join("Audio")
-            .join("CollectChime.wav")
-            .exists(),
-        "raw source audio must not be copied into bundle Assets/"
-    );
-    assert!(
-        staged
-            .output_dir
-            .join("Assets")
-            .join("Audio")
-            .join("CollectChime.wav.meta")
-            .is_file(),
-        "audio .meta sidecar remains in bundle Assets/ for GUID resolution"
-    );
+fn assert_cooked_cache_reuse(
+    workspace: &std::path::Path,
+) -> Result<(), Box<dyn std::error::Error>> {
+    use unitas_build::cooked::{
+        stage_project_cooked_audio_with_cache, stage_project_cooked_meshes_with_cache,
+        stage_project_cooked_textures_with_cache, COOKED_DIR_NAME, COOKED_MANIFEST_FILENAME,
+        COOKED_MESH_MANIFEST_FILENAME,
+    };
 
     let project_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .parent()
@@ -478,10 +476,5 @@ fn staged_bundle_cooks_textures_under_cooked_with_manifest_excludes_raw_textures
         stage_project_cooked_meshes_with_cache(&project_root, &mesh_cache_dir, &second_out)?;
     assert_eq!(second_mesh_report.imported, 0);
     assert_eq!(second_mesh_report.reused, first_mesh_report.imported);
-
-    let session = launch_bundle(&bundle_dir, 2, 1.0 / 60.0)?;
-    assert!(session.root_object_count > 0);
-
-    fs::remove_dir_all(&workspace)?;
     Ok(())
 }

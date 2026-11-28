@@ -52,6 +52,7 @@ pub fn render_offscreen_with_ids(
 mod tests {
     use super::*;
     use crate::camera::look_at;
+    use crate::image::Image;
     use crate::math::Vec3;
 
     const WIDTH: u32 = 128;
@@ -108,6 +109,35 @@ mod tests {
         frame.id_map[(y as usize) * (frame.image.width as usize) + (x as usize)]
     }
 
+    fn capture_test_instances<'a>(left: &'a Mesh, right: &'a Mesh) -> Vec<CaptureInstance<'a>> {
+        vec![
+            CaptureInstance {
+                name: "left",
+                mesh: left,
+                model: identity(),
+                color: [0.2, 0.4, 0.8],
+                lit: true,
+            },
+            CaptureInstance {
+                name: "right",
+                mesh: right,
+                model: identity(),
+                color: [0.6, 0.2, 0.8],
+                lit: true,
+            },
+        ]
+    }
+
+    fn assert_capture_object(object: &CaptureObject, id: u32, name: &str, x: u32, y: u32) {
+        assert_eq!(object.id, id);
+        assert_eq!(object.name, name);
+        assert!(object.bounds.width > 0 && object.bounds.height > 0);
+        assert!(object.bounds.x <= x);
+        assert!(object.bounds.x + object.bounds.width > x);
+        assert!(object.bounds.y <= y);
+        assert!(object.bounds.y + object.bounds.height > y);
+    }
+
     #[test]
     fn capture_reports_object_ids_bounds_and_background() -> Result<(), Box<dyn std::error::Error>>
     {
@@ -117,22 +147,7 @@ mod tests {
         };
         let left = quad(-0.8, -0.4, -0.4, 0.4);
         let right = quad(0.4, 0.8, -0.4, 0.4);
-        let instances = vec![
-            CaptureInstance {
-                name: "left",
-                mesh: &left,
-                model: identity(),
-                color: [0.2, 0.4, 0.8],
-                lit: true,
-            },
-            CaptureInstance {
-                name: "right",
-                mesh: &right,
-                model: identity(),
-                color: [0.6, 0.2, 0.8],
-                lit: true,
-            },
-        ];
+        let instances = capture_test_instances(&left, &right);
         let frame = renderer.render_offscreen_with_ids(
             &instances,
             &camera(),
@@ -147,22 +162,8 @@ mod tests {
         assert_eq!(id_at(&frame, 77, 64), 2);
         assert_eq!(id_at(&frame, 10, 64), 0);
         assert_eq!(frame.objects.len(), 2);
-        let left_object = &frame.objects[0];
-        assert_eq!(left_object.id, 1);
-        assert_eq!(left_object.name, "left");
-        assert!(left_object.bounds.width > 0 && left_object.bounds.height > 0);
-        assert!(left_object.bounds.x <= 50);
-        assert!(left_object.bounds.x + left_object.bounds.width > 50);
-        assert!(left_object.bounds.y <= 64);
-        assert!(left_object.bounds.y + left_object.bounds.height > 64);
-        let right_object = &frame.objects[1];
-        assert_eq!(right_object.id, 2);
-        assert_eq!(right_object.name, "right");
-        assert!(right_object.bounds.width > 0 && right_object.bounds.height > 0);
-        assert!(right_object.bounds.x <= 77);
-        assert!(right_object.bounds.x + right_object.bounds.width > 77);
-        assert!(right_object.bounds.y <= 64);
-        assert!(right_object.bounds.y + right_object.bounds.height > 64);
+        assert_capture_object(&frame.objects[0], 1, "left", 50, 64);
+        assert_capture_object(&frame.objects[1], 2, "right", 77, 64);
         Ok(())
     }
 
@@ -211,6 +212,39 @@ mod tests {
         Ok(())
     }
 
+    fn plain_test_instances<'a>(
+        left: &'a Mesh,
+        right: &'a Mesh,
+    ) -> Vec<crate::model::MeshInstance<'a>> {
+        vec![
+            crate::model::MeshInstance {
+                mesh: left,
+                model: identity(),
+                color: [0.2, 0.4, 0.8],
+            },
+            crate::model::MeshInstance {
+                mesh: right,
+                model: identity(),
+                color: [0.6, 0.2, 0.8],
+            },
+        ]
+    }
+
+    fn assert_capture_matches_plain(frame: &CaptureFrame, plain: &Image) {
+        for index in 0..(WIDTH * HEIGHT) as usize {
+            let captured = frame
+                .image
+                .get_pixel(index as u32 % WIDTH, index as u32 / WIDTH);
+            let expected = plain.pixels[index];
+            assert_eq!(
+                &captured[0..3],
+                &expected[..],
+                "pixel {index} differs between the capture and the plain offscreen render"
+            );
+            assert_eq!(captured[3], 255);
+        }
+    }
+
     #[test]
     fn capture_colour_matches_the_plain_offscreen_render() -> Result<(), Box<dyn std::error::Error>>
     {
@@ -220,34 +254,8 @@ mod tests {
         };
         let left = quad(-0.8, -0.4, -0.4, 0.4);
         let right = quad(0.4, 0.8, -0.4, 0.4);
-        let capture_instances = vec![
-            CaptureInstance {
-                name: "left",
-                mesh: &left,
-                model: identity(),
-                color: [0.2, 0.4, 0.8],
-                lit: true,
-            },
-            CaptureInstance {
-                name: "right",
-                mesh: &right,
-                model: identity(),
-                color: [0.6, 0.2, 0.8],
-                lit: true,
-            },
-        ];
-        let plain_instances = vec![
-            crate::model::MeshInstance {
-                mesh: &left,
-                model: identity(),
-                color: [0.2, 0.4, 0.8],
-            },
-            crate::model::MeshInstance {
-                mesh: &right,
-                model: identity(),
-                color: [0.6, 0.2, 0.8],
-            },
-        ];
+        let capture_instances = capture_test_instances(&left, &right);
+        let plain_instances = plain_test_instances(&left, &right);
         let frame = renderer.render_offscreen_with_ids(
             &capture_instances,
             &camera(),
@@ -264,18 +272,7 @@ mod tests {
             BACKGROUND,
             (WIDTH, HEIGHT),
         )?;
-        for index in 0..(WIDTH * HEIGHT) as usize {
-            let captured = frame
-                .image
-                .get_pixel(index as u32 % WIDTH, index as u32 / WIDTH);
-            let expected = plain.pixels[index];
-            assert_eq!(
-                &captured[0..3],
-                &expected[..],
-                "pixel {index} differs between the capture and the plain offscreen render"
-            );
-            assert_eq!(captured[3], 255);
-        }
+        assert_capture_matches_plain(&frame, &plain);
         Ok(())
     }
 }

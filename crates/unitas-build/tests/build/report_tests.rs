@@ -109,6 +109,18 @@ fn build_report_surfaces_compatibility_findings_and_round_trips_json() -> TestRe
     .with_compatibility_report(&compatibility);
 
     assert_eq!(report.compatibility_findings.len(), 2);
+    assert_compatibility_findings(&report);
+
+    let json = report.to_json();
+    assert!(json.contains("\"feature_id\": \"REN-006\""));
+    assert!(json.contains("\"state\": \"unsupported\""));
+    assert!(json.contains("\"tier\": \"exact\""));
+    let parsed = BuildReport::from_json(&json)?;
+    assert_eq!(parsed, report);
+    Ok(())
+}
+
+fn assert_compatibility_findings(report: &BuildReport) {
     let unsupported = &report.compatibility_findings[0];
     assert_eq!(unsupported.feature_id, "REN-006");
     assert_eq!(unsupported.tier, Tier::Exact);
@@ -143,14 +155,6 @@ fn build_report_surfaces_compatibility_findings_and_round_trips_json() -> TestRe
         partial.asset_path.as_deref(),
         Some("Assets/Scenes/Boot.unity")
     );
-
-    let json = report.to_json();
-    assert!(json.contains("\"feature_id\": \"REN-006\""));
-    assert!(json.contains("\"state\": \"unsupported\""));
-    assert!(json.contains("\"tier\": \"exact\""));
-    let parsed = BuildReport::from_json(&json)?;
-    assert_eq!(parsed, report);
-    Ok(())
 }
 
 #[test]

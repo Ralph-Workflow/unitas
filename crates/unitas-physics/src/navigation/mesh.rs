@@ -546,30 +546,12 @@ impl NavMesh {
         if !source.iter().all(|component| component.is_finite())
             || !target.iter().all(|component| component.is_finite())
         {
-            return NavMeshHit {
-                position: source,
-                normal: [0.0; 3],
-                distance: 0.0,
-                mask: 0,
-                hit: true,
-                polygon_index: None,
-            };
+            return invalid_raycast_hit(source, 0, None);
         }
 
-        let start_poly = self.polygons.iter().enumerate().find(|(index, poly)| {
-            !self.is_polygon_carved(*index)
-                && area_matches_mask(poly.area, area_mask)
-                && point_in_triangle(source, &poly.vertices)
-        });
-        let Some((start_index, start_polygon)) = start_poly else {
-            return NavMeshHit {
-                position: source,
-                normal: [0.0; 3],
-                distance: 0.0,
-                mask: 0,
-                hit: true,
-                polygon_index: None,
-            };
+        let Some((start_index, start_polygon)) = self.find_unmasked_polygon_at(source, area_mask)
+        else {
+            return invalid_raycast_hit(source, 0, None);
         };
 
         let total_distance = distance(source, target);
@@ -584,6 +566,43 @@ impl NavMesh {
             };
         }
 
+        if let Some(hit) = self.first_raycast_boundary_hit(source, target, area_mask) {
+            return hit;
+        }
+
+        if let Some((end_index, end_polygon)) = self.find_unmasked_polygon_at(target, area_mask) {
+            NavMeshHit {
+                position: target,
+                normal: [0.0; 3],
+                distance: total_distance,
+                mask: area_bit(end_polygon.area),
+                hit: false,
+                polygon_index: Some(end_index),
+            }
+        } else {
+            invalid_raycast_hit(source, area_bit(start_polygon.area), Some(start_index))
+        }
+    }
+
+    fn find_unmasked_polygon_at(
+        &self,
+        point: [f64; 3],
+        area_mask: u32,
+    ) -> Option<(usize, &NavMeshPolygon)> {
+        self.polygons.iter().enumerate().find(|(index, poly)| {
+            !self.is_polygon_carved(*index)
+                && area_matches_mask(poly.area, area_mask)
+                && point_in_triangle(point, &poly.vertices)
+        })
+    }
+
+    fn first_raycast_boundary_hit(
+        &self,
+        source: [f64; 3],
+        target: [f64; 3],
+        area_mask: u32,
+    ) -> Option<NavMeshHit> {
+        let ray_dir = subtract(target, source);
         let mut boundary_hits = Vec::new();
         for (index, polygon) in self.polygons.iter().enumerate() {
             if self.is_polygon_carved(index) || !area_matches_mask(polygon.area, area_mask) {
@@ -596,7 +615,6 @@ impl NavMesh {
                     continue;
                 }
                 let outward = boundary_edge_normal(&polygon.vertices, edge_start, edge_end);
-                let ray_dir = subtract(target, source);
                 if dot(ray_dir, outward) <= AREA_EPSILON {
                     continue;
                 }
@@ -607,43 +625,16 @@ impl NavMesh {
                 }
             }
         }
-
         boundary_hits.sort_by(|a, b| a.0.total_cmp(&b.0));
-        if let Some((_, point, normal, poly_index, area)) = boundary_hits.first().copied() {
-            return NavMeshHit {
-                position: point,
-                normal,
-                distance: distance(source, point),
-                mask: area_bit(area),
-                hit: true,
-                polygon_index: Some(poly_index),
-            };
-        }
-
-        let target_poly = self.polygons.iter().enumerate().find(|(index, poly)| {
-            !self.is_polygon_carved(*index)
-                && area_matches_mask(poly.area, area_mask)
-                && point_in_triangle(target, &poly.vertices)
-        });
-        if let Some((end_index, end_polygon)) = target_poly {
-            NavMeshHit {
-                position: target,
-                normal: [0.0; 3],
-                distance: total_distance,
-                mask: area_bit(end_polygon.area),
-                hit: false,
-                polygon_index: Some(end_index),
-            }
-        } else {
-            NavMeshHit {
-                position: source,
-                normal: [0.0; 3],
-                distance: 0.0,
-                mask: area_bit(start_polygon.area),
-                hit: true,
-                polygon_index: Some(start_index),
-            }
-        }
+        let (_, point, normal, poly_index, area) = boundary_hits.first().copied()?;
+        Some(NavMeshHit {
+            position: point,
+            normal,
+            distance: distance(source, point),
+            mask: area_bit(area),
+            hit: true,
+            polygon_index: Some(poly_index),
+        })
     }
 
     pub(crate) fn min_area_cost(&self) -> f64 {
@@ -691,6 +682,17 @@ impl NavMesh {
                 portal,
             });
         }
+    }
+}
+
+fn invalid_raycast_hit(position: [f64; 3], mask: u32, polygon_index: Option<usize>) -> NavMeshHit {
+    NavMeshHit {
+        position,
+        normal: [0.0; 3],
+        distance: 0.0,
+        mask,
+        hit: true,
+        polygon_index,
     }
 }
 

@@ -455,45 +455,36 @@ impl PhysicsRuntimeWorld {
         true
     }
 
-    fn stick_touching_riders_to_kinematic_carrier_2d(&mut self, carrier_id: BodyId2D) {
-        let is_kinematic = self
-            .world_2d
-            .body(carrier_id)
-            .is_some_and(|b| b.is_kinematic());
-        if !is_kinematic {
-            return;
-        }
-        let carrier_colliders: Vec<ColliderId2D> = self
-            .colliders_2d
+    fn colliders_for_body_2d(&self, body_id: BodyId2D) -> Vec<ColliderId2D> {
+        self.colliders_2d
             .values()
             .flatten()
             .copied()
             .filter(|cid| {
                 self.world_2d
                     .collider(*cid)
-                    .is_some_and(|col| col.attached_body == Some(carrier_id))
+                    .is_some_and(|col| col.attached_body == Some(body_id))
             })
-            .collect();
+            .collect()
+    }
+
+    fn stick_touching_riders_to_kinematic_carrier_2d(&mut self, carrier_id: BodyId2D) {
+        if !self
+            .world_2d
+            .body(carrier_id)
+            .is_some_and(|b| b.is_kinematic())
+        {
+            return;
+        }
+        let carrier_colliders = self.colliders_for_body_2d(carrier_id);
         let mut riders_to_stick = Vec::new();
         for other_id in self.bodies_2d.values().copied() {
-            if other_id == carrier_id {
+            if other_id == carrier_id
+                || !self.world_2d.body(other_id).is_some_and(|b| b.is_dynamic())
+            {
                 continue;
             }
-            let is_dynamic = self.world_2d.body(other_id).is_some_and(|b| b.is_dynamic());
-            if !is_dynamic {
-                continue;
-            }
-            let rider_colliders: Vec<ColliderId2D> = self
-                .colliders_2d
-                .values()
-                .flatten()
-                .copied()
-                .filter(|cid| {
-                    self.world_2d
-                        .collider(*cid)
-                        .is_some_and(|col| col.attached_body == Some(other_id))
-                })
-                .collect();
+            let rider_colliders = self.colliders_for_body_2d(other_id);
             let supported_from_below = rider_colliders.iter().any(|rc| {
                 carrier_colliders
                     .iter()

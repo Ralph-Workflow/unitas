@@ -88,6 +88,24 @@ pub struct PluginMetadataRecord {
 }
 
 impl PluginMetadataRecord {
+    fn check_editor_compatibility(&self, target_arch: &str) -> Result<(), String> {
+        if !self.editor_enabled && !self.any_platform_enabled {
+            return Err(format!(
+                "plugin '{}' is excluded for target 'Editor' (architecture '{}')",
+                self.library_name, target_arch
+            ));
+        }
+        if let Some(cpu) = &self.editor_cpu
+            && !arch_matches(cpu, target_arch)
+        {
+            return Err(format!(
+                "plugin '{}' targets architecture '{}' on target 'Editor', which is incompatible with running architecture '{}'",
+                self.library_name, cpu, target_arch
+            ));
+        }
+        Ok(())
+    }
+
     pub fn check_compatibility(
         &self,
         target_platform: &str,
@@ -95,20 +113,7 @@ impl PluginMetadataRecord {
         is_editor: bool,
     ) -> Result<(), String> {
         if is_editor {
-            if !self.editor_enabled && !self.any_platform_enabled {
-                return Err(format!(
-                    "plugin '{}' is excluded for target 'Editor' (architecture '{}')",
-                    self.library_name, target_arch
-                ));
-            }
-            if let Some(cpu) = &self.editor_cpu
-                && !arch_matches(cpu, target_arch)
-            {
-                return Err(format!(
-                    "plugin '{}' targets architecture '{}' on target 'Editor', which is incompatible with running architecture '{}'",
-                    self.library_name, cpu, target_arch
-                ));
-            }
+            self.check_editor_compatibility(target_arch)?;
         }
 
         let matched_platform = self
@@ -174,84 +179,66 @@ impl ProjectScriptIndex {
             root: project_root.to_path_buf(),
             ..ProjectScriptIndex::default()
         };
-
-        let mut scan_roots = Vec::new();
-        let assets_dir = project_root.join("Assets");
-        let packages_dir = project_root.join("Packages");
-        if assets_dir.is_dir() {
-            scan_roots.push(assets_dir);
-        }
-        if packages_dir.is_dir() {
-            scan_roots.push(packages_dir);
-        }
-        if scan_roots.is_empty() && project_root.is_dir() {
-            scan_roots.push(project_root.to_path_buf());
-        }
-
-        let mut meta_files = Vec::new();
-        for scan_root in &scan_roots {
-            collect_meta_files(scan_root, &mut meta_files)?;
-        }
-        meta_files.sort();
-
+        let meta_files = collect_project_meta_files(project_root)?;
         let mut guid_index = GuidIndex::default();
         for meta_path in meta_files {
-            let text = match fs::read_to_string(&meta_path) {
-                Ok(content) => content,
-                Err(error) => {
-                    return Err(ScriptingError::Io {
-                        path: meta_path,
-                        message: error.to_string(),
-                    });
-                }
-            };
-            let guid = meta::parse_meta_text(&text, &meta_path)?;
-            let asset_path = asset_path_for_meta(&meta_path);
-            guid_index.insert(guid.clone(), asset_path.clone())?;
-            let (guid_hi, guid_lo) = parse_guid_u128(&guid)?;
-            let relative_path = normalize_relative_path(project_root, &asset_path);
-
-            if is_csharp_script(&asset_path) {
-                let script_name = asset_path
-                    .file_stem()
-                    .and_then(|stem| stem.to_str())
-                    .unwrap_or_default()
-                    .to_string();
-                let record = ScriptGuidRecord {
-                    guid: guid.clone(),
-                    guid_hi,
-                    guid_lo,
-                    path: asset_path,
-                    relative_path: relative_path.clone(),
-                    script_name: script_name.clone(),
-                };
-                index
-                    .scripts_by_rel_path
-                    .insert(relative_path, guid.clone());
-                index
-                    .scripts_by_name
-                    .entry(script_name)
-                    .or_default()
-                    .push(guid.clone());
-                index.scripts_by_guid.insert(guid, record);
-            } else if is_plugin_file(&asset_path) {
-                let plugin = parse_plugin_meta_text(
-                    &text,
-                    &guid,
-                    guid_hi,
-                    guid_lo,
-                    &asset_path,
-                    &relative_path,
-                );
-                index
-                    .plugins_by_rel_path
-                    .insert(relative_path, guid.clone());
-                index.plugins_by_guid.insert(guid, plugin);
-            }
+            index.index_meta_file(project_root, &meta_path, &mut guid_index)?;
         }
-
         index.all_guids = guid_index;
         Ok(index)
+    }
+
+    fn index_meta_file(
+        &mut self,
+        project_root: &Path,
+        meta_path: &Path,
+        guid_index: &mut GuidIndex,
+    ) -> Result<(), ScriptingError> {
+        let text = fs::read_to_string(meta_path).map_err(|error| ScriptingError::Io {
+            path: meta_path.to_path_buf(),
+            message: error.to_string(),
+        })?;
+        let guid = meta::parse_meta_text(&text, meta_path)?;
+        let asset_path = asset_path_for_meta(meta_path);
+        guid_index.insert(guid.clone(), asset_path.clone())?;
+        let (guid_hi, guid_lo) = parse_guid_u128(&guid)?;
+        let relative_path = normalize_relative_path(project_root, &asset_path);
+
+        if is_csharp_script(&asset_path) {
+            let script_name = asset_path
+                .file_stem()
+                .and_then(|stem| stem.to_str())
+                .unwrap_or_default()
+                .to_string();
+            let record = ScriptGuidRecord {
+                guid: guid.clone(),
+                guid_hi,
+                guid_lo,
+                path: asset_path,
+                relative_path: relative_path.clone(),
+                script_name: script_name.clone(),
+            };
+            self.scripts_by_rel_path
+                .insert(relative_path, guid.clone());
+            self.scripts_by_name
+                .entry(script_name)
+                .or_default()
+                .push(guid.clone());
+            self.scripts_by_guid.insert(guid, record);
+        } else if is_plugin_file(&asset_path) {
+            let plugin = parse_plugin_meta_text(
+                &text,
+                &guid,
+                guid_hi,
+                guid_lo,
+                &asset_path,
+                &relative_path,
+            );
+            self.plugins_by_rel_path
+                .insert(relative_path, guid.clone());
+            self.plugins_by_guid.insert(guid, plugin);
+        }
+        Ok(())
     }
 
     pub fn root(&self) -> &Path {
@@ -405,6 +392,27 @@ pub fn parse_plugin_meta_file(
     ))
 }
 
+fn collect_project_meta_files(project_root: &Path) -> Result<Vec<PathBuf>, ScriptingError> {
+    let mut scan_roots = Vec::new();
+    let assets_dir = project_root.join("Assets");
+    let packages_dir = project_root.join("Packages");
+    if assets_dir.is_dir() {
+        scan_roots.push(assets_dir);
+    }
+    if packages_dir.is_dir() {
+        scan_roots.push(packages_dir);
+    }
+    if scan_roots.is_empty() && project_root.is_dir() {
+        scan_roots.push(project_root.to_path_buf());
+    }
+    let mut meta_files = Vec::new();
+    for scan_root in &scan_roots {
+        collect_meta_files(scan_root, &mut meta_files)?;
+    }
+    meta_files.sort();
+    Ok(meta_files)
+}
+
 pub fn parse_plugin_meta_text(
     text: &str,
     guid: &str,
@@ -418,15 +426,7 @@ pub fn parse_plugin_meta_text(
         .and_then(|stem| stem.to_str())
         .unwrap_or_default()
         .to_string();
-    let extension = asset_path
-        .extension()
-        .and_then(|ext| ext.to_str())
-        .unwrap_or_default()
-        .to_ascii_lowercase();
-    let is_native_ext = matches!(
-        extension.as_str(),
-        "dylib" | "so" | "bundle" | "a" | "framework" | "aar" | "jslib" | "jspre"
-    );
+    let is_native_ext = has_native_plugin_extension(asset_path);
 
     let mut scan = PluginMetaScan {
         acc: PluginMetaAccumulator {
@@ -439,32 +439,7 @@ pub fn parse_plugin_meta_text(
         define_constraints: Vec::new(),
     };
     scan.scan_lines(text);
-
-    let mut acc = scan.acc;
-    let mut is_native = scan.is_native;
-    let auto_referenced = scan.auto_referenced;
-    let validate_references = scan.validate_references;
-    let define_constraints = scan.define_constraints;
-
-    if !acc.saw_any_platform && acc.platforms.is_empty() && !acc.saw_editor_enabled {
-        acc.any_platform_enabled = true;
-        acc.editor_enabled = true;
-    } else if !acc.saw_editor_enabled {
-        acc.editor_enabled = acc.any_platform_enabled;
-    }
-
-    for p in &acc.platforms {
-        if let Some(cpu) = &p.cpu
-            && !cpu.eq_ignore_ascii_case("AnyCPU")
-        {
-            is_native = true;
-        }
-    }
-    if let Some(cpu) = &acc.editor_cpu
-        && !cpu.eq_ignore_ascii_case("AnyCPU")
-    {
-        is_native = true;
-    }
+    scan.finalize_plugin_meta_defaults();
 
     PluginMetadataRecord {
         guid: guid.to_string(),
@@ -473,16 +448,28 @@ pub fn parse_plugin_meta_text(
         path: asset_path.to_path_buf(),
         relative_path: relative_path.to_string(),
         library_name,
-        is_native,
-        any_platform_enabled: acc.any_platform_enabled,
-        editor_enabled: acc.editor_enabled,
-        editor_cpu: acc.editor_cpu,
-        editor_os: acc.editor_os,
-        define_constraints,
-        auto_referenced,
-        validate_references,
-        platforms: acc.platforms,
+        is_native: scan.is_native,
+        any_platform_enabled: scan.acc.any_platform_enabled,
+        editor_enabled: scan.acc.editor_enabled,
+        editor_cpu: scan.acc.editor_cpu,
+        editor_os: scan.acc.editor_os,
+        define_constraints: scan.define_constraints,
+        auto_referenced: scan.auto_referenced,
+        validate_references: scan.validate_references,
+        platforms: scan.acc.platforms,
     }
+}
+
+fn has_native_plugin_extension(asset_path: &Path) -> bool {
+    let extension = asset_path
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    matches!(
+        extension.as_str(),
+        "dylib" | "so" | "bundle" | "a" | "framework" | "aar" | "jslib" | "jspre"
+    )
 }
 
 struct PluginMetaScan {
@@ -494,6 +481,30 @@ struct PluginMetaScan {
 }
 
 impl PluginMetaScan {
+    fn finalize_plugin_meta_defaults(&mut self) {
+        if !self.acc.saw_any_platform
+            && self.acc.platforms.is_empty()
+            && !self.acc.saw_editor_enabled
+        {
+            self.acc.any_platform_enabled = true;
+            self.acc.editor_enabled = true;
+        } else if !self.acc.saw_editor_enabled {
+            self.acc.editor_enabled = self.acc.any_platform_enabled;
+        }
+        for p in &self.acc.platforms {
+            if let Some(cpu) = &p.cpu
+                && !cpu.eq_ignore_ascii_case("AnyCPU")
+            {
+                self.is_native = true;
+            }
+        }
+        if let Some(cpu) = &self.acc.editor_cpu
+            && !cpu.eq_ignore_ascii_case("AnyCPU")
+        {
+            self.is_native = true;
+        }
+    }
+
     fn scan_lines(&mut self, text: &str) {
         let mut in_settings = false;
         let mut in_define_constraints = false;
@@ -504,134 +515,160 @@ impl PluginMetaScan {
                 continue;
             }
             let indent = raw_line.len() - raw_line.trim_start().len();
-
-            if in_define_constraints {
-                if let Some(item) = trimmed.strip_prefix("- ") {
-                    let constraint = unquote(item.trim());
-                    if !constraint.is_empty() {
-                        self.define_constraints.push(constraint);
-                    }
-                    continue;
-                } else if indent <= 4 {
-                    in_define_constraints = false;
-                }
-            }
-
-            if trimmed == "defineConstraints:" {
-                in_define_constraints = true;
+            if self.try_scan_define_constraints(trimmed, indent, &mut in_define_constraints) {
                 continue;
             }
-            if let Some(rest) = trimmed.strip_prefix("defineConstraints:") {
-                let rest_trimmed = rest.trim();
-                if rest_trimmed.starts_with('[') && rest_trimmed.ends_with(']') {
-                    let inner = &rest_trimmed[1..rest_trimmed.len() - 1];
-                    for part in inner.split(',') {
-                        let clean = unquote(part.trim());
-                        if !clean.is_empty() {
-                            self.define_constraints.push(clean);
-                        }
-                    }
-                }
+            if self.try_scan_top_level_flags(trimmed) {
                 continue;
             }
-
-            if let Some(val) = trimmed.strip_prefix("isPreloaded:") {
-                if val.trim() == "1" || val.trim().eq_ignore_ascii_case("true") {
-                    self.is_native = true;
-                }
+            if self.try_scan_platform_header(trimmed, indent, &mut in_settings) {
                 continue;
             }
-
-            if let Some(val) = trimmed.strip_prefix("autoReferenced:") {
-                self.auto_referenced = parse_bool_flag(val.trim(), true);
-                continue;
-            }
-
-            if let Some(val) = trimmed.strip_prefix("validateReferences:") {
-                self.validate_references = parse_bool_flag(val.trim(), true);
-                continue;
-            }
-
-            if let Some(first_rest) = trimmed.strip_prefix("- first:") {
-                self.acc.flush();
-                in_settings = false;
-                let inline = first_rest.trim();
-                if let Some(platform_name) = extract_inline_mapping_target(inline) {
-                    self.acc.current_platform = Some(platform_name);
-                }
-                continue;
-            }
-
-            if trimmed == "first:" {
-                self.acc.flush();
-                in_settings = false;
-                continue;
-            }
-
-            if self.acc.current_platform.is_none()
-                && indent >= 4
-                && !in_settings
-                && let Some((key, val)) = split_yaml_kv(trimmed)
-            {
-                if key == "Any" {
-                    self.acc.current_platform = Some(String::from("Any"));
-                    continue;
-                } else if key != "second"
-                    && key != "enabled"
-                    && key != "settings"
-                    && key != "platformData"
-                    && key != "PluginImporter"
-                    && key != "externalObjects"
-                    && key != "serializedVersion"
-                    && key != "iconMap"
-                    && key != "executionOrder"
-                {
-                    let target = if val.is_empty() { key } else { val };
-                    self.acc.current_platform = Some(target);
-                    continue;
-                }
-            }
-
-            if let Some(platform_data_key) = trimmed.strip_prefix("- ")
-                && let Some((key, val)) = split_yaml_kv(platform_data_key)
-                && (key == "Any" || key.starts_with("Editor") || key.starts_with("Standalone"))
-            {
-                self.acc.flush();
-                let target = if val.is_empty() { key } else { val };
-                self.acc.current_platform = Some(target);
-                continue;
-            }
-
-            if trimmed == "settings:" {
-                in_settings = true;
-                continue;
-            }
-            if trimmed.starts_with("settings:") {
-                in_settings = false;
-                continue;
-            }
-
-            if self.acc.current_platform.is_some() {
-                if let Some(enabled_str) = trimmed.strip_prefix("enabled:") {
-                    self.acc.current_enabled = Some(parse_bool_flag(enabled_str.trim(), false));
-                    continue;
-                }
-                if in_settings && let Some((key, val)) = split_yaml_kv(trimmed) {
-                    if key.eq_ignore_ascii_case("CPU") && !val.is_empty() {
-                        if !val.eq_ignore_ascii_case("None") {
-                            self.acc.current_cpu = Some(val);
-                        }
-                    } else if key.eq_ignore_ascii_case("OS")
-                        && !val.is_empty()
-                        && !val.eq_ignore_ascii_case("None")
-                    {
-                        self.acc.current_os = Some(val);
-                    }
-                }
-            }
+            self.scan_platform_setting(trimmed, &mut in_settings);
         }
         self.acc.flush();
     }
+
+    fn try_scan_define_constraints(
+        &mut self,
+        trimmed: &str,
+        indent: usize,
+        in_define_constraints: &mut bool,
+    ) -> bool {
+        if *in_define_constraints {
+            if let Some(item) = trimmed.strip_prefix("- ") {
+                let constraint = unquote(item.trim());
+                if !constraint.is_empty() {
+                    self.define_constraints.push(constraint);
+                }
+                return true;
+            } else if indent <= 4 {
+                *in_define_constraints = false;
+            }
+        }
+        if trimmed == "defineConstraints:" {
+            *in_define_constraints = true;
+            return true;
+        }
+        if let Some(rest) = trimmed.strip_prefix("defineConstraints:") {
+            let rest_trimmed = rest.trim();
+            if rest_trimmed.starts_with('[') && rest_trimmed.ends_with(']') {
+                let inner = &rest_trimmed[1..rest_trimmed.len() - 1];
+                for part in inner.split(',') {
+                    let clean = unquote(part.trim());
+                    if !clean.is_empty() {
+                        self.define_constraints.push(clean);
+                    }
+                }
+            }
+            return true;
+        }
+        false
+    }
+
+    fn try_scan_top_level_flags(&mut self, trimmed: &str) -> bool {
+        if let Some(val) = trimmed.strip_prefix("isPreloaded:") {
+            if val.trim() == "1" || val.trim().eq_ignore_ascii_case("true") {
+                self.is_native = true;
+            }
+            return true;
+        }
+        if let Some(val) = trimmed.strip_prefix("autoReferenced:") {
+            self.auto_referenced = parse_bool_flag(val.trim(), true);
+            return true;
+        }
+        if let Some(val) = trimmed.strip_prefix("validateReferences:") {
+            self.validate_references = parse_bool_flag(val.trim(), true);
+            return true;
+        }
+        false
+    }
+
+    fn try_scan_platform_header(
+        &mut self,
+        trimmed: &str,
+        indent: usize,
+        in_settings: &mut bool,
+    ) -> bool {
+        if let Some(first_rest) = trimmed.strip_prefix("- first:") {
+            self.acc.flush();
+            *in_settings = false;
+            if let Some(platform_name) = extract_inline_mapping_target(first_rest.trim()) {
+                self.acc.current_platform = Some(platform_name);
+            }
+            return true;
+        }
+        if trimmed == "first:" {
+            self.acc.flush();
+            *in_settings = false;
+            return true;
+        }
+        if self.acc.current_platform.is_none()
+            && indent >= 4
+            && !*in_settings
+            && let Some((key, val)) = split_yaml_kv(trimmed)
+        {
+            if key == "Any" {
+                self.acc.current_platform = Some(String::from("Any"));
+                return true;
+            } else if !is_reserved_plugin_meta_key(&key) {
+                self.acc.current_platform = Some(if val.is_empty() { key } else { val });
+                return true;
+            }
+        }
+        if let Some(platform_data_key) = trimmed.strip_prefix("- ")
+            && let Some((key, val)) = split_yaml_kv(platform_data_key)
+            && (key == "Any" || key.starts_with("Editor") || key.starts_with("Standalone"))
+        {
+            self.acc.flush();
+            self.acc.current_platform = Some(if val.is_empty() { key } else { val });
+            return true;
+        }
+        false
+    }
+
+    fn scan_platform_setting(&mut self, trimmed: &str, in_settings: &mut bool) {
+        if trimmed == "settings:" {
+            *in_settings = true;
+            return;
+        }
+        if trimmed.starts_with("settings:") {
+            *in_settings = false;
+            return;
+        }
+        if self.acc.current_platform.is_some() {
+            if let Some(enabled_str) = trimmed.strip_prefix("enabled:") {
+                self.acc.current_enabled = Some(parse_bool_flag(enabled_str.trim(), false));
+            } else if *in_settings && let Some((key, val)) = split_yaml_kv(trimmed) {
+                if key.eq_ignore_ascii_case("CPU")
+                    && !val.is_empty()
+                    && !val.eq_ignore_ascii_case("None")
+                {
+                    self.acc.current_cpu = Some(val);
+                } else if key.eq_ignore_ascii_case("OS")
+                    && !val.is_empty()
+                    && !val.eq_ignore_ascii_case("None")
+                {
+                    self.acc.current_os = Some(val);
+                }
+            }
+        }
+    }
+}
+
+fn is_reserved_plugin_meta_key(key: &str) -> bool {
+    matches!(
+        key,
+        "second"
+            | "enabled"
+            | "settings"
+            | "platformData"
+            | "PluginImporter"
+            | "externalObjects"
+            | "serializedVersion"
+            | "iconMap"
+            | "executionOrder"
+    )
 }
 
 static SCRIPT_INDEX_REGISTRY: OnceLock<Mutex<BTreeMap<u64, ProjectScriptIndex>>> = OnceLock::new();
@@ -910,29 +947,27 @@ mod tests {
         dir
     }
 
-    #[test]
-    fn builds_script_guid_map_and_plugin_metadata() {
-        let root = unique_temp_dir("guid_map");
+    fn write_sample_script_and_plugin_tree(root: &Path) {
         let scripts_dir = root.join("Assets").join("Scripts");
         let plugins_dir = root.join("Assets").join("Plugins").join("x86_64");
         let _ = fs::create_dir_all(&scripts_dir);
         let _ = fs::create_dir_all(&plugins_dir);
-
-        let script_path = scripts_dir.join("Mover.cs");
-        let _ = fs::write(&script_path, "public class Mover {}");
-        let script_meta = scripts_dir.join("Mover.cs.meta");
+        let _ = fs::write(scripts_dir.join("Mover.cs"), "public class Mover {}");
         let _ = fs::write(
-            &script_meta,
+            scripts_dir.join("Mover.cs.meta"),
             "fileFormatVersion: 2\nguid: 00000000000000000000000000000001\nMonoImporter:\n  serializedVersion: 2\n",
         );
-
-        let plugin_path = plugins_dir.join("libfastmath.dylib");
-        let _ = fs::write(&plugin_path, "");
-        let plugin_meta = plugins_dir.join("libfastmath.dylib.meta");
+        let _ = fs::write(plugins_dir.join("libfastmath.dylib"), "");
         let _ = fs::write(
-            &plugin_meta,
+            plugins_dir.join("libfastmath.dylib.meta"),
             "fileFormatVersion: 2\nguid: 11112222333344445555666677778888\nPluginImporter:\n  serializedVersion: 2\n  platformData:\n  - first:\n      Any:\n    second:\n      enabled: 0\n  - first:\n      Editor: Editor\n    second:\n      enabled: 1\n      settings:\n        CPU: x86_64\n        OS: OSX\n  - first:\n      Standalone: StandaloneOSX\n    second:\n      enabled: 1\n      settings:\n        CPU: x86_64\n",
         );
+    }
+
+    #[test]
+    fn builds_script_guid_map_and_plugin_metadata() {
+        let root = unique_temp_dir("guid_map");
+        write_sample_script_and_plugin_tree(&root);
 
         let built = ProjectScriptIndex::build(&root);
         assert!(built.is_ok());
@@ -960,9 +995,11 @@ mod tests {
                 let arm_check = p.check_compatibility("StandaloneOSX", "ARM64", true);
                 assert!(arm_check.is_err());
                 if let Err(diag) = arm_check {
-                    assert!(diag.contains("libfastmath"));
-                    assert!(diag.contains("x86_64"));
-                    assert!(diag.contains("ARM64"));
+                    assert!(
+                        diag.contains("libfastmath")
+                            && diag.contains("x86_64")
+                            && diag.contains("ARM64")
+                    );
                 }
             }
         }

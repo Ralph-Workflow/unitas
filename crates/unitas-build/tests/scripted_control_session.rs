@@ -74,32 +74,7 @@ fn the_control_session_reports_the_coreclr_script_host() -> TestResult {
     let Some((root, bundle)) = private_bundle("scripted-control-session")? else {
         return Ok(());
     };
-
-    let stderr_path = root.join("player-stderr.log");
-    let stderr_file = fs::File::create(&stderr_path)?;
-    let mut child = Command::new(env!("CARGO_BIN_EXE_unitas-player"))
-        .arg(&bundle)
-        .arg("--control-stdio")
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::from(stderr_file))
-        .spawn()?;
-    {
-        let mut stdin = child.stdin.take().ok_or("the player stdin was not piped")?;
-        writeln!(stdin, "{{\"id\":1,\"cmd\":\"state\"}}")?;
-        stdin.flush()?;
-    }
-
-    let stdout = child
-        .stdout
-        .take()
-        .ok_or("the player stdout was not piped")?;
-    let mut reader = BufReader::new(stdout);
-    let mut line = String::new();
-    reader.read_line(&mut line)?;
-    let status = child.wait()?;
-    let stderr = fs::read_to_string(&stderr_path).unwrap_or_default();
-
+    let (line, status, stderr) = run_control_state_query(&root, &bundle)?;
     if line.trim().is_empty() {
         return Err(format!(
             "the control session answered no state request (exit code {:?}); stderr: {stderr}",
@@ -126,6 +101,37 @@ fn the_control_session_reports_the_coreclr_script_host() -> TestResult {
 
     fs::remove_dir_all(&root)?;
     Ok(())
+}
+
+fn run_control_state_query(
+    root: &Path,
+    bundle: &Path,
+) -> Result<(String, std::process::ExitStatus, String), Box<dyn Error>> {
+    let stderr_path = root.join("player-stderr.log");
+    let stderr_file = fs::File::create(&stderr_path)?;
+    let mut child = Command::new(env!("CARGO_BIN_EXE_unitas-player"))
+        .arg(bundle)
+        .arg("--control-stdio")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::from(stderr_file))
+        .spawn()?;
+    {
+        let mut stdin = child.stdin.take().ok_or("the player stdin was not piped")?;
+        writeln!(stdin, "{{\"id\":1,\"cmd\":\"state\"}}")?;
+        stdin.flush()?;
+    }
+
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or("the player stdout was not piped")?;
+    let mut reader = BufReader::new(stdout);
+    let mut line = String::new();
+    reader.read_line(&mut line)?;
+    let status = child.wait()?;
+    let stderr = fs::read_to_string(&stderr_path).unwrap_or_default();
+    Ok((line, status, stderr))
 }
 
 #[test]

@@ -249,60 +249,7 @@ fn phy_001_story_1_dynamic_box_on_static_floor_receives_enter_once_stay_while_re
     world.add_body(box_body, dynamic_box([0.0, 1.5, 0.0]))?;
 
     let dt = 1.0 / 60.0;
-    let mut enter_count = 0usize;
-    let mut stay_count = 0usize;
-    let mut unexpected_exit_count = 0usize;
-    let mut asleep_step: Option<usize> = None;
-
-    for step_idx in 0..240 {
-        world.step(dt)?;
-        for event in world.drain_events() {
-            assert_eq!(
-                (event.a, event.b),
-                (floor, box_body),
-                "PHY-001 story 1: unexpected collision pair in step {step_idx}"
-            );
-            match event.phase {
-                unitas_physics::Phase::Enter => enter_count += 1,
-                unitas_physics::Phase::Stay => stay_count += 1,
-                unitas_physics::Phase::Exit => unexpected_exit_count += 1,
-            }
-        }
-        if world.is_sleeping(box_body) && asleep_step.is_none() {
-            asleep_step = Some(step_idx);
-            break;
-        }
-    }
-
-    assert_eq!(
-        unexpected_exit_count, 0,
-        "PHY-001 story 1: unexpected OnCollisionExit while resting on floor"
-    );
-
-    assert_eq!(
-        enter_count, 1,
-        "PHY-001 story 1: dynamic box dropped onto static floor must receive OnCollisionEnter once"
-    );
-    assert!(
-        stay_count >= 1,
-        "PHY-001 story 1: dynamic box resting on static floor must receive OnCollisionStay"
-    );
-    assert!(
-        asleep_step.is_some(),
-        "PHY-001 story 1: dynamic box must fall asleep after velocity stays below sleep threshold"
-    );
-    assert!(world.is_sleeping(box_body));
-    let resting_pos = world.position(box_body).unwrap_or([0.0; 3]);
-    // Rolling physics lets the box micro-slide and settle during impact before
-    // sleeping, so lateral rest position varies at the contact-recovery scale
-    // (rapier prediction distance 2e-3) rather than at 1e-3. 1e-2 stays well
-    // inside the box half-extent and still excludes any real slide-off.
-    assert!(
-        (resting_pos[0] - 0.0).abs() <= 1e-2
-            && (resting_pos[1] - 0.5).abs() <= 1e-3
-            && (resting_pos[2] - 0.0).abs() <= 1e-2,
-        "PHY-001 story 1: resting box position {resting_pos:?} must agree with floor top within allowed floating-point variation"
-    );
+    let resting_pos = step_until_box_sleeps_on_floor(&mut world, floor, box_body, dt)?;
 
     world.add_force(
         box_body,
@@ -333,4 +280,62 @@ fn phy_001_story_1_dynamic_box_on_static_floor_receives_enter_once_stay_while_re
         "PHY-001 story 1: lifted box position {lifted_pos:?} must rise above resting position {resting_pos:?}"
     );
     Ok(())
+}
+
+fn step_until_box_sleeps_on_floor(
+    world: &mut World,
+    floor: EntityId,
+    box_body: EntityId,
+    dt: f64,
+) -> Result<[f64; 3], PhysicsError> {
+    let mut enter_count = 0usize;
+    let mut stay_count = 0usize;
+    let mut unexpected_exit_count = 0usize;
+    let mut asleep_step: Option<usize> = None;
+
+    for step_idx in 0..240 {
+        world.step(dt)?;
+        for event in world.drain_events() {
+            assert_eq!(
+                (event.a, event.b),
+                (floor, box_body),
+                "PHY-001 story 1: unexpected collision pair in step {step_idx}"
+            );
+            match event.phase {
+                unitas_physics::Phase::Enter => enter_count += 1,
+                unitas_physics::Phase::Stay => stay_count += 1,
+                unitas_physics::Phase::Exit => unexpected_exit_count += 1,
+            }
+        }
+        if world.is_sleeping(box_body) && asleep_step.is_none() {
+            asleep_step = Some(step_idx);
+            break;
+        }
+    }
+
+    assert_eq!(
+        unexpected_exit_count, 0,
+        "PHY-001 story 1: unexpected OnCollisionExit while resting on floor"
+    );
+    assert_eq!(
+        enter_count, 1,
+        "PHY-001 story 1: dynamic box dropped onto static floor must receive OnCollisionEnter once"
+    );
+    assert!(
+        stay_count >= 1,
+        "PHY-001 story 1: dynamic box resting on static floor must receive OnCollisionStay"
+    );
+    assert!(
+        asleep_step.is_some(),
+        "PHY-001 story 1: dynamic box must fall asleep after velocity stays below sleep threshold"
+    );
+    assert!(world.is_sleeping(box_body));
+    let resting_pos = world.position(box_body).unwrap_or([0.0; 3]);
+    assert!(
+        (resting_pos[0] - 0.0).abs() <= 1e-2
+            && (resting_pos[1] - 0.5).abs() <= 1e-3
+            && (resting_pos[2] - 0.0).abs() <= 1e-2,
+        "PHY-001 story 1: resting box position {resting_pos:?} must agree with floor top within allowed floating-point variation"
+    );
+    Ok(resting_pos)
 }

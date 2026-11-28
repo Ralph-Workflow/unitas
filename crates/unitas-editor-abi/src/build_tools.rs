@@ -41,33 +41,9 @@ fn build_player(args: &Value) -> Result<Value, String> {
         return Err(format!("project directory does not exist: {project_path}"));
     }
 
-    let scenes = project_scenes(&project_dir)?;
-    let product_name = project_dir
-        .file_name()
-        .and_then(|name| name.to_str())
-        .unwrap_or("unitas-player")
-        .to_string();
-    let mut config = BuildConfiguration::for_host(scenes, product_name);
-    config.target = target;
+    let config = build_player_config(&project_dir, target)?;
     let output_dir = project_dir.join("builds").join(target.identifier());
-
-    let started = Instant::now();
-    let outcome = execute_build_for_host(&config, &output_dir, 0, BuildTarget::current_host());
-    let elapsed_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
-    let Some(bundle) = outcome.bundle else {
-        let reason = outcome
-            .report
-            .errors
-            .iter()
-            .map(|diagnostic| format!("{}: {}", diagnostic.code, diagnostic.message))
-            .collect::<Vec<_>>()
-            .join("; ");
-        return Err(format!(
-            "build failed for target {}: {reason}",
-            target.identifier()
-        ));
-    };
-    let mut report = outcome.report;
+    let (bundle, mut report, elapsed_ms) = run_player_build(&config, &output_dir, target)?;
 
     report.elapsed_ms = elapsed_ms;
     let report_path = output_dir.join(BUILD_REPORT_FILENAME);
@@ -86,6 +62,45 @@ fn build_player(args: &Value) -> Result<Value, String> {
         "buildId": build_id,
         "licensingRecordPath": licensing_path.to_string_lossy(),
     }))
+}
+
+fn build_player_config(
+    project_dir: &Path,
+    target: BuildTarget,
+) -> Result<BuildConfiguration, String> {
+    let scenes = project_scenes(project_dir)?;
+    let product_name = project_dir
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("unitas-player")
+        .to_string();
+    let mut config = BuildConfiguration::for_host(scenes, product_name);
+    config.target = target;
+    Ok(config)
+}
+
+fn run_player_build(
+    config: &BuildConfiguration,
+    output_dir: &Path,
+    target: BuildTarget,
+) -> Result<(unitas_build::BundleResult, unitas_build::BuildReport, u64), String> {
+    let started = Instant::now();
+    let outcome = execute_build_for_host(config, output_dir, 0, BuildTarget::current_host());
+    let elapsed_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
+    let Some(bundle) = outcome.bundle else {
+        let reason = outcome
+            .report
+            .errors
+            .iter()
+            .map(|diagnostic| format!("{}: {}", diagnostic.code, diagnostic.message))
+            .collect::<Vec<_>>()
+            .join("; ");
+        return Err(format!(
+            "build failed for target {}: {reason}",
+            target.identifier()
+        ));
+    };
+    Ok((bundle, outcome.report, elapsed_ms))
 }
 
 fn required_string(args: &Value, key: &str) -> Result<String, String> {

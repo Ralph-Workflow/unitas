@@ -188,8 +188,6 @@ impl PostState {
             bloom[1].create_view(&wgpu::TextureViewDescriptor::default()),
         ];
         let bright_bind = self.bind_group(device, &scene_view, &scene_view, 0);
-        // The blur passes read the source texture only; the bloom texture is
-        // the pass's own color target, so it must not also be bound for reading.
         let blur_binds = [
             self.bind_group(device, &bloom_views[0], &bloom_views[0], 1),
             self.bind_group(device, &bloom_views[1], &bloom_views[1], 2),
@@ -243,51 +241,43 @@ impl PostState {
         })
     }
 
+    fn post_param_slots(settings: PostSettings, texel_x: f32, texel_y: f32) -> [PostParams; 4] {
+        let base = PostParams {
+            threshold: 0.0,
+            intensity: 0.0,
+            exposure: 0.0,
+            texel_x,
+            texel_y,
+            direction_x: 0.0,
+            direction_y: 0.0,
+            reserved: 0.0,
+        };
+        let bright = PostParams {
+            threshold: settings.bloom_threshold,
+            intensity: settings.bloom_intensity,
+            exposure: settings.exposure,
+            ..base
+        };
+        let blur_horizontal = PostParams {
+            direction_x: 1.0,
+            ..base
+        };
+        let blur_vertical = PostParams {
+            direction_y: 1.0,
+            ..base
+        };
+        let composite = PostParams {
+            intensity: settings.bloom_intensity,
+            exposure: settings.exposure,
+            ..base
+        };
+        [bright, blur_horizontal, blur_vertical, composite]
+    }
+
     fn write_params(&self, queue: &wgpu::Queue, settings: PostSettings, bloom_size: (u32, u32)) {
         let texel_x = 1.0 / bloom_size.0.max(1) as f32;
         let texel_y = 1.0 / bloom_size.1.max(1) as f32;
-        let slots = [
-            PostParams {
-                threshold: settings.bloom_threshold,
-                intensity: settings.bloom_intensity,
-                exposure: settings.exposure,
-                texel_x,
-                texel_y,
-                direction_x: 0.0,
-                direction_y: 0.0,
-                reserved: 0.0,
-            },
-            PostParams {
-                threshold: 0.0,
-                intensity: 0.0,
-                exposure: 0.0,
-                texel_x,
-                texel_y,
-                direction_x: 1.0,
-                direction_y: 0.0,
-                reserved: 0.0,
-            },
-            PostParams {
-                threshold: 0.0,
-                intensity: 0.0,
-                exposure: 0.0,
-                texel_x,
-                texel_y,
-                direction_x: 0.0,
-                direction_y: 1.0,
-                reserved: 0.0,
-            },
-            PostParams {
-                threshold: 0.0,
-                intensity: settings.bloom_intensity,
-                exposure: settings.exposure,
-                texel_x,
-                texel_y,
-                direction_x: 0.0,
-                direction_y: 0.0,
-                reserved: 0.0,
-            },
-        ];
+        let slots = Self::post_param_slots(settings, texel_x, texel_y);
         for (index, params) in slots.iter().enumerate() {
             queue.write_buffer(
                 &self.params,
@@ -419,6 +409,47 @@ impl Renderer {
         Ok(())
     }
 
+    fn surface_format(&self) -> wgpu::TextureFormat {
+        let state = lock(&self.surface);
+        state
+            .as_ref()
+            .map_or(wgpu::TextureFormat::Bgra8Unorm, |surface| surface.format)
+    }
+
+    fn render_post_scene(&self, frame: &SurfaceFrame<'_>) -> Result<(), RenderError> {
+        let scene_view = self.post_scene_view(frame.size)?;
+        let scene_frame = SurfaceFrame {
+            instances: frame.instances,
+            scene: frame.scene,
+            size: frame.size,
+            overlay: &[],
+            canvas_rects: &[],
+            canvas_texts: &[],
+        };
+        self.render_frame_to_view(&scene_view, POST_SCENE_FORMAT, &scene_frame)?;
+        Ok(())
+    }
+
+    fn draw_surface_overlays(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        output_view: &wgpu::TextureView,
+        format: wgpu::TextureFormat,
+        size: (u32, u32),
+        frame: &SurfaceFrame<'_>,
+    ) {
+        self.draw_ui_rects(encoder, output_view, format, size, frame.canvas_rects);
+        self.draw_text_overlay(encoder, output_view, format, size, 1.0, frame.canvas_texts);
+        self.draw_text_overlay(
+            encoder,
+            output_view,
+            format,
+            size,
+            self.overlay_scale(size),
+            frame.overlay,
+        );
+    }
+
     pub fn render_surface_frame_post(
         &self,
         surface: &wgpu::Surface<'_>,
@@ -436,22 +467,8 @@ impl Renderer {
             surface_texture.texture.width(),
             surface_texture.texture.height(),
         );
-        let format = {
-            let state = lock(&self.surface);
-            state
-                .as_ref()
-                .map_or(wgpu::TextureFormat::Bgra8Unorm, |surface| surface.format)
-        };
-        let scene_view = self.post_scene_view(frame.size)?;
-        let scene_frame = SurfaceFrame {
-            instances: frame.instances,
-            scene: frame.scene,
-            size: frame.size,
-            overlay: &[],
-            canvas_rects: &[],
-            canvas_texts: &[],
-        };
-        self.render_frame_to_view(&scene_view, POST_SCENE_FORMAT, &scene_frame)?;
+        let format = self.surface_format();
+        self.render_post_scene(frame)?;
         let output_view = surface_texture
             .texture
             .create_view(&wgpu::TextureViewDescriptor::default());
@@ -468,23 +485,7 @@ impl Renderer {
             format,
             frame.size,
         )?;
-        self.draw_ui_rects(&mut encoder, &output_view, format, size, frame.canvas_rects);
-        self.draw_text_overlay(
-            &mut encoder,
-            &output_view,
-            format,
-            size,
-            1.0,
-            frame.canvas_texts,
-        );
-        self.draw_text_overlay(
-            &mut encoder,
-            &output_view,
-            format,
-            size,
-            self.overlay_scale(size),
-            frame.overlay,
-        );
+        self.draw_surface_overlays(&mut encoder, &output_view, format, size, frame);
         self.queue.submit(Some(encoder.finish()));
         self.queue.present(surface_texture);
         Ok(())

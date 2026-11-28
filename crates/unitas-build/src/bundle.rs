@@ -37,166 +37,7 @@ pub const RUNTIME_LIBRARY_FILENAME: &str = "libunitas_runtime.dylib";
 #[cfg(not(any(target_os = "windows", target_os = "macos")))]
 pub const RUNTIME_LIBRARY_FILENAME: &str = "libunitas_runtime.so";
 
-const SHA256_INITIAL_STATE: [u32; 8] = [
-    0x6a09_e667,
-    0xbb67_ae85,
-    0x3c6e_f372,
-    0xa54f_f53a,
-    0x510e_527f,
-    0x9b05_688c,
-    0x1f83_d9ab,
-    0x5be0_cd19,
-];
-
-const SHA256_ROUND_CONSTANTS: [u32; 64] = [
-    0x428a_2f98,
-    0x7137_4491,
-    0xb5c0_fbcf,
-    0xe9b5_dba5,
-    0x3956_c25b,
-    0x59f1_11f1,
-    0x923f_82a4,
-    0xab1c_5ed5,
-    0xd807_aa98,
-    0x1283_5b01,
-    0x2431_85be,
-    0x550c_7dc3,
-    0x72be_5d74,
-    0x80de_b1fe,
-    0x9bdc_06a7,
-    0xc19b_f174,
-    0xe49b_69c1,
-    0xefbe_4786,
-    0x0fc1_9dc6,
-    0x240c_a1cc,
-    0x2de9_2c6f,
-    0x4a74_84aa,
-    0x5cb0_a9dc,
-    0x76f9_88da,
-    0x983e_5152,
-    0xa831_c66d,
-    0xb003_27c8,
-    0xbf59_7fc7,
-    0xc6e0_0bf3,
-    0xd5a7_9147,
-    0x06ca_6351,
-    0x1429_2967,
-    0x27b7_0a85,
-    0x2e1b_2138,
-    0x4d2c_6dfc,
-    0x5338_0d13,
-    0x650a_7354,
-    0x766a_0abb,
-    0x81c2_c92e,
-    0x9272_2c85,
-    0xa2bf_e8a1,
-    0xa81a_664b,
-    0xc24b_8b70,
-    0xc76c_51a3,
-    0xd192_e819,
-    0xd699_0624,
-    0xf40e_3585,
-    0x106a_a070,
-    0x19a4_c116,
-    0x1e37_6c08,
-    0x2748_774c,
-    0x34b0_bcb5,
-    0x391c_0cb3,
-    0x4ed8_aa4a,
-    0x5b9c_ca4f,
-    0x682e_6ff3,
-    0x748f_82ee,
-    0x78a5_636f,
-    0x84c8_7814,
-    0x8cc7_0208,
-    0x90be_fffa,
-    0xa450_6ceb,
-    0xbef9_a3f7,
-    0xc671_78f2,
-];
-
-pub fn content_hash_hex(bytes: &[u8]) -> String {
-    let mut state = SHA256_INITIAL_STATE;
-    let bit_len = (bytes.len() as u64).wrapping_mul(8);
-    let mut padded = Vec::with_capacity((bytes.len() + 9).div_ceil(64) * 64);
-    padded.extend_from_slice(bytes);
-    padded.push(0x80);
-    while padded.len() % 64 != 56 {
-        padded.push(0);
-    }
-    padded.extend_from_slice(&bit_len.to_be_bytes());
-
-    for chunk in padded.chunks_exact(64) {
-        let mut schedule = [0u32; 64];
-        for (word_index, word_bytes) in chunk.chunks_exact(4).enumerate() {
-            schedule[word_index] =
-                u32::from_be_bytes([word_bytes[0], word_bytes[1], word_bytes[2], word_bytes[3]]);
-        }
-        for index in 16..64 {
-            let s0 = schedule[index - 15].rotate_right(7)
-                ^ schedule[index - 15].rotate_right(18)
-                ^ (schedule[index - 15] >> 3);
-            let s1 = schedule[index - 2].rotate_right(17)
-                ^ schedule[index - 2].rotate_right(19)
-                ^ (schedule[index - 2] >> 10);
-            schedule[index] = schedule[index - 16]
-                .wrapping_add(s0)
-                .wrapping_add(schedule[index - 7])
-                .wrapping_add(s1);
-        }
-
-        let mut a = state[0];
-        let mut b = state[1];
-        let mut c = state[2];
-        let mut d = state[3];
-        let mut e = state[4];
-        let mut f = state[5];
-        let mut g = state[6];
-        let mut h = state[7];
-
-        for index in 0..64 {
-            let s1 = e.rotate_right(6) ^ e.rotate_right(11) ^ e.rotate_right(25);
-            let ch = (e & f) ^ ((!e) & g);
-            let temp1 = h
-                .wrapping_add(s1)
-                .wrapping_add(ch)
-                .wrapping_add(SHA256_ROUND_CONSTANTS[index])
-                .wrapping_add(schedule[index]);
-            let s0 = a.rotate_right(2) ^ a.rotate_right(13) ^ a.rotate_right(22);
-            let maj = (a & b) ^ (a & c) ^ (b & c);
-            let temp2 = s0.wrapping_add(maj);
-
-            h = g;
-            g = f;
-            f = e;
-            e = d.wrapping_add(temp1);
-            d = c;
-            c = b;
-            b = a;
-            a = temp1.wrapping_add(temp2);
-        }
-
-        state[0] = state[0].wrapping_add(a);
-        state[1] = state[1].wrapping_add(b);
-        state[2] = state[2].wrapping_add(c);
-        state[3] = state[3].wrapping_add(d);
-        state[4] = state[4].wrapping_add(e);
-        state[5] = state[5].wrapping_add(f);
-        state[6] = state[6].wrapping_add(g);
-        state[7] = state[7].wrapping_add(h);
-    }
-
-    let mut hex = String::with_capacity(64);
-    for word in state {
-        for byte in word.to_be_bytes() {
-            let high = char::from_digit(u32::from(byte >> 4), 16).unwrap_or('0');
-            let low = char::from_digit(u32::from(byte & 0x0f), 16).unwrap_or('0');
-            hex.push(high);
-            hex.push(low);
-        }
-    }
-    hex
-}
+pub use crate::sha256::content_hash_hex;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BundleManifestEntry {
@@ -301,24 +142,7 @@ impl BundleManifest {
     }
 
     pub fn from_canonical_str(text: &str) -> Result<Self, BundleError> {
-        let mut map = BTreeMap::new();
-        for (line_number, raw_line) in text.lines().enumerate() {
-            let trimmed = raw_line.trim();
-            if trimmed.is_empty() {
-                continue;
-            }
-            let (key, value) =
-                trimmed
-                    .split_once('=')
-                    .ok_or_else(|| BundleError::ManifestParse {
-                        message: format!(
-                            "line {} is missing '=' separator: '{trimmed}'",
-                            line_number + 1
-                        ),
-                    })?;
-            map.insert(key.to_string(), value.to_string());
-        }
-
+        let map = parse_key_values(text)?;
         let format_version = parse_u32_field(&map, "format_version")?;
         if format_version != BUNDLE_MANIFEST_FORMAT_VERSION {
             return Err(BundleError::ManifestParse {
@@ -331,68 +155,16 @@ impl BundleManifest {
         let application_identifier = required_field(&map, "application_identifier")?;
         let version = required_field(&map, "version")?;
         let build_identifier = required_field(&map, "build_identifier")?;
-        let target_os = required_field(&map, "target_os")?;
-        let target_arch = required_field(&map, "target_arch")?;
-        let target = BuildTarget::from_env(&target_os, &target_arch).ok_or_else(|| {
-            BundleError::ManifestParse {
-                message: format!("unrecognized target '{target_os}-{target_arch}'"),
-            }
-        })?;
-
-        let mode_raw = required_field(&map, "mode")?;
-        let mode = match mode_raw.as_str() {
-            "development" => BuildMode::Development,
-            "release" => BuildMode::Release,
-            _ => {
-                return Err(BundleError::ManifestParse {
-                    message: format!("unrecognized build mode '{mode_raw}'"),
-                });
-            }
-        };
-
-        let script_host_raw = required_field(&map, "script_host")?;
-        let script_host =
-            ScriptHost::from_name(&script_host_raw).ok_or_else(|| BundleError::ManifestParse {
-                message: format!("unrecognized script_host '{script_host_raw}'"),
-            })?;
-
+        let target = parse_target_field(&map)?;
+        let mode = parse_manifest_mode(&map)?;
+        let script_host = parse_manifest_script_host(&map)?;
         let development_diagnostics = parse_bool_field(&map, "development_diagnostics")?;
-        let diagnostics_marker_raw = required_field(&map, "diagnostics_marker")?;
-        let diagnostics_marker = if diagnostics_marker_raw.is_empty() {
-            None
-        } else {
-            Some(diagnostics_marker_raw)
-        };
-
+        let diagnostics_marker = parse_optional_field(&map, "diagnostics_marker")?;
         let startup_scene_staged_path = required_field(&map, "startup_scene_staged_path")?;
         let total_content_bytes = parse_u64_field(&map, "total_content_bytes")?;
         let entry_count = parse_usize_field(&map, "entry_count")?;
         let manifest_hash = required_field(&map, "manifest_hash")?;
-
-        let mut entries = Vec::with_capacity(entry_count);
-        for slot in 0..entry_count {
-            let index = parse_usize_field(&map, &format!("entry.{slot}.index"))?;
-            let source_path = required_field(&map, &format!("entry.{slot}.source_path"))?;
-            let staged_path = required_field(&map, &format!("entry.{slot}.staged_path"))?;
-            let content_hash = required_field(&map, &format!("entry.{slot}.content_hash"))?;
-            let size_bytes = parse_u64_field(&map, &format!("entry.{slot}.size_bytes"))?;
-            let root_object_count =
-                parse_usize_field(&map, &format!("entry.{slot}.root_object_count"))?;
-            entries.push(BundleManifestEntry {
-                index,
-                source_path,
-                staged_path,
-                content_hash,
-                size_bytes,
-                root_object_count,
-            });
-        }
-
-        entries.sort_by(|left, right| {
-            left.staged_path
-                .cmp(&right.staged_path)
-                .then_with(|| left.index.cmp(&right.index))
-        });
+        let entries = parse_manifest_entries(&map, entry_count)?;
 
         let manifest = Self {
             format_version,
@@ -412,15 +184,7 @@ impl BundleManifest {
             manifest_hash,
         };
 
-        let expected_hash = manifest.compute_manifest_hash();
-        if manifest.manifest_hash != expected_hash {
-            return Err(BundleError::ManifestParse {
-                message: format!(
-                    "manifest_hash mismatch: expected '{expected_hash}', found '{}'",
-                    manifest.manifest_hash
-                ),
-            });
-        }
+        verify_manifest_hash(&manifest)?;
 
         Ok(manifest)
     }
@@ -436,6 +200,102 @@ impl BundleManifest {
     pub fn load_from_dir(output_dir: &Path) -> Result<Self, BundleError> {
         Self::load_from_file(&output_dir.join(BUNDLE_MANIFEST_FILENAME))
     }
+}
+
+fn parse_key_values(text: &str) -> Result<BTreeMap<String, String>, BundleError> {
+    let mut map = BTreeMap::new();
+    for (line_number, raw_line) in text.lines().enumerate() {
+        let trimmed = raw_line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let (key, value) = trimmed
+            .split_once('=')
+            .ok_or_else(|| BundleError::ManifestParse {
+                message: format!(
+                    "line {} is missing '=' separator: '{trimmed}'",
+                    line_number + 1
+                ),
+            })?;
+        map.insert(key.to_string(), value.to_string());
+    }
+    Ok(map)
+}
+
+fn parse_target_field(map: &BTreeMap<String, String>) -> Result<BuildTarget, BundleError> {
+    let target_os = required_field(map, "target_os")?;
+    let target_arch = required_field(map, "target_arch")?;
+    BuildTarget::from_env(&target_os, &target_arch).ok_or_else(|| BundleError::ManifestParse {
+        message: format!("unrecognized target '{target_os}-{target_arch}'"),
+    })
+}
+
+fn parse_manifest_mode(map: &BTreeMap<String, String>) -> Result<BuildMode, BundleError> {
+    let mode_raw = required_field(map, "mode")?;
+    match mode_raw.as_str() {
+        "development" => Ok(BuildMode::Development),
+        "release" => Ok(BuildMode::Release),
+        _ => Err(BundleError::ManifestParse {
+            message: format!("unrecognized build mode '{mode_raw}'"),
+        }),
+    }
+}
+
+fn parse_manifest_script_host(map: &BTreeMap<String, String>) -> Result<ScriptHost, BundleError> {
+    let script_host_raw = required_field(map, "script_host")?;
+    ScriptHost::from_name(&script_host_raw).ok_or_else(|| BundleError::ManifestParse {
+        message: format!("unrecognized script_host '{script_host_raw}'"),
+    })
+}
+
+fn parse_optional_field(
+    map: &BTreeMap<String, String>,
+    key: &str,
+) -> Result<Option<String>, BundleError> {
+    let raw = required_field(map, key)?;
+    Ok(if raw.is_empty() { None } else { Some(raw) })
+}
+
+fn parse_manifest_entries(
+    map: &BTreeMap<String, String>,
+    entry_count: usize,
+) -> Result<Vec<BundleManifestEntry>, BundleError> {
+    let mut entries = Vec::with_capacity(entry_count);
+    for slot in 0..entry_count {
+        let index = parse_usize_field(map, &format!("entry.{slot}.index"))?;
+        let source_path = required_field(map, &format!("entry.{slot}.source_path"))?;
+        let staged_path = required_field(map, &format!("entry.{slot}.staged_path"))?;
+        let content_hash = required_field(map, &format!("entry.{slot}.content_hash"))?;
+        let size_bytes = parse_u64_field(map, &format!("entry.{slot}.size_bytes"))?;
+        let root_object_count = parse_usize_field(map, &format!("entry.{slot}.root_object_count"))?;
+        entries.push(BundleManifestEntry {
+            index,
+            source_path,
+            staged_path,
+            content_hash,
+            size_bytes,
+            root_object_count,
+        });
+    }
+    entries.sort_by(|left, right| {
+        left.staged_path
+            .cmp(&right.staged_path)
+            .then_with(|| left.index.cmp(&right.index))
+    });
+    Ok(entries)
+}
+
+fn verify_manifest_hash(manifest: &BundleManifest) -> Result<(), BundleError> {
+    let expected_hash = manifest.compute_manifest_hash();
+    if manifest.manifest_hash != expected_hash {
+        return Err(BundleError::ManifestParse {
+            message: format!(
+                "manifest_hash mismatch: expected '{expected_hash}', found '{}'",
+                manifest.manifest_hash
+            ),
+        });
+    }
+    Ok(())
 }
 
 fn required_field(map: &BTreeMap<String, String>, key: &str) -> Result<String, BundleError> {
@@ -547,6 +407,12 @@ struct VerifiedSceneInput {
     root_object_count: usize,
 }
 
+struct StagedSceneBundle {
+    startup_scene_staged_path: String,
+    total_content_bytes: u64,
+    entries: Vec<BundleManifestEntry>,
+}
+
 pub fn stage_bundle(
     config: &BuildConfiguration,
     output_dir: &Path,
@@ -564,44 +430,88 @@ pub fn stage_bundle_for_host(
         .validate_with_host(host)
         .map_err(BundleError::Validation)?;
 
-    let mut verified_scenes = Vec::with_capacity(config.scenes.len());
-    for (index, scene_path) in config.scenes.iter().enumerate() {
-        if !scene_path.is_file() {
-            return Err(BundleError::SceneMissing {
-                path: scene_path.clone(),
-            });
-        }
-        let scene_graph = unitas_asset::assemble_scene_file(scene_path).map_err(|error| {
-            BundleError::SceneAssembly {
-                path: scene_path.clone(),
-                message: error.to_string(),
-            }
-        })?;
-        let bytes = fs::read(scene_path).map_err(|error| BundleError::Io {
-            path: scene_path.clone(),
-            message: error.to_string(),
-        })?;
-        let content_hash = content_hash_hex(&bytes);
-        let size_bytes = bytes.len() as u64;
-        let root_object_count = scene_graph.roots().len();
-        let file_name = scene_path
-            .file_name()
-            .and_then(|name| name.to_str())
-            .unwrap_or("scene.unity");
-        let staged_path = format!("Assets/scene_{index:03}_{file_name}");
-        let source_path = normalize_scene_source_path(scene_path, file_name);
+    let verified_scenes = collect_verified_scenes(config)?;
+    let mut staged = write_verified_scenes(verified_scenes, output_dir)?;
+    let mut diagnostics: Vec<String> = Vec::new();
+    let script_host = stage_project_payload(config, output_dir, &mut staged, &mut diagnostics)?;
+    sort_manifest_entries(&mut staged.entries);
 
-        verified_scenes.push(VerifiedSceneInput {
-            index,
-            source_path,
-            staged_path,
-            bytes,
-            content_hash,
-            size_bytes,
-            root_object_count,
+    let include_diagnostics = config.include_diagnostics();
+    let (diagnostics_marker, diagnostics_marker_path) =
+        write_diagnostics_marker(config, output_dir, include_diagnostics)?;
+
+    let manifest = build_staged_manifest(
+        config,
+        staged,
+        script_host,
+        include_diagnostics,
+        diagnostics_marker,
+    );
+    let manifest_path = write_staged_manifest(&manifest, output_dir)?;
+    let (launch_artifact_path, application_bundle_path) =
+        resolve_launch_artifact(&manifest, output_dir)?;
+
+    Ok(StagedBundle {
+        output_dir: output_dir.to_path_buf(),
+        manifest_path,
+        launch_artifact_path,
+        application_bundle_path,
+        diagnostics_marker_path,
+        manifest,
+        diagnostics,
+    })
+}
+
+fn verify_scene_input(index: usize, scene_path: &Path) -> Result<VerifiedSceneInput, BundleError> {
+    if !scene_path.is_file() {
+        return Err(BundleError::SceneMissing {
+            path: scene_path.to_path_buf(),
         });
     }
+    let scene_graph = unitas_asset::assemble_scene_file(scene_path).map_err(|error| {
+        BundleError::SceneAssembly {
+            path: scene_path.to_path_buf(),
+            message: error.to_string(),
+        }
+    })?;
+    let bytes = fs::read(scene_path).map_err(|error| BundleError::Io {
+        path: scene_path.to_path_buf(),
+        message: error.to_string(),
+    })?;
+    let content_hash = content_hash_hex(&bytes);
+    let size_bytes = bytes.len() as u64;
+    let root_object_count = scene_graph.roots().len();
+    let file_name = scene_path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("scene.unity");
+    let staged_path = format!("Assets/scene_{index:03}_{file_name}");
+    let source_path = normalize_scene_source_path(scene_path, file_name);
+    Ok(VerifiedSceneInput {
+        index,
+        source_path,
+        staged_path,
+        bytes,
+        content_hash,
+        size_bytes,
+        root_object_count,
+    })
+}
 
+fn collect_verified_scenes(
+    config: &BuildConfiguration,
+) -> Result<Vec<VerifiedSceneInput>, BundleError> {
+    let mut verified_scenes = Vec::with_capacity(config.scenes.len());
+    for (index, scene_path) in config.scenes.iter().enumerate() {
+        verified_scenes.push(verify_scene_input(index, scene_path)?);
+    }
+    Ok(verified_scenes)
+}
+
+fn write_verified_scenes(
+    verified_scenes: Vec<VerifiedSceneInput>,
+    output_dir: &Path,
+) -> Result<StagedSceneBundle, BundleError> {
     let assets_dir = output_dir.join("Assets");
     fs::create_dir_all(&assets_dir).map_err(|error| BundleError::Io {
         path: assets_dir.clone(),
@@ -639,7 +549,19 @@ pub fn stage_bundle_for_host(
         });
     }
 
-    let mut diagnostics: Vec<String> = Vec::new();
+    Ok(StagedSceneBundle {
+        startup_scene_staged_path,
+        total_content_bytes,
+        entries,
+    })
+}
+
+fn stage_project_payload(
+    config: &BuildConfiguration,
+    output_dir: &Path,
+    staged: &mut StagedSceneBundle,
+    diagnostics: &mut Vec<String>,
+) -> Result<ScriptHost, BundleError> {
     let mut script_host = ScriptHost::None;
     if let Some(project_root) = config
         .scenes
@@ -655,30 +577,38 @@ pub fn stage_bundle_for_host(
             script_host = ScriptHost::CoreClr;
             stage_runtime_library(
                 output_dir,
-                &mut entries,
-                &mut total_content_bytes,
-                &mut diagnostics,
+                &mut staged.entries,
+                &mut staged.total_content_bytes,
+                diagnostics,
             );
             stage_managed_payload(
                 &project_root,
                 output_dir,
-                &mut entries,
-                &mut total_content_bytes,
-                &mut diagnostics,
+                &mut staged.entries,
+                &mut staged.total_content_bytes,
+                diagnostics,
                 config.script_debugging,
             )?;
         }
     }
+    Ok(script_host)
+}
 
+fn sort_manifest_entries(entries: &mut [BundleManifestEntry]) {
     entries.sort_by(|left, right| {
         left.staged_path
             .cmp(&right.staged_path)
             .then_with(|| left.index.cmp(&right.index))
     });
+}
 
-    let include_diagnostics = config.include_diagnostics();
+fn write_diagnostics_marker(
+    config: &BuildConfiguration,
+    output_dir: &Path,
+    include_diagnostics: bool,
+) -> Result<(Option<String>, Option<PathBuf>), BundleError> {
     let marker_file_path = output_dir.join(DEVELOPMENT_DIAGNOSTICS_MARKER_FILENAME);
-    let (diagnostics_marker, diagnostics_marker_path) = if include_diagnostics {
+    if include_diagnostics {
         let marker_value = DEVELOPMENT_DIAGNOSTICS_MARKER_VALUE.to_string();
         let marker_content = format!(
             "marker={marker_value}\nproduct_name={}\napplication_identifier={}\nmode={}\n",
@@ -690,17 +620,24 @@ pub fn stage_bundle_for_host(
             path: marker_file_path.clone(),
             message: error.to_string(),
         })?;
-        (Some(marker_value), Some(marker_file_path))
-    } else {
-        if marker_file_path.exists() {
-            fs::remove_file(&marker_file_path).map_err(|error| BundleError::Io {
-                path: marker_file_path.clone(),
-                message: error.to_string(),
-            })?;
-        }
-        (None, None)
-    };
+        return Ok((Some(marker_value), Some(marker_file_path)));
+    }
+    if marker_file_path.exists() {
+        fs::remove_file(&marker_file_path).map_err(|error| BundleError::Io {
+            path: marker_file_path.clone(),
+            message: error.to_string(),
+        })?;
+    }
+    Ok((None, None))
+}
 
+fn build_staged_manifest(
+    config: &BuildConfiguration,
+    staged: StagedSceneBundle,
+    script_host: ScriptHost,
+    include_diagnostics: bool,
+    diagnostics_marker: Option<String>,
+) -> BundleManifest {
     let mut manifest = BundleManifest {
         format_version: BUNDLE_MANIFEST_FORMAT_VERSION,
         company_name: config.company_name.clone(),
@@ -713,27 +650,35 @@ pub fn stage_bundle_for_host(
         script_host,
         development_diagnostics: include_diagnostics,
         diagnostics_marker,
-        startup_scene_staged_path,
-        entries,
-        total_content_bytes,
+        startup_scene_staged_path: staged.startup_scene_staged_path,
+        entries: staged.entries,
+        total_content_bytes: staged.total_content_bytes,
         manifest_hash: String::new(),
     };
     manifest.build_identifier = manifest.compute_build_identifier();
     manifest.manifest_hash = manifest.compute_manifest_hash();
+    manifest
+}
 
+fn write_staged_manifest(
+    manifest: &BundleManifest,
+    output_dir: &Path,
+) -> Result<PathBuf, BundleError> {
     let manifest_path = output_dir.join(BUNDLE_MANIFEST_FILENAME);
     let canonical_manifest = manifest.to_canonical_string();
     fs::write(&manifest_path, canonical_manifest).map_err(|error| BundleError::Io {
         path: manifest_path.clone(),
         message: error.to_string(),
     })?;
+    Ok(manifest_path)
+}
 
-    let mut application_bundle_path = None;
-    let launch_artifact_path = match macos_application(&manifest, output_dir)? {
-        Some(application) => {
-            application_bundle_path = Some(application.app_path);
-            application.executable_path
-        }
+fn resolve_launch_artifact(
+    manifest: &BundleManifest,
+    output_dir: &Path,
+) -> Result<(PathBuf, Option<PathBuf>), BundleError> {
+    match macos_application(manifest, output_dir)? {
+        Some(application) => Ok((application.executable_path, Some(application.app_path))),
         None => {
             let Some(player_binary) = package::locate_player_binary() else {
                 return Err(BundleError::Io {
@@ -741,21 +686,11 @@ pub fn stage_bundle_for_host(
                     message: String::from("the unitas player binary has not been built"),
                 });
             };
-            stage_player_launcher(&manifest, output_dir, &player_binary)?
+            let launch_artifact_path = stage_player_launcher(manifest, output_dir, &player_binary)?;
+            Ok((launch_artifact_path, None))
         }
-    };
-
-    Ok(StagedBundle {
-        output_dir: output_dir.to_path_buf(),
-        manifest_path,
-        launch_artifact_path,
-        application_bundle_path,
-        diagnostics_marker_path,
-        manifest,
-        diagnostics,
-    })
+    }
 }
-
 fn stage_player_launcher(
     manifest: &BundleManifest,
     output_dir: &Path,
@@ -919,12 +854,6 @@ fn locate_runtime_library() -> Option<PathBuf> {
     candidates.into_iter().find(|candidate| candidate.is_file())
 }
 
-/// Stages the `Managed/` payload for a project: the game assembly compiled
-/// from the project's `Assets` scripts at build time through the existing
-/// bridge compile pipeline, plus the `Unitas.PlayerHost` host files. The
-/// payload list comes from the build outputs; anything that is not built yet
-/// (for example `Unitas.PlayerHost` before its owning unit lands) degrades
-/// to a diagnostic instead of failing the build.
 fn stage_managed_payload(
     project_root: &Path,
     output_dir: &Path,
@@ -933,14 +862,32 @@ fn stage_managed_payload(
     diagnostics: &mut Vec<String>,
     script_debugging: bool,
 ) -> Result<(), BundleError> {
-    let mut sources: Vec<(String, PathBuf)> = Vec::new();
-
     let build_dir = output_dir.join("_managed_build");
-    match compile_project_scripts(project_root, &build_dir, script_debugging) {
+    let mut sources =
+        collect_game_assembly_sources(project_root, &build_dir, script_debugging, diagnostics)?;
+    sources.extend(collect_player_host_sources(diagnostics));
+
+    if sources.is_empty() {
+        return Ok(());
+    }
+
+    write_managed_payload(&sources, output_dir, entries, total_content_bytes)?;
+    let _ = fs::remove_dir_all(&build_dir);
+    Ok(())
+}
+
+fn collect_game_assembly_sources(
+    project_root: &Path,
+    build_dir: &Path,
+    script_debugging: bool,
+    diagnostics: &mut Vec<String>,
+) -> Result<Vec<(String, PathBuf)>, BundleError> {
+    let mut sources: Vec<(String, PathBuf)> = Vec::new();
+    match compile_project_scripts(project_root, build_dir, script_debugging) {
         Ok(true) => {
-            let mut game_assemblies: Vec<PathBuf> = fs::read_dir(&build_dir)
+            let mut game_assemblies: Vec<PathBuf> = fs::read_dir(build_dir)
                 .map_err(|error| BundleError::Io {
-                    path: build_dir.clone(),
+                    path: build_dir.to_path_buf(),
                     message: error.to_string(),
                 })?
                 .flatten()
@@ -972,7 +919,11 @@ fn stage_managed_payload(
             project_root.display()
         )),
     }
+    Ok(sources)
+}
 
+fn collect_player_host_sources(diagnostics: &mut Vec<String>) -> Vec<(String, PathBuf)> {
+    let mut sources: Vec<(String, PathBuf)> = Vec::new();
     if let Some(workspace_root) = licensing::workspace_root() {
         let host_output_dir = workspace_root
             .join("bridge")
@@ -993,24 +944,28 @@ fn stage_managed_payload(
             }
         }
     }
+    sources
+}
 
-    if sources.is_empty() {
-        return Ok(());
-    }
-
+fn write_managed_payload(
+    sources: &[(String, PathBuf)],
+    output_dir: &Path,
+    entries: &mut Vec<BundleManifestEntry>,
+    total_content_bytes: &mut u64,
+) -> Result<(), BundleError> {
     let managed_dir = output_dir.join(MANAGED_DIR_NAME);
     fs::create_dir_all(&managed_dir).map_err(|error| BundleError::Io {
         path: managed_dir.clone(),
         message: error.to_string(),
     })?;
     for (filename, source) in sources {
-        let bytes = fs::read(&source).map_err(|error| BundleError::Io {
+        let bytes = fs::read(source).map_err(|error| BundleError::Io {
             path: source.clone(),
             message: error.to_string(),
         })?;
         let staged_path = format!("{MANAGED_DIR_NAME}/{filename}");
-        fs::write(managed_dir.join(&filename), &bytes).map_err(|error| BundleError::Io {
-            path: managed_dir.join(&filename),
+        fs::write(managed_dir.join(filename), &bytes).map_err(|error| BundleError::Io {
+            path: managed_dir.join(filename),
             message: error.to_string(),
         })?;
         *total_content_bytes = total_content_bytes.saturating_add(bytes.len() as u64);
@@ -1023,7 +978,6 @@ fn stage_managed_payload(
             root_object_count: 0,
         });
     }
-    let _ = fs::remove_dir_all(&build_dir);
     Ok(())
 }
 
@@ -1190,9 +1144,6 @@ fn script_compile_command(
     command
 }
 
-/// Compiles a project's scripts through the bridge compile pipeline
-/// (`Unitas.Scripting compile <projectRoot> --player [--debug]`). Returns
-/// `Ok(false)` when the bridge tooling has not been built yet.
 fn compile_project_scripts(
     project_root: &Path,
     output_dir: &Path,
@@ -1212,19 +1163,7 @@ fn compile_project_scripts(
         return Ok(false);
     }
     fs::create_dir_all(output_dir).map_err(|error| error.to_string())?;
-    // The compile is the slowest step of staging and the same project is
-    // staged by several gates and tests. Cache the compiled assemblies by the
-    // content of the project's script sources and of the bridge assemblies the
-    // compile references, so a repeated staging reuses them instead of paying
-    // for another compile.
-    let cache_dir = workspace_root
-        .join("target")
-        .join("unitas-script-cache")
-        .join(script_compile_cache_key(
-            &workspace_root,
-            project_root,
-            script_debugging,
-        ));
+    let cache_dir = script_cache_dir(&workspace_root, project_root, script_debugging);
     if publish_cached_assemblies(&cache_dir, output_dir)? {
         return Ok(true);
     }
@@ -1235,28 +1174,60 @@ fn compile_project_scripts(
     ));
     let _ = fs::remove_dir_all(&staging_dir);
     fs::create_dir_all(&staging_dir).map_err(|error| error.to_string())?;
-    let output = script_compile_command(
+    run_script_compile(
         &scripting_assembly,
         project_root,
         &staging_dir,
+        script_debugging,
+    )?;
+    let _ = fs::create_dir_all(&cache_dir);
+    publish_compiled_assemblies(&staging_dir, &cache_dir)?;
+    let _ = fs::write(cache_dir.join(".complete"), b"ok");
+    let _ = fs::remove_dir_all(&staging_dir);
+    publish_cached_assemblies(&cache_dir, output_dir)?;
+    Ok(true)
+}
+
+fn script_cache_dir(workspace_root: &Path, project_root: &Path, script_debugging: bool) -> PathBuf {
+    workspace_root
+        .join("target")
+        .join("unitas-script-cache")
+        .join(script_compile_cache_key(
+            workspace_root,
+            project_root,
+            script_debugging,
+        ))
+}
+
+fn run_script_compile(
+    scripting_assembly: &Path,
+    project_root: &Path,
+    staging_dir: &Path,
+    script_debugging: bool,
+) -> Result<(), String> {
+    let output = script_compile_command(
+        scripting_assembly,
+        project_root,
+        staging_dir,
         script_debugging,
     )
     .output()
     .map_err(|error| format!("failed to launch dotnet: {error}"))?;
     if !output.status.success() {
-        let _ = fs::remove_dir_all(&staging_dir);
+        let _ = fs::remove_dir_all(staging_dir);
         return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
     }
-    let _ = fs::create_dir_all(&cache_dir);
-    for entry in fs::read_dir(&staging_dir)
+    Ok(())
+}
+
+fn publish_compiled_assemblies(staging_dir: &Path, cache_dir: &Path) -> Result<(), String> {
+    for entry in fs::read_dir(staging_dir)
         .map_err(|error| error.to_string())?
         .flatten()
     {
         let path = entry.path();
         if path.is_file() && path.extension().is_some_and(|extension| extension == "dll") {
             if let Some(name) = path.file_name() {
-                // Publish atomically: a concurrent staging must never read a
-                // half-written assembly.
                 let temporary = cache_dir.join(format!(
                     "{}.{}.tmp",
                     name.to_string_lossy(),
@@ -1269,10 +1240,7 @@ fn compile_project_scripts(
             }
         }
     }
-    let _ = fs::write(cache_dir.join(".complete"), b"ok");
-    let _ = fs::remove_dir_all(&staging_dir);
-    publish_cached_assemblies(&cache_dir, output_dir)?;
-    Ok(true)
+    Ok(())
 }
 
 /// The macOS application bundle a staged bundle is packaged as, when the
@@ -1576,24 +1544,7 @@ impl ContentCatalog {
     }
 
     pub fn from_canonical_str(text: &str) -> Result<Self, BundleError> {
-        let mut map = BTreeMap::new();
-        for (line_number, raw_line) in text.lines().enumerate() {
-            let trimmed = raw_line.trim();
-            if trimmed.is_empty() {
-                continue;
-            }
-            let (key, value) =
-                trimmed
-                    .split_once('=')
-                    .ok_or_else(|| BundleError::ManifestParse {
-                        message: format!(
-                            "line {} is missing '=' separator: '{trimmed}'",
-                            line_number + 1
-                        ),
-                    })?;
-            map.insert(key.to_string(), value.to_string());
-        }
-
+        let map = parse_key_values(text)?;
         let format_version = parse_u32_field(&map, "format_version")?;
         if format_version != CONTENT_CATALOG_FORMAT_VERSION {
             return Err(BundleError::ManifestParse {
@@ -1603,92 +1554,18 @@ impl ContentCatalog {
 
         let unitas_version = required_field(&map, "unitas_version")?;
         let player_compatibility_version = required_field(&map, "player_compatibility_version")?;
-        let compatible_player_versions = match map.get("compatible_player_versions") {
-            Some(raw) if !raw.trim().is_empty() => raw
-                .split(',')
-                .map(|part| part.trim().to_string())
-                .filter(|part| !part.is_empty())
-                .collect(),
-            _ => derive_compatible_player_versions(&player_compatibility_version),
-        };
+        let compatible_player_versions =
+            parse_compatible_player_versions(&map, &player_compatibility_version);
         let profile_name = map
             .get("profile_name")
             .map(|val| val.trim().to_string())
             .filter(|val| !val.is_empty());
-        let target_os = required_field(&map, "target_os")?;
-        let target_arch = required_field(&map, "target_arch")?;
-        let target = BuildTarget::from_env(&target_os, &target_arch).ok_or_else(|| {
-            BundleError::ManifestParse {
-                message: format!("unrecognized target '{target_os}-{target_arch}'"),
-            }
-        })?;
+        let target = parse_target_field(&map)?;
         let total_content_bytes = parse_u64_field(&map, "total_content_bytes")?;
         let bundle_count = parse_usize_field(&map, "bundle_count")?;
         let catalog_hash = required_field(&map, "catalog_hash")?;
-        let catalog_id = map
-            .get("catalog_id")
-            .cloned()
-            .filter(|val| !val.trim().is_empty())
-            .unwrap_or_else(|| {
-                format!(
-                    "catalog-{}-{}",
-                    target.identifier(),
-                    player_compatibility_version
-                )
-            });
-
-        let mut bundles = Vec::with_capacity(bundle_count);
-        for slot in 0..bundle_count {
-            let bundle_name = required_field(&map, &format!("bundle.{slot}.bundle_name"))?;
-            let group_name = map
-                .get(&format!("bundle.{slot}.group_name"))
-                .cloned()
-                .filter(|val| !val.trim().is_empty())
-                .unwrap_or_else(|| String::from("default"));
-            let source_path = required_field(&map, &format!("bundle.{slot}.source_path"))?;
-            let staged_path = required_field(&map, &format!("bundle.{slot}.staged_path"))?;
-            let build_path = map
-                .get(&format!("bundle.{slot}.build_path"))
-                .cloned()
-                .filter(|val| !val.trim().is_empty())
-                .unwrap_or_else(|| staged_path.clone());
-            let load_path = map
-                .get(&format!("bundle.{slot}.load_path"))
-                .cloned()
-                .filter(|val| !val.trim().is_empty())
-                .unwrap_or_else(|| staged_path.clone());
-            let content_hash = required_field(&map, &format!("bundle.{slot}.content_hash"))?;
-            let size_bytes = parse_u64_field(&map, &format!("bundle.{slot}.size_bytes"))?;
-            let root_object_count =
-                parse_usize_field(&map, &format!("bundle.{slot}.root_object_count"))?;
-            let dependencies = map
-                .get(&format!("bundle.{slot}.dependencies"))
-                .map(|raw| {
-                    raw.split(',')
-                        .map(|item| item.trim().to_string())
-                        .filter(|item| !item.is_empty())
-                        .collect()
-                })
-                .unwrap_or_default();
-            bundles.push(ContentCatalogEntry {
-                bundle_name,
-                group_name,
-                source_path,
-                staged_path,
-                build_path,
-                load_path,
-                content_hash,
-                size_bytes,
-                root_object_count,
-                dependencies,
-            });
-        }
-
-        bundles.sort_by(|left, right| {
-            left.bundle_name
-                .cmp(&right.bundle_name)
-                .then_with(|| left.staged_path.cmp(&right.staged_path))
-        });
+        let catalog_id = parse_catalog_id(&map, &target, &player_compatibility_version);
+        let bundles = parse_catalog_entries(&map, bundle_count)?;
 
         let catalog = Self {
             format_version,
@@ -1703,15 +1580,7 @@ impl ContentCatalog {
             catalog_hash,
         };
 
-        let expected_hash = catalog.compute_catalog_hash();
-        if catalog.catalog_hash != expected_hash {
-            return Err(BundleError::ManifestParse {
-                message: format!(
-                    "catalog_hash mismatch: expected '{expected_hash}', found '{}'",
-                    catalog.catalog_hash
-                ),
-            });
-        }
+        verify_catalog_hash(&catalog)?;
 
         Ok(catalog)
     }
@@ -1729,6 +1598,116 @@ impl ContentCatalog {
     }
 }
 
+fn parse_compatible_player_versions(
+    map: &BTreeMap<String, String>,
+    player_compatibility_version: &str,
+) -> Vec<String> {
+    match map.get("compatible_player_versions") {
+        Some(raw) if !raw.trim().is_empty() => raw
+            .split(',')
+            .map(|part| part.trim().to_string())
+            .filter(|part| !part.is_empty())
+            .collect(),
+        _ => derive_compatible_player_versions(player_compatibility_version),
+    }
+}
+
+fn parse_catalog_id(
+    map: &BTreeMap<String, String>,
+    target: &BuildTarget,
+    player_compatibility_version: &str,
+) -> String {
+    map.get("catalog_id")
+        .cloned()
+        .filter(|val| !val.trim().is_empty())
+        .unwrap_or_else(|| {
+            format!(
+                "catalog-{}-{}",
+                target.identifier(),
+                player_compatibility_version
+            )
+        })
+}
+
+fn catalog_entry_path(
+    map: &BTreeMap<String, String>,
+    slot: usize,
+    key: &str,
+    fallback: &str,
+) -> String {
+    map.get(&format!("bundle.{slot}.{key}"))
+        .cloned()
+        .filter(|val| !val.trim().is_empty())
+        .unwrap_or_else(|| fallback.to_string())
+}
+
+fn catalog_entry_dependencies(map: &BTreeMap<String, String>, slot: usize) -> Vec<String> {
+    map.get(&format!("bundle.{slot}.dependencies"))
+        .map(|raw| {
+            raw.split(',')
+                .map(|item| item.trim().to_string())
+                .filter(|item| !item.is_empty())
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn parse_catalog_entry(
+    map: &BTreeMap<String, String>,
+    slot: usize,
+) -> Result<ContentCatalogEntry, BundleError> {
+    let bundle_name = required_field(map, &format!("bundle.{slot}.bundle_name"))?;
+    let group_name = catalog_entry_path(map, slot, "group_name", "default");
+    let source_path = required_field(map, &format!("bundle.{slot}.source_path"))?;
+    let staged_path = required_field(map, &format!("bundle.{slot}.staged_path"))?;
+    let build_path = catalog_entry_path(map, slot, "build_path", &staged_path);
+    let load_path = catalog_entry_path(map, slot, "load_path", &staged_path);
+    let content_hash = required_field(map, &format!("bundle.{slot}.content_hash"))?;
+    let size_bytes = parse_u64_field(map, &format!("bundle.{slot}.size_bytes"))?;
+    let root_object_count = parse_usize_field(map, &format!("bundle.{slot}.root_object_count"))?;
+    let dependencies = catalog_entry_dependencies(map, slot);
+    Ok(ContentCatalogEntry {
+        bundle_name,
+        group_name,
+        source_path,
+        staged_path,
+        build_path,
+        load_path,
+        content_hash,
+        size_bytes,
+        root_object_count,
+        dependencies,
+    })
+}
+
+fn parse_catalog_entries(
+    map: &BTreeMap<String, String>,
+    bundle_count: usize,
+) -> Result<Vec<ContentCatalogEntry>, BundleError> {
+    let mut bundles = Vec::with_capacity(bundle_count);
+    for slot in 0..bundle_count {
+        bundles.push(parse_catalog_entry(map, slot)?);
+    }
+    bundles.sort_by(|left, right| {
+        left.bundle_name
+            .cmp(&right.bundle_name)
+            .then_with(|| left.staged_path.cmp(&right.staged_path))
+    });
+    Ok(bundles)
+}
+
+fn verify_catalog_hash(catalog: &ContentCatalog) -> Result<(), BundleError> {
+    let expected_hash = catalog.compute_catalog_hash();
+    if catalog.catalog_hash != expected_hash {
+        return Err(BundleError::ManifestParse {
+            message: format!(
+                "catalog_hash mismatch: expected '{expected_hash}', found '{}'",
+                catalog.catalog_hash
+            ),
+        });
+    }
+    Ok(())
+}
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ContentRejectionReason {
     UnityBuiltArchive {
@@ -2028,6 +2007,13 @@ fn build_content_with_optional_baseline(
     )
 }
 
+struct ContentBundleWriteOutcome {
+    bundles: Vec<ContentCatalogEntry>,
+    emitted_bundles: Vec<ContentCatalogEntry>,
+    unchanged_bundles: Vec<String>,
+    total_content_bytes: u64,
+}
+
 fn build_content_result(
     config: &BuildConfiguration,
     profile: Option<&AddressablesProfile>,
@@ -2041,6 +2027,84 @@ fn build_content_result(
         message: error.to_string(),
     })?;
 
+    let outcome = write_content_bundles(verified_bundles, prior_hashes, output_dir)?;
+    let profile_name = profile.map(|p| p.name.clone());
+    let catalog_id = content_catalog_id(config, profile_name.as_deref());
+    let catalog = content_catalog_from_entries(
+        config,
+        player_compatibility_version,
+        profile_name,
+        catalog_id,
+        outcome.bundles,
+        outcome.total_content_bytes,
+    );
+
+    let catalog_path = output_dir.join(CONTENT_CATALOG_FILENAME);
+    fs::write(&catalog_path, catalog.to_canonical_string()).map_err(|error| BundleError::Io {
+        path: catalog_path.clone(),
+        message: error.to_string(),
+    })?;
+
+    Ok(ContentBuildResult {
+        output_dir: output_dir.to_path_buf(),
+        catalog_path,
+        catalog,
+        emitted_bundles: outcome.emitted_bundles,
+        unchanged_bundles: outcome.unchanged_bundles,
+        rejected_bundles: Vec::new(),
+    })
+}
+
+fn sort_content_entries(entries: &mut [ContentCatalogEntry]) {
+    entries.sort_by(|left, right| {
+        left.bundle_name
+            .cmp(&right.bundle_name)
+            .then_with(|| left.staged_path.cmp(&right.staged_path))
+    });
+}
+
+fn write_content_bundle(
+    entry: &ContentCatalogEntry,
+    bytes: &[u8],
+    prior_hashes: &BTreeMap<&str, &str>,
+    output_dir: &Path,
+    emitted_bundles: &mut Vec<ContentCatalogEntry>,
+    unchanged_bundles: &mut Vec<String>,
+) -> Result<(), BundleError> {
+    let is_unchanged = prior_hashes
+        .get(entry.bundle_name.as_str())
+        .is_some_and(|prior_hash| *prior_hash == entry.content_hash);
+
+    let dest_path = output_dir.join(&entry.staged_path);
+    if is_unchanged {
+        if dest_path.exists() {
+            fs::remove_file(&dest_path).map_err(|error| BundleError::Io {
+                path: dest_path,
+                message: error.to_string(),
+            })?;
+        }
+        unchanged_bundles.push(entry.bundle_name.clone());
+    } else {
+        if let Some(parent) = dest_path.parent() {
+            fs::create_dir_all(parent).map_err(|error| BundleError::Io {
+                path: parent.to_path_buf(),
+                message: error.to_string(),
+            })?;
+        }
+        fs::write(&dest_path, bytes).map_err(|error| BundleError::Io {
+            path: dest_path,
+            message: error.to_string(),
+        })?;
+        emitted_bundles.push(entry.clone());
+    }
+    Ok(())
+}
+
+fn write_content_bundles(
+    verified_bundles: Vec<(ContentCatalogEntry, Vec<u8>)>,
+    prior_hashes: &BTreeMap<&str, &str>,
+    output_dir: &Path,
+) -> Result<ContentBundleWriteOutcome, BundleError> {
     let mut bundles = Vec::with_capacity(verified_bundles.len());
     let mut emitted_bundles = Vec::new();
     let mut unchanged_bundles = Vec::new();
@@ -2048,50 +2112,31 @@ fn build_content_result(
 
     for (entry, bytes) in verified_bundles {
         total_content_bytes = total_content_bytes.saturating_add(entry.size_bytes);
-        let is_unchanged = prior_hashes
-            .get(entry.bundle_name.as_str())
-            .is_some_and(|prior_hash| *prior_hash == entry.content_hash);
-
-        let dest_path = output_dir.join(&entry.staged_path);
-        if is_unchanged {
-            if dest_path.exists() {
-                fs::remove_file(&dest_path).map_err(|error| BundleError::Io {
-                    path: dest_path,
-                    message: error.to_string(),
-                })?;
-            }
-            unchanged_bundles.push(entry.bundle_name.clone());
-        } else {
-            if let Some(parent) = dest_path.parent() {
-                fs::create_dir_all(parent).map_err(|error| BundleError::Io {
-                    path: parent.to_path_buf(),
-                    message: error.to_string(),
-                })?;
-            }
-            fs::write(&dest_path, &bytes).map_err(|error| BundleError::Io {
-                path: dest_path,
-                message: error.to_string(),
-            })?;
-            emitted_bundles.push(entry.clone());
-        }
+        write_content_bundle(
+            &entry,
+            &bytes,
+            prior_hashes,
+            output_dir,
+            &mut emitted_bundles,
+            &mut unchanged_bundles,
+        )?;
         bundles.push(entry);
     }
 
-    bundles.sort_by(|left, right| {
-        left.bundle_name
-            .cmp(&right.bundle_name)
-            .then_with(|| left.staged_path.cmp(&right.staged_path))
-    });
-    emitted_bundles.sort_by(|left, right| {
-        left.bundle_name
-            .cmp(&right.bundle_name)
-            .then_with(|| left.staged_path.cmp(&right.staged_path))
-    });
+    sort_content_entries(&mut bundles);
+    sort_content_entries(&mut emitted_bundles);
     unchanged_bundles.sort();
 
-    let compatible_player_versions = derive_compatible_player_versions(&config.version);
-    let profile_name = profile.map(|p| p.name.clone());
-    let catalog_id = match &profile_name {
+    Ok(ContentBundleWriteOutcome {
+        bundles,
+        emitted_bundles,
+        unchanged_bundles,
+        total_content_bytes,
+    })
+}
+
+fn content_catalog_id(config: &BuildConfiguration, profile_name: Option<&str>) -> String {
+    match profile_name {
         Some(prof) => format!(
             "catalog-{}-{}-{prof}",
             config.application_identifier,
@@ -2102,8 +2147,18 @@ fn build_content_result(
             config.application_identifier,
             config.target.identifier()
         ),
-    };
+    }
+}
 
+fn content_catalog_from_entries(
+    config: &BuildConfiguration,
+    player_compatibility_version: String,
+    profile_name: Option<String>,
+    catalog_id: String,
+    bundles: Vec<ContentCatalogEntry>,
+    total_content_bytes: u64,
+) -> ContentCatalog {
+    let compatible_player_versions = derive_compatible_player_versions(&config.version);
     let mut catalog = ContentCatalog {
         format_version: CONTENT_CATALOG_FORMAT_VERSION,
         catalog_id,
@@ -2117,21 +2172,7 @@ fn build_content_result(
         catalog_hash: String::new(),
     };
     catalog.catalog_hash = catalog.compute_catalog_hash();
-
-    let catalog_path = output_dir.join(CONTENT_CATALOG_FILENAME);
-    fs::write(&catalog_path, catalog.to_canonical_string()).map_err(|error| BundleError::Io {
-        path: catalog_path.clone(),
-        message: error.to_string(),
-    })?;
-
-    Ok(ContentBuildResult {
-        output_dir: output_dir.to_path_buf(),
-        catalog_path,
-        catalog,
-        emitted_bundles,
-        unchanged_bundles,
-        rejected_bundles: Vec::new(),
-    })
+    catalog
 }
 
 fn collect_verified_content_bundles(
@@ -2141,123 +2182,160 @@ fn collect_verified_content_bundles(
 ) -> Result<Vec<(ContentCatalogEntry, Vec<u8>)>, BundleError> {
     let mut verified_bundles = Vec::new();
     if let (Some(active_profile), Some(group_list)) = (profile, groups) {
-        if group_list.is_empty() {
-            return Err(BundleError::Validation(vec![BuildValidationError::new(
-                "addressables_groups",
-                "no Addressables groups were provided for content build",
-                "configure at least one AddressablesGroupConfig with one or more scene/asset paths",
-            )]));
-        }
-        for group in group_list {
-            let resolved_build_dir = active_profile
-                .resolve_template(&group.build_path_template, config.target)
-                .trim_end_matches('/')
-                .to_string();
-            let resolved_load_dir = active_profile
-                .resolve_template(&group.load_path_template, config.target)
-                .trim_end_matches('/')
-                .to_string();
-            for (index, scene_path) in group.scenes.iter().enumerate() {
-                if !scene_path.is_file() {
-                    return Err(BundleError::SceneMissing {
-                        path: scene_path.clone(),
-                    });
-                }
-                let bytes = fs::read(scene_path).map_err(|error| BundleError::Io {
-                    path: scene_path.clone(),
-                    message: error.to_string(),
-                })?;
-                let scene_graph =
-                    unitas_asset::assemble_scene_file(scene_path).map_err(|error| {
-                        BundleError::SceneAssembly {
-                            path: scene_path.clone(),
-                            message: error.to_string(),
-                        }
-                    })?;
-                let content_hash = content_hash_hex(&bytes);
-                let size_bytes = bytes.len() as u64;
-                let root_object_count = scene_graph.roots().len();
-                let file_name = scene_path
-                    .file_name()
-                    .and_then(|name| name.to_str())
-                    .unwrap_or("scene.unity");
-                let stem = scene_path
-                    .file_stem()
-                    .and_then(|name| name.to_str())
-                    .unwrap_or("scene");
-                let bundle_name = format!("{}_{index:03}_{stem}", group.group_name);
-                let build_path = format!("{resolved_build_dir}/{bundle_name}.bundle");
-                let load_path = format!("{resolved_load_dir}/{bundle_name}.bundle");
-                let staged_path = build_path.clone();
-                let source_path = normalize_scene_source_path(scene_path, file_name);
-
-                verified_bundles.push((
-                    ContentCatalogEntry {
-                        bundle_name,
-                        group_name: group.group_name.clone(),
-                        source_path,
-                        staged_path,
-                        build_path,
-                        load_path,
-                        content_hash,
-                        size_bytes,
-                        root_object_count,
-                        dependencies: group.dependencies.clone(),
-                    },
-                    bytes,
-                ));
-            }
-        }
+        collect_group_content_bundles(config, active_profile, group_list, &mut verified_bundles)?;
     } else {
-        for (index, scene_path) in config.scenes.iter().enumerate() {
-            if !scene_path.is_file() {
-                return Err(BundleError::SceneMissing {
-                    path: scene_path.clone(),
-                });
-            }
-            let bytes = fs::read(scene_path).map_err(|error| BundleError::Io {
-                path: scene_path.clone(),
-                message: error.to_string(),
-            })?;
-            let scene_graph = unitas_asset::assemble_scene_file(scene_path).map_err(|error| {
-                BundleError::SceneAssembly {
-                    path: scene_path.clone(),
-                    message: error.to_string(),
-                }
-            })?;
-            let content_hash = content_hash_hex(&bytes);
-            let size_bytes = bytes.len() as u64;
-            let root_object_count = scene_graph.roots().len();
-            let file_name = scene_path
-                .file_name()
-                .and_then(|name| name.to_str())
-                .unwrap_or("scene.unity");
-            let stem = scene_path
-                .file_stem()
-                .and_then(|name| name.to_str())
-                .unwrap_or("scene");
-            let bundle_name = format!("scene_{index:03}_{stem}");
-            let staged_path = format!("ContentBundles/{bundle_name}.bundle");
-            let source_path = normalize_scene_source_path(scene_path, file_name);
-
-            verified_bundles.push((
-                ContentCatalogEntry {
-                    bundle_name,
-                    group_name: String::from("default"),
-                    source_path,
-                    staged_path: staged_path.clone(),
-                    build_path: staged_path.clone(),
-                    load_path: staged_path,
-                    content_hash,
-                    size_bytes,
-                    root_object_count,
-                    dependencies: Vec::new(),
-                },
-                bytes,
-            ));
-        }
+        collect_scene_content_bundles(config, &mut verified_bundles)?;
     }
     Ok(verified_bundles)
+}
+
+fn collect_group_content_bundles(
+    config: &BuildConfiguration,
+    active_profile: &AddressablesProfile,
+    group_list: &[AddressablesGroupConfig],
+    verified_bundles: &mut Vec<(ContentCatalogEntry, Vec<u8>)>,
+) -> Result<(), BundleError> {
+    if group_list.is_empty() {
+        return Err(BundleError::Validation(vec![BuildValidationError::new(
+            "addressables_groups",
+            "no Addressables groups were provided for content build",
+            "configure at least one AddressablesGroupConfig with one or more scene/asset paths",
+        )]));
+    }
+    for group in group_list {
+        let resolved_build_dir = active_profile
+            .resolve_template(&group.build_path_template, config.target)
+            .trim_end_matches('/')
+            .to_string();
+        let resolved_load_dir = active_profile
+            .resolve_template(&group.load_path_template, config.target)
+            .trim_end_matches('/')
+            .to_string();
+        for (index, scene_path) in group.scenes.iter().enumerate() {
+            let bundle = group_bundle_entry(
+                group,
+                index,
+                scene_path,
+                &resolved_build_dir,
+                &resolved_load_dir,
+            )?;
+            verified_bundles.push(bundle);
+        }
+    }
+    Ok(())
+}
+
+fn collect_scene_content_bundles(
+    config: &BuildConfiguration,
+    verified_bundles: &mut Vec<(ContentCatalogEntry, Vec<u8>)>,
+) -> Result<(), BundleError> {
+    for (index, scene_path) in config.scenes.iter().enumerate() {
+        let bundle = scene_bundle_entry(index, scene_path)?;
+        verified_bundles.push(bundle);
+    }
+    Ok(())
+}
+
+fn read_scene_bundle_bytes(scene_path: &Path) -> Result<(Vec<u8>, usize), BundleError> {
+    if !scene_path.is_file() {
+        return Err(BundleError::SceneMissing {
+            path: scene_path.to_path_buf(),
+        });
+    }
+    let bytes = fs::read(scene_path).map_err(|error| BundleError::Io {
+        path: scene_path.to_path_buf(),
+        message: error.to_string(),
+    })?;
+    let scene_graph = unitas_asset::assemble_scene_file(scene_path).map_err(|error| {
+        BundleError::SceneAssembly {
+            path: scene_path.to_path_buf(),
+            message: error.to_string(),
+        }
+    })?;
+    Ok((bytes, scene_graph.roots().len()))
+}
+
+fn group_bundle_entry(
+    group: &AddressablesGroupConfig,
+    index: usize,
+    scene_path: &Path,
+    resolved_build_dir: &str,
+    resolved_load_dir: &str,
+) -> Result<(ContentCatalogEntry, Vec<u8>), BundleError> {
+    let (bytes, root_object_count) = read_scene_bundle_bytes(scene_path)?;
+    let file_name = scene_path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("scene.unity");
+    let stem = scene_path
+        .file_stem()
+        .and_then(|name| name.to_str())
+        .unwrap_or("scene");
+    let bundle_name = format!("{}_{index:03}_{stem}", group.group_name);
+    let build_path = format!("{resolved_build_dir}/{bundle_name}.bundle");
+    let load_path = format!("{resolved_load_dir}/{bundle_name}.bundle");
+    let staged_path = build_path.clone();
+    let source_path = normalize_scene_source_path(scene_path, file_name);
+    Ok((
+        ContentCatalogEntry {
+            bundle_name,
+            group_name: group.group_name.clone(),
+            source_path,
+            staged_path,
+            build_path,
+            load_path,
+            content_hash: content_hash_hex(&bytes),
+            size_bytes: bytes.len() as u64,
+            root_object_count,
+            dependencies: group.dependencies.clone(),
+        },
+        bytes,
+    ))
+}
+
+fn scene_bundle_entry(
+    index: usize,
+    scene_path: &Path,
+) -> Result<(ContentCatalogEntry, Vec<u8>), BundleError> {
+    let (bytes, root_object_count) = read_scene_bundle_bytes(scene_path)?;
+    let file_name = scene_path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("scene.unity");
+    let stem = scene_path
+        .file_stem()
+        .and_then(|name| name.to_str())
+        .unwrap_or("scene");
+    let bundle_name = format!("scene_{index:03}_{stem}");
+    let staged_path = format!("ContentBundles/{bundle_name}.bundle");
+    let source_path = normalize_scene_source_path(scene_path, file_name);
+    Ok((
+        ContentCatalogEntry {
+            bundle_name,
+            group_name: String::from("default"),
+            source_path,
+            staged_path: staged_path.clone(),
+            build_path: staged_path.clone(),
+            load_path: staged_path,
+            content_hash: content_hash_hex(&bytes),
+            size_bytes: bytes.len() as u64,
+            root_object_count,
+            dependencies: Vec::new(),
+        },
+        bytes,
+    ))
+}
+
+enum ValidatedContentInput {
+    Accepted(ContentCatalogEntry),
+    Rejected(RejectedContentBundle),
+}
+
+struct ValidatedContentInputs {
+    bundles: Vec<ContentCatalogEntry>,
+    emitted_bundles: Vec<ContentCatalogEntry>,
+    rejected_bundles: Vec<RejectedContentBundle>,
+    total_content_bytes: u64,
 }
 
 pub fn validate_content_bundle(
@@ -2272,155 +2350,215 @@ pub fn validate_content_bundle(
     })?;
 
     let expected_compat = expected_player_compatibility_version.trim();
+    let validated = validate_content_inputs(inputs, expected_target, expected_compat, output_dir)?;
+    let catalog = build_validated_catalog(
+        expected_target,
+        expected_compat,
+        validated.bundles,
+        validated.total_content_bytes,
+    );
+
+    let catalog_path = output_dir.join(CONTENT_CATALOG_FILENAME);
+    fs::write(&catalog_path, catalog.to_canonical_string()).map_err(|error| BundleError::Io {
+        path: catalog_path.clone(),
+        message: error.to_string(),
+    })?;
+
+    Ok(ContentBuildResult {
+        output_dir: output_dir.to_path_buf(),
+        catalog_path,
+        catalog,
+        emitted_bundles: validated.emitted_bundles,
+        unchanged_bundles: Vec::new(),
+        rejected_bundles: validated.rejected_bundles,
+    })
+}
+
+fn validate_content_inputs(
+    inputs: &[ContentBundleInput],
+    expected_target: BuildTarget,
+    expected_compat: &str,
+    output_dir: &Path,
+) -> Result<ValidatedContentInputs, BundleError> {
     let mut bundles = Vec::new();
     let mut emitted_bundles = Vec::new();
     let mut rejected_bundles = Vec::new();
     let mut total_content_bytes = 0u64;
 
     for input in inputs {
-        if !input.source_path.is_file() {
-            return Err(BundleError::SceneMissing {
-                path: input.source_path.clone(),
-            });
-        }
-        let bytes = fs::read(&input.source_path).map_err(|error| BundleError::Io {
-            path: input.source_path.clone(),
-            message: error.to_string(),
-        })?;
-
-        let staged_rel = input
-            .build_path
-            .clone()
-            .unwrap_or_else(|| format!("ContentBundles/{}.bundle", input.bundle_name));
-        let load_rel = input
-            .load_path
-            .clone()
-            .unwrap_or_else(|| staged_rel.clone());
-        let staged_dest = output_dir.join(&staged_rel);
-
-        if let Some(signature) = detect_unity_bundle_signature(&bytes) {
-            if staged_dest.exists() {
-                fs::remove_file(&staged_dest).map_err(|error| BundleError::Io {
-                    path: staged_dest,
-                    message: error.to_string(),
-                })?;
+        match validate_content_input(input, expected_target, expected_compat, output_dir)? {
+            ValidatedContentInput::Accepted(entry) => {
+                total_content_bytes = total_content_bytes.saturating_add(entry.size_bytes);
+                emitted_bundles.push(entry.clone());
+                bundles.push(entry);
             }
-            rejected_bundles.push(RejectedContentBundle {
-                bundle_name: input.bundle_name.clone(),
-                source_path: input.source_path.clone(),
-                reason: ContentRejectionReason::UnityBuiltArchive {
-                    signature: String::from(signature),
-                },
-            });
-            continue;
-        }
-
-        if input.target != expected_target {
-            if staged_dest.exists() {
-                fs::remove_file(&staged_dest).map_err(|error| BundleError::Io {
-                    path: staged_dest,
-                    message: error.to_string(),
-                })?;
+            ValidatedContentInput::Rejected(rejected) => {
+                rejected_bundles.push(rejected);
             }
-            rejected_bundles.push(RejectedContentBundle {
-                bundle_name: input.bundle_name.clone(),
-                source_path: input.source_path.clone(),
-                reason: ContentRejectionReason::TargetMismatch {
-                    bundle_target: input.target,
-                    expected_target,
-                },
-            });
-            continue;
         }
-
-        let input_compat = input.player_compatibility_version.trim();
-        if input_compat != expected_compat
-            && derive_player_compatibility_version(input_compat) != expected_compat
-        {
-            if staged_dest.exists() {
-                fs::remove_file(&staged_dest).map_err(|error| BundleError::Io {
-                    path: staged_dest,
-                    message: error.to_string(),
-                })?;
-            }
-            rejected_bundles.push(RejectedContentBundle {
-                bundle_name: input.bundle_name.clone(),
-                source_path: input.source_path.clone(),
-                reason: ContentRejectionReason::IncompatiblePlayerVersion {
-                    bundle_version: input.player_compatibility_version.clone(),
-                    expected_version: String::from(expected_compat),
-                },
-            });
-            continue;
-        }
-
-        let scene_graph = match unitas_asset::assemble_scene_file(&input.source_path) {
-            Ok(graph) => graph,
-            Err(error) => {
-                if staged_dest.exists() {
-                    fs::remove_file(&staged_dest).map_err(|io_err| BundleError::Io {
-                        path: staged_dest,
-                        message: io_err.to_string(),
-                    })?;
-                }
-                rejected_bundles.push(RejectedContentBundle {
-                    bundle_name: input.bundle_name.clone(),
-                    source_path: input.source_path.clone(),
-                    reason: ContentRejectionReason::UnreadableScene {
-                        message: error.to_string(),
-                    },
-                });
-                continue;
-            }
-        };
-
-        if let Some(parent) = staged_dest.parent() {
-            fs::create_dir_all(parent).map_err(|error| BundleError::Io {
-                path: parent.to_path_buf(),
-                message: error.to_string(),
-            })?;
-        }
-        fs::write(&staged_dest, &bytes).map_err(|error| BundleError::Io {
-            path: staged_dest,
-            message: error.to_string(),
-        })?;
-
-        let file_name = input
-            .source_path
-            .file_name()
-            .and_then(|name| name.to_str())
-            .unwrap_or("bundle.unity");
-        let source_path = normalize_scene_source_path(&input.source_path, file_name);
-        let size_bytes = bytes.len() as u64;
-        total_content_bytes = total_content_bytes.saturating_add(size_bytes);
-
-        let entry = ContentCatalogEntry {
-            bundle_name: input.bundle_name.clone(),
-            group_name: input.group_name.clone(),
-            source_path,
-            staged_path: staged_rel.clone(),
-            build_path: staged_rel,
-            load_path: load_rel,
-            content_hash: content_hash_hex(&bytes),
-            size_bytes,
-            root_object_count: scene_graph.roots().len(),
-            dependencies: input.dependencies.clone(),
-        };
-        emitted_bundles.push(entry.clone());
-        bundles.push(entry);
     }
 
-    bundles.sort_by(|left, right| {
-        left.bundle_name
-            .cmp(&right.bundle_name)
-            .then_with(|| left.staged_path.cmp(&right.staged_path))
-    });
-    emitted_bundles.sort_by(|left, right| {
-        left.bundle_name
-            .cmp(&right.bundle_name)
-            .then_with(|| left.staged_path.cmp(&right.staged_path))
-    });
+    sort_content_entries(&mut bundles);
+    sort_content_entries(&mut emitted_bundles);
 
+    Ok(ValidatedContentInputs {
+        bundles,
+        emitted_bundles,
+        rejected_bundles,
+        total_content_bytes,
+    })
+}
+
+fn content_input_rejection(
+    input: &ContentBundleInput,
+    expected_target: BuildTarget,
+    expected_compat: &str,
+    bytes: &[u8],
+) -> Option<ContentRejectionReason> {
+    if let Some(signature) = detect_unity_bundle_signature(bytes) {
+        return Some(ContentRejectionReason::UnityBuiltArchive {
+            signature: String::from(signature),
+        });
+    }
+    if input.target != expected_target {
+        return Some(ContentRejectionReason::TargetMismatch {
+            bundle_target: input.target,
+            expected_target,
+        });
+    }
+    let input_compat = input.player_compatibility_version.trim();
+    if input_compat != expected_compat
+        && derive_player_compatibility_version(input_compat) != expected_compat
+    {
+        return Some(ContentRejectionReason::IncompatiblePlayerVersion {
+            bundle_version: input.player_compatibility_version.clone(),
+            expected_version: String::from(expected_compat),
+        });
+    }
+    None
+}
+
+fn remove_staged_content(staged_dest: &Path) -> Result<(), BundleError> {
+    if staged_dest.exists() {
+        fs::remove_file(staged_dest).map_err(|error| BundleError::Io {
+            path: staged_dest.to_path_buf(),
+            message: error.to_string(),
+        })?;
+    }
+    Ok(())
+}
+
+fn write_staged_content(staged_dest: &Path, bytes: &[u8]) -> Result<(), BundleError> {
+    if let Some(parent) = staged_dest.parent() {
+        fs::create_dir_all(parent).map_err(|error| BundleError::Io {
+            path: parent.to_path_buf(),
+            message: error.to_string(),
+        })?;
+    }
+    fs::write(staged_dest, bytes).map_err(|error| BundleError::Io {
+        path: staged_dest.to_path_buf(),
+        message: error.to_string(),
+    })?;
+    Ok(())
+}
+
+fn rejected_content_bundle(
+    input: &ContentBundleInput,
+    reason: ContentRejectionReason,
+) -> RejectedContentBundle {
+    RejectedContentBundle {
+        bundle_name: input.bundle_name.clone(),
+        source_path: input.source_path.clone(),
+        reason,
+    }
+}
+
+fn accepted_content_entry(
+    input: &ContentBundleInput,
+    bytes: &[u8],
+    root_object_count: usize,
+    staged_rel: String,
+    load_rel: String,
+) -> ContentCatalogEntry {
+    let file_name = input
+        .source_path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("bundle.unity");
+    let source_path = normalize_scene_source_path(&input.source_path, file_name);
+    let size_bytes = bytes.len() as u64;
+    ContentCatalogEntry {
+        bundle_name: input.bundle_name.clone(),
+        group_name: input.group_name.clone(),
+        source_path,
+        staged_path: staged_rel.clone(),
+        build_path: staged_rel,
+        load_path: load_rel,
+        content_hash: content_hash_hex(bytes),
+        size_bytes,
+        root_object_count,
+        dependencies: input.dependencies.clone(),
+    }
+}
+
+fn validate_content_input(
+    input: &ContentBundleInput,
+    expected_target: BuildTarget,
+    expected_compat: &str,
+    output_dir: &Path,
+) -> Result<ValidatedContentInput, BundleError> {
+    if !input.source_path.is_file() {
+        return Err(BundleError::SceneMissing {
+            path: input.source_path.clone(),
+        });
+    }
+    let bytes = fs::read(&input.source_path).map_err(|error| BundleError::Io {
+        path: input.source_path.clone(),
+        message: error.to_string(),
+    })?;
+
+    let staged_rel = input
+        .build_path
+        .clone()
+        .unwrap_or_else(|| format!("ContentBundles/{}.bundle", input.bundle_name));
+    let load_rel = input
+        .load_path
+        .clone()
+        .unwrap_or_else(|| staged_rel.clone());
+    let staged_dest = output_dir.join(&staged_rel);
+
+    if let Some(reason) = content_input_rejection(input, expected_target, expected_compat, &bytes) {
+        remove_staged_content(&staged_dest)?;
+        return Ok(ValidatedContentInput::Rejected(rejected_content_bundle(
+            input, reason,
+        )));
+    }
+
+    let scene_graph = match unitas_asset::assemble_scene_file(&input.source_path) {
+        Ok(graph) => graph,
+        Err(error) => {
+            remove_staged_content(&staged_dest)?;
+            let reason = ContentRejectionReason::UnreadableScene {
+                message: error.to_string(),
+            };
+            return Ok(ValidatedContentInput::Rejected(rejected_content_bundle(
+                input, reason,
+            )));
+        }
+    };
+
+    write_staged_content(&staged_dest, &bytes)?;
+    let root_object_count = scene_graph.roots().len();
+    let entry = accepted_content_entry(input, &bytes, root_object_count, staged_rel, load_rel);
+    Ok(ValidatedContentInput::Accepted(entry))
+}
+
+fn build_validated_catalog(
+    expected_target: BuildTarget,
+    expected_compat: &str,
+    bundles: Vec<ContentCatalogEntry>,
+    total_content_bytes: u64,
+) -> ContentCatalog {
     let mut catalog = ContentCatalog {
         format_version: CONTENT_CATALOG_FORMAT_VERSION,
         catalog_id: format!(
@@ -2438,415 +2576,8 @@ pub fn validate_content_bundle(
         catalog_hash: String::new(),
     };
     catalog.catalog_hash = catalog.compute_catalog_hash();
-
-    let catalog_path = output_dir.join(CONTENT_CATALOG_FILENAME);
-    fs::write(&catalog_path, catalog.to_canonical_string()).map_err(|error| BundleError::Io {
-        path: catalog_path.clone(),
-        message: error.to_string(),
-    })?;
-
-    Ok(ContentBuildResult {
-        output_dir: output_dir.to_path_buf(),
-        catalog_path,
-        catalog,
-        emitted_bundles,
-        unchanged_bundles: Vec::new(),
-        rejected_bundles,
-    })
+    catalog
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use std::ffi::OsStr;
-    use std::sync::atomic::{AtomicU64, Ordering};
-
-    static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
-
-    fn temp_dir(label: &str) -> Result<PathBuf, Box<dyn std::error::Error>> {
-        let id = TEMP_COUNTER.fetch_add(1, Ordering::Relaxed);
-        let dir = std::env::temp_dir().join(format!(
-            "unitas_build_bundle_test_{label}_{}_{id}",
-            std::process::id()
-        ));
-        if dir.exists() {
-            fs::remove_dir_all(&dir)?;
-        }
-        fs::create_dir_all(&dir)?;
-        Ok(dir)
-    }
-
-    fn sample_unity_scene(root_name: &str) -> String {
-        format!(
-            "%YAML 1.1\n%TAG !u! tag:unity3d.com,2011:\n--- !u!1 &100\nGameObject:\n  m_Name: {root_name}\n--- !u!4 &101\nTransform:\n  m_GameObject: {{fileID: 100}}\n  m_Father: {{fileID: 0}}\n  m_Children: []\n  m_LocalPosition: {{x: 0, y: 0, z: 0}}\n  m_LocalRotation: {{x: 0, y: 0, z: 0, w: 1}}\n  m_LocalScale: {{x: 1, y: 1, z: 1}}\n"
-        )
-    }
-
-    #[test]
-    fn content_hash_hex_matches_sha256_test_vectors() {
-        let expected_empty = [
-            "e3b0c442", "98fc1c14", "9afbf4c8", "996fb924", "27ae41e4", "649b934c", "a495991b",
-            "7852b855",
-        ]
-        .concat();
-        let expected_abc = [
-            "ba7816bf", "8f01cfea", "414140de", "5dae2223", "b00361a3", "96177a9c", "b410ff61",
-            "f20015ad",
-        ]
-        .concat();
-        assert_eq!(content_hash_hex(b""), expected_empty);
-        assert_eq!(content_hash_hex(b"abc"), expected_abc);
-    }
-
-    #[test]
-    fn repeated_builds_produce_byte_identical_manifests_and_hashes(
-    ) -> Result<(), Box<dyn std::error::Error>> {
-        let workspace = temp_dir("determinism")?;
-        let scenes_dir = workspace.join("Project").join("Assets").join("Scenes");
-        fs::create_dir_all(&scenes_dir)?;
-        let main_scene = scenes_dir.join("Main.unity");
-        let level_scene = scenes_dir.join("LevelTwo.unity");
-        fs::write(&main_scene, sample_unity_scene("MainRoot"))?;
-        fs::write(&level_scene, sample_unity_scene("LevelRoot"))?;
-
-        let host = BuildTarget::MACOS_ARM64;
-        let config = BuildConfiguration::new(
-            vec![main_scene, level_scene],
-            "Unitas",
-            "DeterministicGame",
-            "com.unitas.deterministic",
-            "1.2.3",
-            host,
-        );
-
-        let out_one = workspace.join("out_one");
-        let out_two = workspace.join("out_two");
-
-        let bundle_one = stage_bundle_for_host(&config, &out_one, Some(host))?;
-        let bundle_two = stage_bundle_for_host(&config, &out_two, Some(host))?;
-
-        let manifest_bytes_one = fs::read(&bundle_one.manifest_path)?;
-        let manifest_bytes_two = fs::read(&bundle_two.manifest_path)?;
-        assert_eq!(manifest_bytes_one, manifest_bytes_two);
-        assert_eq!(bundle_one.manifest, bundle_two.manifest);
-        assert_eq!(
-            bundle_one.manifest.manifest_hash,
-            bundle_two.manifest.manifest_hash
-        );
-        assert_eq!(bundle_one.manifest.manifest_hash.len(), 64);
-        assert_eq!(bundle_one.manifest.entries.len(), 2);
-        assert_eq!(
-            bundle_one.manifest.startup_scene_staged_path,
-            "Assets/scene_000_Main.unity"
-        );
-        for entry in &bundle_one.manifest.entries {
-            assert_eq!(entry.root_object_count, 1);
-            assert_eq!(entry.content_hash.len(), 64);
-            assert!(out_one.join(&entry.staged_path).is_file());
-        }
-        assert!(bundle_one.launch_artifact_path.is_file());
-
-        let round_trip = BundleManifest::load_from_dir(&out_one)?;
-        assert_eq!(round_trip, bundle_one.manifest);
-
-        fs::remove_dir_all(&workspace)?;
-        Ok(())
-    }
-
-    #[test]
-    fn development_and_release_builds_differ_by_diagnostics_marker_and_clean_stale_marker(
-    ) -> Result<(), Box<dyn std::error::Error>> {
-        let workspace = temp_dir("dev_vs_release")?;
-        let scene_path = workspace.join("Main.unity");
-        fs::write(&scene_path, sample_unity_scene("PlayerRoot"))?;
-
-        let host = BuildTarget::MACOS_ARM64;
-        let out_dir = workspace.join("build_out");
-
-        let dev_config = BuildConfiguration::new(
-            vec![scene_path.clone()],
-            "Unitas",
-            "DiagGame",
-            "com.unitas.diag",
-            "0.5.0",
-            host,
-        )
-        .with_development_build(true);
-
-        let dev_bundle = stage_bundle_for_host(&dev_config, &out_dir, Some(host))?;
-        assert!(dev_bundle.manifest.development_diagnostics);
-        assert_eq!(
-            dev_bundle.manifest.diagnostics_marker,
-            Some(DEVELOPMENT_DIAGNOSTICS_MARKER_VALUE.to_string())
-        );
-        let marker_path = out_dir.join(DEVELOPMENT_DIAGNOSTICS_MARKER_FILENAME);
-        assert_eq!(
-            dev_bundle.diagnostics_marker_path,
-            Some(marker_path.clone())
-        );
-        assert!(marker_path.is_file());
-
-        let release_config = dev_config.with_development_build(false);
-        let release_bundle = stage_bundle_for_host(&release_config, &out_dir, Some(host))?;
-        assert!(!release_bundle.manifest.development_diagnostics);
-        assert_eq!(release_bundle.manifest.diagnostics_marker, None);
-        assert_eq!(release_bundle.diagnostics_marker_path, None);
-        assert!(!marker_path.exists());
-        assert_ne!(
-            dev_bundle.manifest.manifest_hash,
-            release_bundle.manifest.manifest_hash
-        );
-
-        let loaded_release = BundleManifest::load_from_dir(&out_dir)?;
-        assert_eq!(loaded_release, release_bundle.manifest);
-
-        fs::remove_dir_all(&workspace)?;
-        Ok(())
-    }
-
-    #[test]
-    fn missing_or_malformed_scene_fails_without_writing_manifest_or_launch_artifact(
-    ) -> Result<(), Box<dyn std::error::Error>> {
-        let workspace = temp_dir("invalid_scenes")?;
-        let host = BuildTarget::MACOS_ARM64;
-
-        let missing_scene = workspace.join("DoesNotExist.unity");
-        let missing_out = workspace.join("missing_out");
-        let missing_config = BuildConfiguration::new(
-            vec![missing_scene],
-            "Unitas",
-            "MissingSceneGame",
-            "com.unitas.missing",
-            "1.0.0",
-            host,
-        );
-
-        let missing_result = stage_bundle_for_host(&missing_config, &missing_out, Some(host));
-        assert!(matches!(
-            missing_result,
-            Err(BundleError::SceneMissing { .. })
-        ));
-        assert!(!missing_out.join(BUNDLE_MANIFEST_FILENAME).exists());
-        assert!(!missing_out
-            .join(host.executable_name(&missing_config.product_name))
-            .exists());
-
-        let broken_scene = workspace.join("Broken.unity");
-        fs::write(
-            &broken_scene,
-            "%YAML 1.1\n\
-%TAG !u! tag:unity3d.com,2011:\n\
---- !u!4 &201\n\
-Transform:\n\
-  m_GameObject: {fileID: 999}\n",
-        )?;
-        let broken_out = workspace.join("broken_out");
-        let broken_config = BuildConfiguration::new(
-            vec![broken_scene],
-            "Unitas",
-            "BrokenSceneGame",
-            "com.unitas.broken",
-            "1.0.0",
-            host,
-        );
-
-        let broken_result = stage_bundle_for_host(&broken_config, &broken_out, Some(host));
-        assert!(matches!(
-            broken_result,
-            Err(BundleError::SceneAssembly { .. })
-        ));
-        assert!(!broken_out.join(BUNDLE_MANIFEST_FILENAME).exists());
-        assert!(!broken_out
-            .join(host.executable_name(&broken_config.product_name))
-            .exists());
-
-        fs::remove_dir_all(&workspace)?;
-        Ok(())
-    }
-
-    #[test]
-    fn staged_desktop_launcher_is_the_player_binary() -> Result<(), Box<dyn std::error::Error>> {
-        let workspace = temp_dir("desktop_launcher")?;
-        let scenes_dir = workspace.join("Project").join("Assets").join("Scenes");
-        fs::create_dir_all(&scenes_dir)?;
-        let main_scene = scenes_dir.join("Main.unity");
-        fs::write(&main_scene, sample_unity_scene("MainRoot"))?;
-
-        let player_binary =
-            package::locate_player_binary().ok_or("the unitas player binary has not been built")?;
-        let player_binary_bytes = fs::read(&player_binary)?;
-
-        for (target, launcher_name) in [
-            (BuildTarget::WINDOWS_X86_64, "PackagedGame.exe"),
-            (BuildTarget::LINUX_X86_64, "PackagedGame"),
-        ] {
-            let config = BuildConfiguration::new(
-                vec![main_scene.clone()],
-                "Unitas",
-                "PackagedGame",
-                "com.unitas.packaged",
-                "1.0.0",
-                target,
-            );
-            let output_dir = workspace.join(format!("out_{}", target.identifier()));
-            let staged = stage_bundle_for_host(&config, &output_dir, Some(target))?;
-
-            assert_eq!(
-                staged
-                    .launch_artifact_path
-                    .file_name()
-                    .and_then(|name| name.to_str()),
-                Some(launcher_name)
-            );
-            assert_eq!(
-                fs::read(&staged.launch_artifact_path)?,
-                player_binary_bytes,
-                "the staged launcher of {target} is not the player binary"
-            );
-
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::PermissionsExt;
-                let mode = fs::metadata(&staged.launch_artifact_path)?
-                    .permissions()
-                    .mode();
-                assert_eq!(
-                    mode & 0o111,
-                    0o111,
-                    "the staged launcher of {target} is not executable"
-                );
-            }
-        }
-
-        fs::remove_dir_all(&workspace)?;
-        Ok(())
-    }
-
-    #[test]
-    fn script_compile_cache_key_separates_debug_and_non_debug_compiles(
-    ) -> Result<(), Box<dyn std::error::Error>> {
-        let workspace = temp_dir("compile_cache_key")?;
-        let scripts_dir = workspace.join("Assets").join("Scripts");
-        fs::create_dir_all(&scripts_dir)?;
-        fs::write(scripts_dir.join("Player.cs"), "public class Player { }\n")?;
-
-        let release_key = script_compile_cache_key(&workspace, &workspace, false);
-        let debug_key = script_compile_cache_key(&workspace, &workspace, true);
-        assert_ne!(release_key, debug_key);
-        assert_eq!(
-            release_key,
-            script_compile_cache_key(&workspace, &workspace, false)
-        );
-
-        fs::remove_dir_all(&workspace)?;
-        Ok(())
-    }
-
-    #[test]
-    fn script_compile_command_passes_the_debug_flag_only_for_debugging_compiles() {
-        let release = script_compile_command(
-            Path::new("/bridge/Unitas.Scripting.dll"),
-            Path::new("/project"),
-            Path::new("/staging"),
-            false,
-        );
-        let debug = script_compile_command(
-            Path::new("/bridge/Unitas.Scripting.dll"),
-            Path::new("/project"),
-            Path::new("/staging"),
-            true,
-        );
-        let release_args: Vec<&OsStr> = release.get_args().collect();
-        let debug_args: Vec<&OsStr> = debug.get_args().collect();
-        assert!(release_args.contains(&OsStr::new("--player")));
-        assert!(debug_args.contains(&OsStr::new("compile")));
-        assert!(!release_args.contains(&OsStr::new("--debug")));
-        assert!(debug_args.contains(&OsStr::new("--debug")));
-    }
-
-    #[test]
-    fn staging_records_script_host_from_whether_project_carries_scripts(
-    ) -> Result<(), Box<dyn std::error::Error>> {
-        let workspace = temp_dir("script_host_manifest")?;
-        let host = BuildTarget::MACOS_ARM64;
-
-        let scriptless_scenes = workspace.join("Scriptless").join("Assets").join("Scenes");
-        fs::create_dir_all(&scriptless_scenes)?;
-        let scriptless_scene = scriptless_scenes.join("Main.unity");
-        fs::write(&scriptless_scene, sample_unity_scene("MainRoot"))?;
-        let scriptless_config = BuildConfiguration::new(
-            vec![scriptless_scene],
-            "Unitas",
-            "ScriptlessGame",
-            "com.unitas.scriptless",
-            "1.0.0",
-            host,
-        );
-        let scriptless_out = workspace.join("scriptless_out");
-        let scriptless_staged =
-            stage_bundle_for_host(&scriptless_config, &scriptless_out, Some(host))?;
-        assert_eq!(
-            scriptless_staged.manifest.format_version,
-            BUNDLE_MANIFEST_FORMAT_VERSION
-        );
-        assert_eq!(scriptless_staged.manifest.script_host, ScriptHost::None);
-        assert!(fs::read_to_string(&scriptless_staged.manifest_path)?.contains("script_host=none"));
-
-        let scripted_root = workspace.join("Scripted");
-        let scripted_scenes = scripted_root.join("Assets").join("Scenes");
-        let scripted_scripts = scripted_root.join("Assets").join("Scripts");
-        fs::create_dir_all(&scripted_scenes)?;
-        fs::create_dir_all(&scripted_scripts)?;
-        let models_dir = scripted_root.join("Assets").join("Models");
-        fs::create_dir_all(&models_dir)?;
-        fs::write(
-            models_dir.join("Quad.obj"),
-            "o Quad\nv 0.0 0.0 0.0\nv 1.0 0.0 0.0\nv 1.0 1.0 0.0\nv 0.0 1.0 0.0\nvn 0.0 0.0 1.0\nvt 0.0 0.0\nvt 1.0 0.0\nvt 1.0 1.0\nvt 0.0 1.0\nf 1/1/1 2/2/1 3/3/1\nf 1/1/1 3/3/1 4/4/1\n",
-        )?;
-        fs::write(
-            models_dir.join("Quad.obj.meta"),
-            "fileFormatVersion: 2\nguid: 1234567890abcdef1234567890abcdef\n",
-        )?;
-        fs::write(models_dir.join("Dummy.gltf"), b"not used")?;
-        fs::write(models_dir.join("Dummy.glb"), b"not used")?;
-        let scripted_scene = scripted_scenes.join("Main.unity");
-        fs::write(&scripted_scene, sample_unity_scene("MainRoot"))?;
-        fs::write(
-            scripted_scripts.join("Controller.cs"),
-            "public class Controller { }\n",
-        )?;
-        let scripted_config = BuildConfiguration::new(
-            vec![scripted_scene],
-            "Unitas",
-            "ScriptedGame",
-            "com.unitas.scripted",
-            "1.0.0",
-            host,
-        );
-        let scripted_out = workspace.join("scripted_out");
-        let scripted_staged = stage_bundle_for_host(&scripted_config, &scripted_out, Some(host))?;
-        assert_eq!(
-            scripted_staged.manifest.format_version,
-            BUNDLE_MANIFEST_FORMAT_VERSION
-        );
-        assert_eq!(scripted_staged.manifest.script_host, ScriptHost::CoreClr);
-        assert!(fs::read_to_string(&scripted_staged.manifest_path)?.contains("script_host=coreclr"));
-
-        let round_trip = BundleManifest::load_from_dir(&scripted_out)?;
-        assert_eq!(round_trip.script_host, ScriptHost::CoreClr);
-        assert!(!scripted_out.join("Assets/Models/Quad.obj").exists());
-        assert!(!scripted_out.join("Assets/Models/Dummy.gltf").exists());
-        assert!(!scripted_out.join("Assets/Models/Dummy.glb").exists());
-        assert!(scripted_out.join("Assets/Models/Quad.obj.meta").is_file());
-        let cooked_dir = scripted_out.join(crate::cooked::COOKED_MESH_DIR_NAME);
-        let mesh_manifest = crate::cooked::CookedMeshManifest::load_from_dir(&cooked_dir)
-            .ok_or("expected cooked mesh manifest")?;
-        let quad_entry = mesh_manifest
-            .get_by_asset_path("Assets/Models/Quad.obj")
-            .ok_or("expected Assets/Models/Quad.obj entry")?;
-        assert!(cooked_dir.join(&quad_entry.cooked_path).is_file());
-
-        fs::remove_dir_all(&workspace)?;
-        Ok(())
-    }
-}
+mod tests;

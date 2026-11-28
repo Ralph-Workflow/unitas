@@ -2,8 +2,9 @@ use std::error::Error;
 
 use unitas_animation::{
     AnimatedValue, AnimationClip, AnimationDiagnostic, AnimationEvent, Animator,
-    AnimatorController, AnimatorState, ConditionOp, CurveBinding, CurveBindingTarget, FloatCurve,
-    Keyframe, ParameterDef, PropertyCurve, StateMotion, StateTransition, TransitionCondition,
+    AnimatorController, AnimatorState, AnimatorStepResult, BlendTree2DMode, ConditionOp,
+    CurveBinding, CurveBindingTarget, FloatCurve, InterruptionSource, Keyframe, ParameterDef,
+    PropertyCurve, StateMachineCallbackKind, StateMotion, StateTransition, TransitionCondition,
     TransitionTarget, WrapMode,
 };
 
@@ -21,6 +22,516 @@ fn simple_clip(name: &str, duration: f32, x0: f32, x1: f32) -> AnimationClip {
             ]),
         )],
         Vec::new(),
+    )
+}
+
+fn build_combat_controller() -> AnimatorController {
+    AnimatorController::new(
+        "Combat",
+        vec![
+            ParameterDef::bool("grounded", false),
+            ParameterDef::int("stance", 0),
+            ParameterDef::bool("override", false),
+        ],
+        vec![
+            AnimatorState::new("Air", StateMotion::Clip(simple_clip("Air", 1.0, 0.0, 1.0))),
+            AnimatorState::new(
+                "Ready",
+                StateMotion::Clip(simple_clip("Ready", 1.0, 5.0, 5.0)),
+            ),
+        ],
+        0,
+        vec![
+            StateTransition::instant(
+                0,
+                TransitionTarget::State(1),
+                vec![
+                    TransitionCondition::new("grounded", ConditionOp::If),
+                    TransitionCondition::new("stance", ConditionOp::Equals(2)),
+                ],
+            ),
+            StateTransition::instant(
+                0,
+                TransitionTarget::State(1),
+                vec![TransitionCondition::new("override", ConditionOp::If)],
+            ),
+            StateTransition::instant(
+                1,
+                TransitionTarget::State(0),
+                vec![
+                    TransitionCondition::new("grounded", ConditionOp::IfNot),
+                    TransitionCondition::new("stance", ConditionOp::NotEqual(2)),
+                ],
+            ),
+        ],
+    )
+}
+
+fn build_blend_idle_clip() -> AnimationClip {
+    AnimationClip::new(
+        "Idle",
+        1.0,
+        60.0,
+        WrapMode::Loop,
+        vec![
+            CurveBinding::float(
+                CurveBindingTarget::new("", "Transform", "localPosition.x"),
+                FloatCurve::new(vec![Keyframe::linear(0.0, 0.0), Keyframe::linear(1.0, 0.0)]),
+            ),
+            CurveBinding::new(
+                CurveBindingTarget::new("", "Transform", "localRotation"),
+                PropertyCurve::Quaternion([
+                    FloatCurve::new(vec![Keyframe::linear(0.0, 0.0)]),
+                    FloatCurve::new(vec![Keyframe::linear(0.0, 0.0)]),
+                    FloatCurve::new(vec![Keyframe::linear(0.0, 0.0)]),
+                    FloatCurve::new(vec![Keyframe::linear(0.0, 1.0)]),
+                ]),
+            ),
+        ],
+        Vec::new(),
+    )
+}
+
+fn build_blend_walk_clip(s: f32) -> AnimationClip {
+    AnimationClip::new(
+        "Walk",
+        1.0,
+        60.0,
+        WrapMode::Loop,
+        vec![
+            CurveBinding::float(
+                CurveBindingTarget::new("", "Transform", "localPosition.x"),
+                FloatCurve::new(vec![Keyframe::linear(0.0, 4.0), Keyframe::linear(1.0, 4.0)]),
+            ),
+            CurveBinding::new(
+                CurveBindingTarget::new("", "Transform", "localRotation"),
+                PropertyCurve::Quaternion([
+                    FloatCurve::new(vec![Keyframe::linear(0.0, 0.0)]),
+                    FloatCurve::new(vec![Keyframe::linear(0.0, s)]),
+                    FloatCurve::new(vec![Keyframe::linear(0.0, 0.0)]),
+                    FloatCurve::new(vec![Keyframe::linear(0.0, s)]),
+                ]),
+            ),
+        ],
+        Vec::new(),
+    )
+}
+
+fn build_blend_run_clip(s: f32) -> AnimationClip {
+    AnimationClip::new(
+        "Run",
+        1.0,
+        60.0,
+        WrapMode::Loop,
+        vec![
+            CurveBinding::float(
+                CurveBindingTarget::new("", "Transform", "localPosition.x"),
+                FloatCurve::new(vec![
+                    Keyframe::linear(0.0, 10.0),
+                    Keyframe::linear(1.0, 10.0),
+                ]),
+            ),
+            CurveBinding::new(
+                CurveBindingTarget::new("", "Transform", "localRotation"),
+                PropertyCurve::Quaternion([
+                    FloatCurve::new(vec![Keyframe::linear(0.0, 0.0)]),
+                    FloatCurve::new(vec![Keyframe::linear(0.0, s)]),
+                    FloatCurve::new(vec![Keyframe::linear(0.0, 0.0)]),
+                    FloatCurve::new(vec![Keyframe::linear(0.0, s)]),
+                ]),
+            ),
+        ],
+        Vec::new(),
+    )
+}
+
+fn build_broken_controller() -> AnimatorController {
+    let invalid_clip = AnimationClip::new(
+        "BadClip",
+        1.0,
+        60.0,
+        WrapMode::Once,
+        vec![CurveBinding::float(
+            CurveBindingTarget::new("", "", "localPosition.x"),
+            FloatCurve::new(vec![Keyframe::linear(0.0, 1.0)]),
+        )],
+        Vec::new(),
+    );
+
+    AnimatorController::new(
+        "Broken",
+        vec![ParameterDef::float("speed", 0.0)],
+        vec![
+            AnimatorState::new("Entry", StateMotion::Clip(invalid_clip)),
+            AnimatorState::new("EmptyMotion", StateMotion::None),
+            AnimatorState::new(
+                "BadBlend",
+                StateMotion::BlendTree1D {
+                    parameter: "missing_blend_param".to_string(),
+                    thresholds: Vec::new(),
+                },
+            ),
+            AnimatorState::new(
+                "Orphan",
+                StateMotion::Clip(simple_clip("OrphanClip", 1.0, 0.0, 1.0)),
+            ),
+        ],
+        0,
+        vec![
+            StateTransition::instant(
+                0,
+                TransitionTarget::State(1),
+                vec![TransitionCondition::new(
+                    "missing_cond_param",
+                    ConditionOp::If,
+                )],
+            ),
+            StateTransition::instant(0, TransitionTarget::State(1), Vec::new()),
+            StateTransition::instant(0, TransitionTarget::State(2), Vec::new()),
+        ],
+    )
+}
+
+fn build_disjoint_fade_clip_a() -> AnimationClip {
+    AnimationClip::new(
+        "A",
+        1.0,
+        60.0,
+        WrapMode::Loop,
+        vec![
+            CurveBinding::float(
+                CurveBindingTarget::transform("", "localPosition.x"),
+                FloatCurve::new(vec![Keyframe::linear(0.0, 0.0)]),
+            ),
+            CurveBinding::float(
+                CurveBindingTarget::transform("", "localPosition.y"),
+                FloatCurve::new(vec![Keyframe::linear(0.0, 3.0)]),
+            ),
+        ],
+        Vec::new(),
+    )
+}
+
+fn build_disjoint_fade_clip_b() -> AnimationClip {
+    AnimationClip::new(
+        "B",
+        1.0,
+        60.0,
+        WrapMode::Loop,
+        vec![
+            CurveBinding::float(
+                CurveBindingTarget::transform("", "localPosition.x"),
+                FloatCurve::new(vec![Keyframe::linear(0.0, 10.0)]),
+            ),
+            CurveBinding::float(
+                CurveBindingTarget::transform("", "localPosition.z"),
+                FloatCurve::new(vec![Keyframe::linear(0.0, 7.0)]),
+            ),
+        ],
+        Vec::new(),
+    )
+}
+
+fn build_outcome_28_parameters() -> Vec<ParameterDef> {
+    vec![
+        ParameterDef::float("vel_x", 1.0),
+        ParameterDef::float("vel_y", 0.0),
+        ParameterDef::float("w_right", 0.25),
+        ParameterDef::float("w_up", 0.75),
+        ParameterDef::bool("to_direct", false),
+        ParameterDef::trigger("interrupt"),
+    ]
+}
+
+fn build_outcome_28_states() -> Vec<AnimatorState> {
+    let clip_center = simple_clip("Center", 1.0, 0.0, 0.0);
+    let clip_right = simple_clip("Right", 1.0, 10.0, 10.0);
+    let clip_up = simple_clip("Up", 1.0, 0.0, 20.0);
+
+    let tree_2d = StateMotion::BlendTree2D {
+        mode: BlendTree2DMode::SimpleDirectional,
+        parameter_x: "vel_x".to_string(),
+        parameter_y: "vel_y".to_string(),
+        children: vec![
+            ([0.0, 0.0], clip_center),
+            ([1.0, 0.0], clip_right.clone()),
+            ([0.0, 1.0], clip_up.clone()),
+        ],
+    };
+
+    let tree_direct = StateMotion::BlendTreeDirect {
+        children: vec![
+            ("w_right".to_string(), clip_right.clone()),
+            ("w_up".to_string(), clip_up.clone()),
+        ],
+    };
+
+    vec![
+        AnimatorState::new("State2D", tree_2d),
+        AnimatorState::new("StateDirect", tree_direct),
+        AnimatorState::new("InterruptedTarget", StateMotion::Clip(clip_right)),
+    ]
+}
+
+fn build_outcome_28_transitions() -> Vec<StateTransition> {
+    let mut tr_a_to_b = StateTransition::new(
+        0,
+        TransitionTarget::State(1),
+        vec![TransitionCondition::new("to_direct", ConditionOp::If)],
+        false,
+        0.0,
+        1.0,
+    );
+    tr_a_to_b.interruption_source = InterruptionSource::Source;
+
+    let tr_a_to_c = StateTransition::new(
+        0,
+        TransitionTarget::State(2),
+        vec![TransitionCondition::new("interrupt", ConditionOp::If)],
+        false,
+        0.0,
+        0.0,
+    );
+
+    vec![tr_a_to_b, tr_a_to_c]
+}
+
+fn build_outcome_28_controller() -> AnimatorController {
+    AnimatorController::new(
+        "ANI001Outcome28",
+        build_outcome_28_parameters(),
+        build_outcome_28_states(),
+        0,
+        build_outcome_28_transitions(),
+    )
+}
+
+fn build_outcome_29_clip_xy() -> AnimationClip {
+    AnimationClip::new(
+        "MoveXY",
+        1.0,
+        60.0,
+        WrapMode::Loop,
+        vec![
+            CurveBinding::float(
+                CurveBindingTarget::transform("", "localPosition.x"),
+                FloatCurve::new(vec![Keyframe::linear(0.0, 1.0), Keyframe::linear(1.0, 5.0)]),
+            ),
+            CurveBinding::float(
+                CurveBindingTarget::transform("", "localPosition.y"),
+                FloatCurve::new(vec![Keyframe::linear(0.0, 2.0), Keyframe::linear(1.0, 8.0)]),
+            ),
+        ],
+        Vec::new(),
+    )
+}
+
+fn build_outcome_29_clip_x_only() -> AnimationClip {
+    AnimationClip::new(
+        "MoveXOnly",
+        1.0,
+        60.0,
+        WrapMode::Loop,
+        vec![CurveBinding::float(
+            CurveBindingTarget::transform("", "localPosition.x"),
+            FloatCurve::new(vec![
+                Keyframe::linear(0.0, 10.0),
+                Keyframe::linear(1.0, 10.0),
+            ]),
+        )],
+        Vec::new(),
+    )
+}
+
+fn build_outcome_29_controller() -> AnimatorController {
+    AnimatorController::new(
+        "ANI001Outcome29",
+        vec![ParameterDef::int("phase", 0)],
+        vec![
+            AnimatorState::with_write_defaults(
+                "FullXY",
+                StateMotion::Clip(build_outcome_29_clip_xy()),
+                true,
+            ),
+            AnimatorState::with_write_defaults(
+                "NoDefaultsX",
+                StateMotion::Clip(build_outcome_29_clip_x_only()),
+                false,
+            ),
+            AnimatorState::with_write_defaults(
+                "WithDefaultsX",
+                StateMotion::Clip(build_outcome_29_clip_x_only()),
+                true,
+            ),
+        ],
+        0,
+        vec![
+            StateTransition::instant(
+                0,
+                TransitionTarget::State(1),
+                vec![TransitionCondition::new("phase", ConditionOp::Equals(1))],
+            ),
+            StateTransition::instant(
+                1,
+                TransitionTarget::State(2),
+                vec![TransitionCondition::new("phase", ConditionOp::Equals(2))],
+            ),
+        ],
+    )
+}
+
+fn build_outcome_27_controller() -> AnimatorController {
+    let clip = AnimationClip::new(
+        "ReverseEvents",
+        1.0,
+        60.0,
+        WrapMode::Loop,
+        vec![CurveBinding::float(
+            CurveBindingTarget::new("", "Transform", "localPosition.x"),
+            FloatCurve::new(vec![
+                Keyframe::linear(0.0, 0.0),
+                Keyframe::linear(1.0, 10.0),
+            ]),
+        )],
+        vec![
+            AnimationEvent::new(0.25, "Quarter"),
+            AnimationEvent::new(0.45, "NearHalf"),
+        ],
+    );
+    AnimatorController::new(
+        "ReverseController",
+        Vec::new(),
+        vec![AnimatorState::new("Run", StateMotion::Clip(clip))],
+        0,
+        Vec::new(),
+    )
+}
+
+fn fired_event_names(result: &AnimatorStepResult) -> Vec<&str> {
+    result
+        .fired_events
+        .iter()
+        .map(|e| e.function_name.as_str())
+        .collect()
+}
+
+fn build_callback_order_controller() -> AnimatorController {
+    AnimatorController::new(
+        "CallbackOrder",
+        vec![ParameterDef::trigger("go")],
+        vec![
+            AnimatorState::new("A", StateMotion::Clip(simple_clip("A", 1.0, 0.0, 1.0))),
+            AnimatorState::new("B", StateMotion::Clip(simple_clip("B", 1.0, 2.0, 3.0))),
+        ],
+        0,
+        vec![StateTransition::new(
+            0,
+            TransitionTarget::State(1),
+            vec![TransitionCondition::new("go", ConditionOp::If)],
+            false,
+            0.0,
+            0.5,
+        )],
+    )
+}
+
+fn trace_callbacks(result: &AnimatorStepResult) -> Vec<String> {
+    result
+        .callbacks
+        .iter()
+        .map(|callback| format!("{:?}:{}", callback.kind, callback.state_index))
+        .collect()
+}
+
+fn expected_callback_order() -> Vec<Vec<&'static str>> {
+    vec![
+        vec!["OnStateMachineEnter:0"],
+        vec!["OnStateUpdate:0"],
+        vec!["OnStateEnter:1", "OnStateUpdate:0"],
+        vec!["OnStateUpdate:0", "OnStateUpdate:1"],
+        vec!["OnStateUpdate:0", "OnStateUpdate:1"],
+        vec!["OnStateUpdate:0", "OnStateUpdate:1"],
+        vec!["OnStateExit:0"],
+        vec!["OnStateUpdate:1"],
+    ]
+}
+
+fn build_any_state_controller() -> AnimatorController {
+    AnimatorController::new(
+        "AnyState",
+        vec![
+            ParameterDef::trigger("react"),
+            ParameterDef::bool("walk", false),
+        ],
+        vec![
+            AnimatorState::new(
+                "Idle",
+                StateMotion::Clip(simple_clip("Idle", 1.0, 0.0, 0.0)),
+            ),
+            AnimatorState::new(
+                "Walk",
+                StateMotion::Clip(simple_clip("Walk", 1.0, 1.0, 1.0)),
+            ),
+            AnimatorState::new(
+                "React",
+                StateMotion::Clip(simple_clip("React", 1.0, 2.0, 2.0)),
+            ),
+        ],
+        0,
+        vec![
+            StateTransition::any_state(
+                TransitionTarget::State(2),
+                vec![TransitionCondition::new("react", ConditionOp::If)],
+            ),
+            StateTransition::instant(
+                0,
+                TransitionTarget::State(1),
+                vec![TransitionCondition::new("walk", ConditionOp::If)],
+            ),
+        ],
+    )
+}
+
+fn build_any_state_self_controller(allow_self: bool) -> AnimatorController {
+    AnimatorController::new(
+        "AnyStateSelf",
+        vec![ParameterDef::trigger("react")],
+        vec![
+            AnimatorState::new(
+                "Idle",
+                StateMotion::Clip(simple_clip("Idle", 1.0, 0.0, 0.0)),
+            ),
+            AnimatorState::new(
+                "React",
+                StateMotion::Clip(simple_clip("React", 1.0, 2.0, 2.0)),
+            ),
+        ],
+        0,
+        vec![StateTransition::any_state(
+            TransitionTarget::State(1),
+            vec![TransitionCondition::new("react", ConditionOp::If)],
+        )
+        .with_can_transition_to_self(allow_self)],
+    )
+}
+
+fn build_keep_state_controller() -> AnimatorController {
+    AnimatorController::new(
+        "KeepState",
+        vec![ParameterDef::bool("go", false)],
+        vec![
+            AnimatorState::new(
+                "Idle",
+                StateMotion::Clip(simple_clip("Idle", 1.0, 0.0, 0.0)),
+            ),
+            AnimatorState::new("Run", StateMotion::Clip(simple_clip("Run", 1.0, 1.0, 1.0))),
+        ],
+        0,
+        vec![StateTransition::instant(
+            0,
+            TransitionTarget::State(1),
+            vec![TransitionCondition::new("go", ConditionOp::If)],
+        )],
     )
 }
 
@@ -101,45 +612,7 @@ fn float_parameter_greater_and_less_conditions_drive_transition() {
 
 #[test]
 fn int_and_bool_parameters_and_and_or_transition_semantics() {
-    let controller = AnimatorController::new(
-        "Combat",
-        vec![
-            ParameterDef::bool("grounded", false),
-            ParameterDef::int("stance", 0),
-            ParameterDef::bool("override", false),
-        ],
-        vec![
-            AnimatorState::new("Air", StateMotion::Clip(simple_clip("Air", 1.0, 0.0, 1.0))),
-            AnimatorState::new(
-                "Ready",
-                StateMotion::Clip(simple_clip("Ready", 1.0, 5.0, 5.0)),
-            ),
-        ],
-        0,
-        vec![
-            StateTransition::instant(
-                0,
-                TransitionTarget::State(1),
-                vec![
-                    TransitionCondition::new("grounded", ConditionOp::If),
-                    TransitionCondition::new("stance", ConditionOp::Equals(2)),
-                ],
-            ),
-            StateTransition::instant(
-                0,
-                TransitionTarget::State(1),
-                vec![TransitionCondition::new("override", ConditionOp::If)],
-            ),
-            StateTransition::instant(
-                1,
-                TransitionTarget::State(0),
-                vec![
-                    TransitionCondition::new("grounded", ConditionOp::IfNot),
-                    TransitionCondition::new("stance", ConditionOp::NotEqual(2)),
-                ],
-            ),
-        ],
-    );
+    let controller = build_combat_controller();
 
     let mut animator = Animator::new(controller);
     assert_eq!(animator.set_bool("grounded", true), Ok(()));
@@ -284,75 +757,9 @@ fn crossfade_transition_duration_blends_source_and_destination_until_completion(
 #[test]
 fn blend_tree_1d_interpolates_adjacent_clips_and_normalizes_quaternions() {
     let s = std::f32::consts::FRAC_1_SQRT_2;
-    let clip_idle = AnimationClip::new(
-        "Idle",
-        1.0,
-        60.0,
-        WrapMode::Loop,
-        vec![
-            CurveBinding::float(
-                CurveBindingTarget::new("", "Transform", "localPosition.x"),
-                FloatCurve::new(vec![Keyframe::linear(0.0, 0.0), Keyframe::linear(1.0, 0.0)]),
-            ),
-            CurveBinding::new(
-                CurveBindingTarget::new("", "Transform", "localRotation"),
-                PropertyCurve::Quaternion([
-                    FloatCurve::new(vec![Keyframe::linear(0.0, 0.0)]),
-                    FloatCurve::new(vec![Keyframe::linear(0.0, 0.0)]),
-                    FloatCurve::new(vec![Keyframe::linear(0.0, 0.0)]),
-                    FloatCurve::new(vec![Keyframe::linear(0.0, 1.0)]),
-                ]),
-            ),
-        ],
-        Vec::new(),
-    );
-    let clip_walk = AnimationClip::new(
-        "Walk",
-        1.0,
-        60.0,
-        WrapMode::Loop,
-        vec![
-            CurveBinding::float(
-                CurveBindingTarget::new("", "Transform", "localPosition.x"),
-                FloatCurve::new(vec![Keyframe::linear(0.0, 4.0), Keyframe::linear(1.0, 4.0)]),
-            ),
-            CurveBinding::new(
-                CurveBindingTarget::new("", "Transform", "localRotation"),
-                PropertyCurve::Quaternion([
-                    FloatCurve::new(vec![Keyframe::linear(0.0, 0.0)]),
-                    FloatCurve::new(vec![Keyframe::linear(0.0, s)]),
-                    FloatCurve::new(vec![Keyframe::linear(0.0, 0.0)]),
-                    FloatCurve::new(vec![Keyframe::linear(0.0, s)]),
-                ]),
-            ),
-        ],
-        Vec::new(),
-    );
-    let clip_run = AnimationClip::new(
-        "Run",
-        1.0,
-        60.0,
-        WrapMode::Loop,
-        vec![
-            CurveBinding::float(
-                CurveBindingTarget::new("", "Transform", "localPosition.x"),
-                FloatCurve::new(vec![
-                    Keyframe::linear(0.0, 10.0),
-                    Keyframe::linear(1.0, 10.0),
-                ]),
-            ),
-            CurveBinding::new(
-                CurveBindingTarget::new("", "Transform", "localRotation"),
-                PropertyCurve::Quaternion([
-                    FloatCurve::new(vec![Keyframe::linear(0.0, 0.0)]),
-                    FloatCurve::new(vec![Keyframe::linear(0.0, s)]),
-                    FloatCurve::new(vec![Keyframe::linear(0.0, 0.0)]),
-                    FloatCurve::new(vec![Keyframe::linear(0.0, s)]),
-                ]),
-            ),
-        ],
-        Vec::new(),
-    );
+    let clip_idle = build_blend_idle_clip();
+    let clip_walk = build_blend_walk_clip(s);
+    let clip_run = build_blend_run_clip(s);
 
     let controller = AnimatorController::new(
         "BlendCtrl",
@@ -386,52 +793,7 @@ fn blend_tree_1d_interpolates_adjacent_clips_and_normalizes_quaternions() {
 
 #[test]
 fn controller_validation_reports_all_five_diagnostic_categories() {
-    let invalid_clip = AnimationClip::new(
-        "BadClip",
-        1.0,
-        60.0,
-        WrapMode::Once,
-        vec![CurveBinding::float(
-            CurveBindingTarget::new("", "", "localPosition.x"),
-            FloatCurve::new(vec![Keyframe::linear(0.0, 1.0)]),
-        )],
-        Vec::new(),
-    );
-
-    let controller = AnimatorController::new(
-        "Broken",
-        vec![ParameterDef::float("speed", 0.0)],
-        vec![
-            AnimatorState::new("Entry", StateMotion::Clip(invalid_clip)),
-            AnimatorState::new("EmptyMotion", StateMotion::None),
-            AnimatorState::new(
-                "BadBlend",
-                StateMotion::BlendTree1D {
-                    parameter: "missing_blend_param".to_string(),
-                    thresholds: Vec::new(),
-                },
-            ),
-            AnimatorState::new(
-                "Orphan",
-                StateMotion::Clip(simple_clip("OrphanClip", 1.0, 0.0, 1.0)),
-            ),
-        ],
-        0,
-        vec![
-            StateTransition::instant(
-                0,
-                TransitionTarget::State(1),
-                vec![TransitionCondition::new(
-                    "missing_cond_param",
-                    ConditionOp::If,
-                )],
-            ),
-            StateTransition::instant(0, TransitionTarget::State(1), Vec::new()),
-            StateTransition::instant(0, TransitionTarget::State(2), Vec::new()),
-        ],
-    );
-
-    let diagnostics = controller.validate();
+    let diagnostics = build_broken_controller().validate();
     assert!(diagnostics.iter().any(|d| matches!(
         d,
         AnimationDiagnostic::MissingMotion { state_name } if state_name == "EmptyMotion"
@@ -585,40 +947,8 @@ fn blend_tree_1d_clamps_below_min_and_above_max_thresholds() {
 
 #[test]
 fn crossfade_transition_merges_disjoint_and_overlapping_bindings() {
-    let clip_a = AnimationClip::new(
-        "A",
-        1.0,
-        60.0,
-        WrapMode::Loop,
-        vec![
-            CurveBinding::float(
-                CurveBindingTarget::transform("", "localPosition.x"),
-                FloatCurve::new(vec![Keyframe::linear(0.0, 0.0)]),
-            ),
-            CurveBinding::float(
-                CurveBindingTarget::transform("", "localPosition.y"),
-                FloatCurve::new(vec![Keyframe::linear(0.0, 3.0)]),
-            ),
-        ],
-        Vec::new(),
-    );
-    let clip_b = AnimationClip::new(
-        "B",
-        1.0,
-        60.0,
-        WrapMode::Loop,
-        vec![
-            CurveBinding::float(
-                CurveBindingTarget::transform("", "localPosition.x"),
-                FloatCurve::new(vec![Keyframe::linear(0.0, 10.0)]),
-            ),
-            CurveBinding::float(
-                CurveBindingTarget::transform("", "localPosition.z"),
-                FloatCurve::new(vec![Keyframe::linear(0.0, 7.0)]),
-            ),
-        ],
-        Vec::new(),
-    );
+    let clip_a = build_disjoint_fade_clip_a();
+    let clip_b = build_disjoint_fade_clip_b();
     let controller = AnimatorController::new(
         "DisjointFade",
         vec![ParameterDef::bool("fade", true)],
@@ -866,66 +1196,7 @@ fn parameter_getters_return_none_on_unknown_or_mismatched_type() {
 
 #[test]
 fn ani_001_outcome_28_2d_and_direct_blend_trees_interruption_sources_and_callback_order() {
-    use unitas_animation::{BlendTree2DMode, InterruptionSource, StateMachineCallbackKind};
-    let clip_center = simple_clip("Center", 1.0, 0.0, 0.0);
-    let clip_right = simple_clip("Right", 1.0, 10.0, 10.0);
-    let clip_up = simple_clip("Up", 1.0, 0.0, 20.0);
-
-    let tree_2d = StateMotion::BlendTree2D {
-        mode: BlendTree2DMode::SimpleDirectional,
-        parameter_x: "vel_x".to_string(),
-        parameter_y: "vel_y".to_string(),
-        children: vec![
-            ([0.0, 0.0], clip_center),
-            ([1.0, 0.0], clip_right.clone()),
-            ([0.0, 1.0], clip_up.clone()),
-        ],
-    };
-
-    let tree_direct = StateMotion::BlendTreeDirect {
-        children: vec![
-            ("w_right".to_string(), clip_right.clone()),
-            ("w_up".to_string(), clip_up.clone()),
-        ],
-    };
-
-    let state_a = AnimatorState::new("State2D", tree_2d);
-    let state_b = AnimatorState::new("StateDirect", tree_direct);
-    let state_c = AnimatorState::new("InterruptedTarget", StateMotion::Clip(clip_right));
-
-    let mut tr_a_to_b = StateTransition::new(
-        0,
-        TransitionTarget::State(1),
-        vec![TransitionCondition::new("to_direct", ConditionOp::If)],
-        false,
-        0.0,
-        1.0,
-    );
-    tr_a_to_b.interruption_source = InterruptionSource::Source;
-
-    let tr_a_to_c = StateTransition::new(
-        0,
-        TransitionTarget::State(2),
-        vec![TransitionCondition::new("interrupt", ConditionOp::If)],
-        false,
-        0.0,
-        0.0,
-    );
-
-    let controller = AnimatorController::new(
-        "ANI001Outcome28",
-        vec![
-            ParameterDef::float("vel_x", 1.0),
-            ParameterDef::float("vel_y", 0.0),
-            ParameterDef::float("w_right", 0.25),
-            ParameterDef::float("w_up", 0.75),
-            ParameterDef::bool("to_direct", false),
-            ParameterDef::trigger("interrupt"),
-        ],
-        vec![state_a, state_b, state_c],
-        0,
-        vec![tr_a_to_b, tr_a_to_c],
-    );
+    let controller = build_outcome_28_controller();
 
     assert!(
         controller.validate().is_empty(),
@@ -972,68 +1243,7 @@ fn ani_001_outcome_28_2d_and_direct_blend_trees_interruption_sources_and_callbac
 
 #[test]
 fn ani_001_outcome_29_write_defaults_on_vs_off_across_transitions() {
-    let clip_xy = AnimationClip::new(
-        "MoveXY",
-        1.0,
-        60.0,
-        WrapMode::Loop,
-        vec![
-            CurveBinding::float(
-                CurveBindingTarget::transform("", "localPosition.x"),
-                FloatCurve::new(vec![Keyframe::linear(0.0, 1.0), Keyframe::linear(1.0, 5.0)]),
-            ),
-            CurveBinding::float(
-                CurveBindingTarget::transform("", "localPosition.y"),
-                FloatCurve::new(vec![Keyframe::linear(0.0, 2.0), Keyframe::linear(1.0, 8.0)]),
-            ),
-        ],
-        Vec::new(),
-    );
-    let clip_x_only = AnimationClip::new(
-        "MoveXOnly",
-        1.0,
-        60.0,
-        WrapMode::Loop,
-        vec![CurveBinding::float(
-            CurveBindingTarget::transform("", "localPosition.x"),
-            FloatCurve::new(vec![
-                Keyframe::linear(0.0, 10.0),
-                Keyframe::linear(1.0, 10.0),
-            ]),
-        )],
-        Vec::new(),
-    );
-
-    let controller = AnimatorController::new(
-        "ANI001Outcome29",
-        vec![ParameterDef::int("phase", 0)],
-        vec![
-            AnimatorState::with_write_defaults("FullXY", StateMotion::Clip(clip_xy), true),
-            AnimatorState::with_write_defaults(
-                "NoDefaultsX",
-                StateMotion::Clip(clip_x_only.clone()),
-                false,
-            ),
-            AnimatorState::with_write_defaults(
-                "WithDefaultsX",
-                StateMotion::Clip(clip_x_only),
-                true,
-            ),
-        ],
-        0,
-        vec![
-            StateTransition::instant(
-                0,
-                TransitionTarget::State(1),
-                vec![TransitionCondition::new("phase", ConditionOp::Equals(1))],
-            ),
-            StateTransition::instant(
-                1,
-                TransitionTarget::State(2),
-                vec![TransitionCondition::new("phase", ConditionOp::Equals(2))],
-            ),
-        ],
-    );
+    let controller = build_outcome_29_controller();
 
     let mut animator = Animator::new(controller);
     let step0 = animator.step(0.5);
@@ -1072,39 +1282,12 @@ fn ani_001_outcome_29_write_defaults_on_vs_off_across_transitions() {
 #[test]
 fn ani_001_outcome_27_negative_animator_speed_plays_a_state_in_reverse_and_fires_events_backwards()
 {
-    let clip = AnimationClip::new(
-        "ReverseEvents",
-        1.0,
-        60.0,
-        WrapMode::Loop,
-        vec![CurveBinding::float(
-            CurveBindingTarget::new("", "Transform", "localPosition.x"),
-            FloatCurve::new(vec![
-                Keyframe::linear(0.0, 0.0),
-                Keyframe::linear(1.0, 10.0),
-            ]),
-        )],
-        vec![
-            AnimationEvent::new(0.25, "Quarter"),
-            AnimationEvent::new(0.45, "NearHalf"),
-        ],
-    );
-    let controller = AnimatorController::new(
-        "ReverseController",
-        Vec::new(),
-        vec![AnimatorState::new("Run", StateMotion::Clip(clip))],
-        0,
-        Vec::new(),
-    );
+    let controller = build_outcome_27_controller();
     let mut animator = Animator::new(controller);
 
     let forward = animator.step(0.6);
     assert_eq!(
-        forward
-            .fired_events
-            .iter()
-            .map(|e| e.function_name.as_str())
-            .collect::<Vec<_>>(),
+        fired_event_names(&forward),
         vec!["Quarter", "NearHalf"],
         "ANI-001 outcome 27: forward playback must fire events in ascending time order"
     );
@@ -1117,11 +1300,7 @@ fn ani_001_outcome_27_negative_animator_speed_plays_a_state_in_reverse_and_fires
     );
     let backward = animator.step(0.5);
     assert_eq!(
-        backward
-            .fired_events
-            .iter()
-            .map(|e| e.function_name.as_str())
-            .collect::<Vec<_>>(),
+        fired_event_names(&backward),
         vec!["NearHalf", "Quarter"],
         "ANI-001 outcome 27: reverse playback must fire events in descending time order"
     );
@@ -1143,43 +1322,17 @@ fn ani_001_outcome_27_negative_animator_speed_plays_a_state_in_reverse_and_fires
 
 #[test]
 fn ani_001_outcome_28_state_transition_trigger_callback_order_is_observable() {
-    use unitas_animation::StateMachineCallbackKind;
-
-    fn trace(result: &unitas_animation::AnimatorStepResult) -> Vec<String> {
-        result
-            .callbacks
-            .iter()
-            .map(|callback| format!("{:?}:{}", callback.kind, callback.state_index))
-            .collect()
-    }
-
-    let controller = AnimatorController::new(
-        "CallbackOrder",
-        vec![ParameterDef::trigger("go")],
-        vec![
-            AnimatorState::new("A", StateMotion::Clip(simple_clip("A", 1.0, 0.0, 1.0))),
-            AnimatorState::new("B", StateMotion::Clip(simple_clip("B", 1.0, 2.0, 3.0))),
-        ],
-        0,
-        vec![StateTransition::new(
-            0,
-            TransitionTarget::State(1),
-            vec![TransitionCondition::new("go", ConditionOp::If)],
-            false,
-            0.0,
-            0.5,
-        )],
-    );
+    let controller = build_callback_order_controller();
 
     let mut animator = Animator::new(controller);
     let mut order: Vec<Vec<String>> = Vec::new();
 
-    order.push(trace(&animator.step(0.1)));
-    order.push(trace(&animator.step(0.1)));
+    order.push(trace_callbacks(&animator.step(0.1)));
+    order.push(trace_callbacks(&animator.step(0.1)));
 
     assert_eq!(animator.set_trigger("go"), Ok(()));
     let transition_start = animator.step(0.1);
-    order.push(trace(&transition_start));
+    order.push(trace_callbacks(&transition_start));
     assert!(
         transition_start.state_info.is_in_transition,
         "ANI-001 outcome 28: a trigger condition must start the transition in the same evaluation"
@@ -1190,24 +1343,15 @@ fn ani_001_outcome_28_state_transition_trigger_callback_order_is_observable() {
         "ANI-001 outcome 28: the transition must consume the trigger it fired on"
     );
 
-    order.push(trace(&animator.step(0.1)));
-    order.push(trace(&animator.step(0.1)));
-    order.push(trace(&animator.step(0.1)));
-    order.push(trace(&animator.step(0.1)));
-    order.push(trace(&animator.step(0.1)));
+    order.push(trace_callbacks(&animator.step(0.1)));
+    order.push(trace_callbacks(&animator.step(0.1)));
+    order.push(trace_callbacks(&animator.step(0.1)));
+    order.push(trace_callbacks(&animator.step(0.1)));
+    order.push(trace_callbacks(&animator.step(0.1)));
 
     assert_eq!(
         order,
-        vec![
-            vec!["OnStateMachineEnter:0"],
-            vec!["OnStateUpdate:0"],
-            vec!["OnStateEnter:1", "OnStateUpdate:0"],
-            vec!["OnStateUpdate:0", "OnStateUpdate:1"],
-            vec!["OnStateUpdate:0", "OnStateUpdate:1"],
-            vec!["OnStateUpdate:0", "OnStateUpdate:1"],
-            vec!["OnStateExit:0"],
-            vec!["OnStateUpdate:1"],
-        ],
+        expected_callback_order(),
         "ANI-001 outcome 28: state machine behaviour callbacks must fire in the documented order"
     );
 
@@ -1222,39 +1366,7 @@ fn ani_001_outcome_28_state_transition_trigger_callback_order_is_observable() {
 
 #[test]
 fn ani_001_any_state_transition_fires_from_multiple_source_states() -> Result<(), Box<dyn Error>> {
-    let controller = AnimatorController::new(
-        "AnyState",
-        vec![
-            ParameterDef::trigger("react"),
-            ParameterDef::bool("walk", false),
-        ],
-        vec![
-            AnimatorState::new(
-                "Idle",
-                StateMotion::Clip(simple_clip("Idle", 1.0, 0.0, 0.0)),
-            ),
-            AnimatorState::new(
-                "Walk",
-                StateMotion::Clip(simple_clip("Walk", 1.0, 1.0, 1.0)),
-            ),
-            AnimatorState::new(
-                "React",
-                StateMotion::Clip(simple_clip("React", 1.0, 2.0, 2.0)),
-            ),
-        ],
-        0,
-        vec![
-            StateTransition::any_state(
-                TransitionTarget::State(2),
-                vec![TransitionCondition::new("react", ConditionOp::If)],
-            ),
-            StateTransition::instant(
-                0,
-                TransitionTarget::State(1),
-                vec![TransitionCondition::new("walk", ConditionOp::If)],
-            ),
-        ],
-    );
+    let controller = build_any_state_controller();
 
     assert_eq!(
         controller.transitions[0].source(),
@@ -1291,30 +1403,7 @@ fn ani_001_any_state_transition_fires_from_multiple_source_states() -> Result<()
 
 #[test]
 fn ani_001_any_state_transition_honours_can_transition_to_self() {
-    let build = |allow_self: bool| {
-        AnimatorController::new(
-            "AnyStateSelf",
-            vec![ParameterDef::trigger("react")],
-            vec![
-                AnimatorState::new(
-                    "Idle",
-                    StateMotion::Clip(simple_clip("Idle", 1.0, 0.0, 0.0)),
-                ),
-                AnimatorState::new(
-                    "React",
-                    StateMotion::Clip(simple_clip("React", 1.0, 2.0, 2.0)),
-                ),
-            ],
-            0,
-            vec![StateTransition::any_state(
-                TransitionTarget::State(1),
-                vec![TransitionCondition::new("react", ConditionOp::If)],
-            )
-            .with_can_transition_to_self(allow_self)],
-        )
-    };
-
-    let mut blocked = Animator::new(build(false));
+    let mut blocked = Animator::new(build_any_state_self_controller(false));
     assert_eq!(blocked.set_trigger("react"), Ok(()));
     blocked.step(0.1);
     assert_eq!(blocked.current_state_info().state_index, 1);
@@ -1330,7 +1419,7 @@ fn ani_001_any_state_transition_honours_can_transition_to_self() {
         "ANI-001: with Can Transition To Self disabled the any state transition must not restart the destination state"
     );
 
-    let mut allowed = Animator::new(build(true));
+    let mut allowed = Animator::new(build_any_state_self_controller(true));
     assert_eq!(allowed.set_trigger("react"), Ok(()));
     allowed.step(0.1);
     assert_eq!(allowed.current_state_info().state_index, 1);
@@ -1389,23 +1478,7 @@ fn ani_001_any_state_transition_with_exit_time_waits_for_the_normalized_time() {
 
 #[test]
 fn ani_001_keep_animator_state_on_disable_preserves_state_and_time() {
-    let controller = AnimatorController::new(
-        "KeepState",
-        vec![ParameterDef::bool("go", false)],
-        vec![
-            AnimatorState::new(
-                "Idle",
-                StateMotion::Clip(simple_clip("Idle", 1.0, 0.0, 0.0)),
-            ),
-            AnimatorState::new("Run", StateMotion::Clip(simple_clip("Run", 1.0, 1.0, 1.0))),
-        ],
-        0,
-        vec![StateTransition::instant(
-            0,
-            TransitionTarget::State(1),
-            vec![TransitionCondition::new("go", ConditionOp::If)],
-        )],
-    );
+    let controller = build_keep_state_controller();
 
     let mut animator = Animator::new(controller);
     assert_eq!(animator.set_bool("go", true), Ok(()));

@@ -284,40 +284,20 @@ impl CharacterController {
         motion: [f64; 3],
         delta_seconds: f64,
     ) -> Result<MoveResult, PhysicsError> {
-        self.validate()?;
-        if !current_position
-            .iter()
-            .all(|component| component.is_finite())
-            || !motion.iter().all(|component| component.is_finite())
-        {
-            return Err(PhysicsError::InvalidCharacterController);
-        }
-        if !delta_seconds.is_finite() || delta_seconds < 0.0 {
-            return Err(PhysicsError::InvalidDeltaTime(delta_seconds));
-        }
+        self.validate_move_inputs(current_position, motion, delta_seconds)?;
         if !self.enabled {
-            self.is_grounded = false;
-            self.collision_flags = CollisionFlags::NONE;
-            self.ground_entity = None;
-            self.velocity = [0.0; 3];
-            self.collider_hit_count = 0;
-            return Ok(MoveResult {
-                position: current_position,
-                is_grounded: false,
-                collision_flags: CollisionFlags::NONE,
-                ground_entity: None,
-            });
+            return Ok(self.reset_disabled_move(current_position));
         }
 
         self.collider_hit_count = 0;
         let platform_delta = self.platform_displacement(world, delta_seconds);
         let total_motion = add(motion, platform_delta);
-        let mut position = current_position;
         let mut outcome = MoveStepOutcome::default();
 
-        let depenetrated = self.depenetrate(world, position, &mut outcome.flags);
-        let did_depenetrate = vector_length(subtract(depenetrated, position)) > MOTION_EPSILON;
-        position = depenetrated;
+        let depenetrated = self.depenetrate(world, current_position, &mut outcome.flags);
+        let did_depenetrate =
+            vector_length(subtract(depenetrated, current_position)) > MOTION_EPSILON;
+        let mut position = depenetrated;
 
         if vector_length(total_motion) < self.min_move_distance && !did_depenetrate {
             self.collision_flags = CollisionFlags::NONE;
@@ -330,14 +310,58 @@ impl CharacterController {
             });
         }
 
+        position = self.apply_motion_steps(world, position, total_motion, &mut outcome);
+        Ok(self.finalize_move_outcome(current_position, position, delta_seconds, &outcome))
+    }
+
+    fn validate_move_inputs(
+        &self,
+        current_position: [f64; 3],
+        motion: [f64; 3],
+        delta_seconds: f64,
+    ) -> Result<(), PhysicsError> {
+        self.validate()?;
+        if !current_position
+            .iter()
+            .all(|component| component.is_finite())
+            || !motion.iter().all(|component| component.is_finite())
+        {
+            return Err(PhysicsError::InvalidCharacterController);
+        }
+        if !delta_seconds.is_finite() || delta_seconds < 0.0 {
+            return Err(PhysicsError::InvalidDeltaTime(delta_seconds));
+        }
+        Ok(())
+    }
+
+    fn reset_disabled_move(&mut self, current_position: [f64; 3]) -> MoveResult {
+        self.is_grounded = false;
+        self.collision_flags = CollisionFlags::NONE;
+        self.ground_entity = None;
+        self.velocity = [0.0; 3];
+        self.collider_hit_count = 0;
+        MoveResult {
+            position: current_position,
+            is_grounded: false,
+            collision_flags: CollisionFlags::NONE,
+            ground_entity: None,
+        }
+    }
+
+    fn apply_motion_steps(
+        &self,
+        world: &World,
+        mut position: [f64; 3],
+        total_motion: [f64; 3],
+        outcome: &mut MoveStepOutcome,
+    ) -> [f64; 3] {
         let lateral_motion = [total_motion[0], 0.0, total_motion[2]];
         if vector_length(lateral_motion) > MOTION_EPSILON {
-            position = self.resolve_lateral(world, position, lateral_motion, &mut outcome);
+            position = self.resolve_lateral(world, position, lateral_motion, outcome);
         }
 
-        let vertical_motion = [0.0, total_motion[1], 0.0];
-        if vertical_motion[1].abs() > MOTION_EPSILON {
-            position = self.resolve_vertical(world, position, vertical_motion[1], &mut outcome);
+        if total_motion[1].abs() > MOTION_EPSILON {
+            position = self.resolve_vertical(world, position, total_motion[1], outcome);
         }
 
         if total_motion[1] <= MOTION_EPSILON {
@@ -353,7 +377,16 @@ impl CharacterController {
                 }
             }
         }
+        position
+    }
 
+    fn finalize_move_outcome(
+        &mut self,
+        current_position: [f64; 3],
+        position: [f64; 3],
+        delta_seconds: f64,
+        outcome: &MoveStepOutcome,
+    ) -> MoveResult {
         self.is_grounded = outcome.grounded;
         self.collision_flags = outcome.flags;
         self.ground_entity = outcome.ground_entity;
@@ -369,13 +402,12 @@ impl CharacterController {
         } else {
             self.velocity = [0.0; 3];
         }
-
-        Ok(MoveResult {
+        MoveResult {
             position,
             is_grounded: outcome.grounded,
             collision_flags: outcome.flags,
             ground_entity: outcome.ground_entity,
-        })
+        }
     }
 
     fn platform_displacement(&self, world: &World, delta_seconds: f64) -> [f64; 3] {
@@ -589,42 +621,52 @@ impl CharacterController {
                 direction[2] * leftover_dist,
             ];
 
-            if self.is_walkable_normal(hit.normal) {
-                outcome.flags.insert(CollisionFlags::BELOW);
-                outcome.grounded = true;
-                outcome.ground_entity = Some(hit.entity);
-                remaining = project_onto_plane(leftover, hit.normal);
-                continue;
-            }
-
-            if let Some((stepped_pos, step_ground)) = self.try_step_up(world, position, leftover) {
-                position = stepped_pos;
-                outcome.flags.insert(CollisionFlags::BELOW);
-                outcome.grounded = true;
-                outcome.ground_entity = Some(step_ground);
+            let Some(next_remaining) =
+                self.handle_lateral_hit(world, &mut position, &hit, leftover, outcome)
+            else {
                 break;
-            }
-
-            outcome.flags.insert(self.classify_normal(hit.normal));
-            let mut wall_normal = [hit.normal[0], 0.0, hit.normal[2]];
-            if let Some(norm_xz) = normalize(wall_normal) {
-                wall_normal = norm_xz;
-            } else {
-                wall_normal = hit.normal;
-            }
-            let into = dot(leftover, wall_normal);
-            if into < 0.0 {
-                remaining = [
-                    leftover[0] - wall_normal[0] * into,
-                    0.0,
-                    leftover[2] - wall_normal[2] * into,
-                ];
-            } else {
-                break;
-            }
+            };
+            remaining = next_remaining;
         }
 
         position
+    }
+
+    fn handle_lateral_hit(
+        &self,
+        world: &World,
+        position: &mut [f64; 3],
+        hit: &QueryHit,
+        leftover: [f64; 3],
+        outcome: &mut MoveStepOutcome,
+    ) -> Option<[f64; 3]> {
+        if self.is_walkable_normal(hit.normal) {
+            outcome.flags.insert(CollisionFlags::BELOW);
+            outcome.grounded = true;
+            outcome.ground_entity = Some(hit.entity);
+            return Some(project_onto_plane(leftover, hit.normal));
+        }
+
+        if let Some((stepped_pos, step_ground)) = self.try_step_up(world, *position, leftover) {
+            *position = stepped_pos;
+            outcome.flags.insert(CollisionFlags::BELOW);
+            outcome.grounded = true;
+            outcome.ground_entity = Some(step_ground);
+            return None;
+        }
+
+        outcome.flags.insert(self.classify_normal(hit.normal));
+        let wall_normal = normalize([hit.normal[0], 0.0, hit.normal[2]]).unwrap_or(hit.normal);
+        let into = dot(leftover, wall_normal);
+        if into < 0.0 {
+            Some([
+                leftover[0] - wall_normal[0] * into,
+                0.0,
+                leftover[2] - wall_normal[2] * into,
+            ])
+        } else {
+            None
+        }
     }
 
     fn try_step_up(
@@ -642,7 +684,36 @@ impl CharacterController {
             return None;
         }
         let forward_dir = normalize(horizontal)?;
+        let (advanced, up_clear) =
+            self.step_up_raise_and_advance(world, position, forward_dir, forward_dist)?;
 
+        let down_cast_dist = up_clear + self.skin_width * 2.0;
+        let down_hit = self.cast_capsule(world, advanced, [0.0, -1.0, 0.0], down_cast_dist)?;
+        if !self.is_walkable_normal(down_hit.normal) {
+            return None;
+        }
+        let drop = (down_hit.distance - self.skin_width).max(0.0);
+        let landed = [advanced[0], advanced[1] - drop, advanced[2]];
+        let climb_height = landed[1] - position[1];
+        if climb_height <= 1e-4 || climb_height > self.step_offset + 1e-4 {
+            return None;
+        }
+        if !self.is_step_tread_supported(world, position, forward_dir, &down_hit) {
+            return None;
+        }
+        if self.overlaps_any(world, landed) {
+            return None;
+        }
+        Some((landed, down_hit.entity))
+    }
+
+    fn step_up_raise_and_advance(
+        &self,
+        world: &World,
+        position: [f64; 3],
+        forward_dir: [f64; 3],
+        forward_dist: f64,
+    ) -> Option<([f64; 3], f64)> {
         let up_cast_dist = self.step_offset + self.skin_width;
         let up_clear = match self.cast_capsule(world, position, [0.0, 1.0, 0.0], up_cast_dist) {
             Some(hit) => (hit.distance - self.skin_width).max(0.0),
@@ -668,20 +739,21 @@ impl CharacterController {
             raised[1],
             raised[2] + forward_dir[2] * forward_travel,
         ];
+        Some((advanced, up_clear))
+    }
 
-        let down_cast_dist = up_clear + self.skin_width * 2.0;
-        let down_hit = self.cast_capsule(world, advanced, [0.0, -1.0, 0.0], down_cast_dist)?;
-        if !self.is_walkable_normal(down_hit.normal) {
-            return None;
-        }
-        let drop = (down_hit.distance - self.skin_width).max(0.0);
-        let landed = [advanced[0], advanced[1] - drop, advanced[2]];
-        let climb_height = landed[1] - position[1];
-        if climb_height <= 1e-4 || climb_height > self.step_offset + 1e-4 {
-            return None;
-        }
+    fn is_step_tread_supported(
+        &self,
+        world: &World,
+        position: [f64; 3],
+        forward_dir: [f64; 3],
+        down_hit: &QueryHit,
+    ) -> bool {
         let forward_ledge_depth = (down_hit.point[0] - position[0]) * forward_dir[0]
             + (down_hit.point[2] - position[2]) * forward_dir[2];
+        if forward_ledge_depth <= 0.0 {
+            return false;
+        }
         let min_step_depth = (self.radius * 0.25).max(self.skin_width);
         let tread_probe_origin = [
             down_hit.point[0] + forward_dir[0] * min_step_depth,
@@ -689,7 +761,7 @@ impl CharacterController {
             down_hit.point[2] + forward_dir[2] * min_step_depth,
         ];
         let tread_probe_dist = self.skin_width * 2.0 + 2e-2;
-        let tread_supported = world
+        world
             .raycast(
                 tread_probe_origin,
                 [0.0, -1.0, 0.0],
@@ -701,14 +773,7 @@ impl CharacterController {
             .is_some_and(|hit| {
                 self.is_walkable_normal(hit.normal)
                     && (hit.point[1] - down_hit.point[1]).abs() <= 1e-2
-            });
-        if !tread_supported || forward_ledge_depth <= 0.0 {
-            return None;
-        }
-        if self.overlaps_any(world, landed) {
-            return None;
-        }
-        Some((landed, down_hit.entity))
+            })
     }
 
     fn resolve_vertical(
@@ -742,7 +807,7 @@ impl CharacterController {
         });
 
         let safe_travel = (hit.distance - self.skin_width).max(0.0);
-        let mut position = [
+        let position = [
             start_position[0],
             start_position[1] + direction[1] * safe_travel,
             start_position[2],
@@ -750,45 +815,55 @@ impl CharacterController {
 
         if vertical_delta > 0.0 {
             outcome.flags.insert(CollisionFlags::ABOVE);
+            position
         } else if self.is_walkable_normal(hit.normal) {
             outcome.flags.insert(CollisionFlags::BELOW);
             outcome.grounded = true;
             outcome.ground_entity = Some(hit.entity);
+            position
         } else {
             outcome.flags.insert(CollisionFlags::SIDES);
             let leftover_dist = (distance - safe_travel).max(0.0);
-            if leftover_dist > MOTION_EPSILON {
-                let slide = project_onto_plane([0.0, -leftover_dist, 0.0], hit.normal);
-                let slide_len = vector_length(slide);
-                if slide_len > MOTION_EPSILON {
-                    if let Some(slide_dir) = normalize(slide) {
-                        let slide_travel = match self.cast_capsule(
-                            world,
-                            position,
-                            slide_dir,
-                            slide_len + self.skin_width,
-                        ) {
-                            Some(second_hit) => {
-                                if self.is_walkable_normal(second_hit.normal) {
-                                    outcome.flags.insert(CollisionFlags::BELOW);
-                                    outcome.grounded = true;
-                                    outcome.ground_entity = Some(second_hit.entity);
-                                }
-                                (second_hit.distance - self.skin_width).max(0.0)
-                            }
-                            None => slide_len,
-                        };
-                        position = [
-                            position[0] + slide_dir[0] * slide_travel,
-                            position[1] + slide_dir[1] * slide_travel,
-                            position[2] + slide_dir[2] * slide_travel,
-                        ];
-                    }
-                }
-            }
+            self.slide_vertical_steep_slope(world, position, leftover_dist, hit.normal, outcome)
         }
+    }
 
-        position
+    fn slide_vertical_steep_slope(
+        &self,
+        world: &World,
+        position: [f64; 3],
+        leftover_dist: f64,
+        hit_normal: [f64; 3],
+        outcome: &mut MoveStepOutcome,
+    ) -> [f64; 3] {
+        if leftover_dist <= MOTION_EPSILON {
+            return position;
+        }
+        let slide = project_onto_plane([0.0, -leftover_dist, 0.0], hit_normal);
+        let slide_len = vector_length(slide);
+        if slide_len <= MOTION_EPSILON {
+            return position;
+        }
+        let Some(slide_dir) = normalize(slide) else {
+            return position;
+        };
+        let slide_travel =
+            match self.cast_capsule(world, position, slide_dir, slide_len + self.skin_width) {
+                Some(second_hit) => {
+                    if self.is_walkable_normal(second_hit.normal) {
+                        outcome.flags.insert(CollisionFlags::BELOW);
+                        outcome.grounded = true;
+                        outcome.ground_entity = Some(second_hit.entity);
+                    }
+                    (second_hit.distance - self.skin_width).max(0.0)
+                }
+                None => slide_len,
+            };
+        [
+            position[0] + slide_dir[0] * slide_travel,
+            position[1] + slide_dir[1] * slide_travel,
+            position[2] + slide_dir[2] * slide_travel,
+        ]
     }
 
     fn probe_ground(&self, world: &World, position: [f64; 3]) -> Option<QueryHit> {

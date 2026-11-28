@@ -192,6 +192,12 @@ fn assets_move_delete_restore_and_duplicate_keep_the_project_consistent() -> Tes
     build_project(&root)?;
     let table = table()?;
 
+    assert_move_and_duplicate(&table, &root);
+    assert_delete_and_restore(&table, &root);
+    Ok(())
+}
+
+fn assert_move_and_duplicate(table: &DispatchTable, root: &Path) {
     let moved = table.invoke(
         "assets.move",
         &json!({
@@ -218,7 +224,9 @@ fn assets_move_delete_restore_and_duplicate_keep_the_project_consistent() -> Tes
     assert_eq!(duplicated["error"], json!(null));
     assert_ne!(duplicated["guid"], json!(MATERIAL_GUID));
     assert!(root.join("Assets/Materials/Copy.mat").is_file());
+}
 
+fn assert_delete_and_restore(table: &DispatchTable, root: &Path) {
     let deleted = table.invoke(
         "assets.delete",
         &json!({
@@ -240,7 +248,6 @@ fn assets_move_delete_restore_and_duplicate_keep_the_project_consistent() -> Tes
     );
     assert_eq!(restored["error"], json!(null));
     assert!(root.join("Assets/Materials/Stone.mat").is_file());
-    Ok(())
 }
 
 #[test]
@@ -249,6 +256,12 @@ fn assets_favorites_and_recents_track_the_open_project() -> TestResult {
     build_project(&root)?;
     let table = table()?;
 
+    assert_favorites_add_and_list(&table, &root)?;
+    assert_recents_and_favorite_removal(&table, &root)?;
+    Ok(())
+}
+
+fn assert_favorites_add_and_list(table: &DispatchTable, root: &Path) -> TestResult {
     let added = table.invoke(
         "assets.favorites",
         &json!({
@@ -269,7 +282,10 @@ fn assets_favorites_and_recents_track_the_open_project() -> TestResult {
         }),
     );
     assert_eq!(listed["favorites"], json!([MATERIAL_GUID]));
+    Ok(())
+}
 
+fn assert_recents_and_favorite_removal(table: &DispatchTable, root: &Path) -> TestResult {
     let preview = table.invoke(
         "assets.preview",
         &json!({

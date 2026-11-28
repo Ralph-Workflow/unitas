@@ -101,15 +101,54 @@ fn runtime_time_scale_pause_routes_sfx_music_and_menu_groups()
     Ok(())
 }
 
-#[test]
-fn physics2d_project_settings_and_abi_entry_points_configure_world_2d_and_survive_clear()
--> Result<(), Box<dyn std::error::Error>> {
+fn assert_physics2d_abi_layer_collision() {
     use crate::{
         unitas_runtime_destroy, unitas_runtime_new, unitas_runtime_physics2d_apply_settings,
         unitas_runtime_physics2d_clear, unitas_runtime_physics2d_get_layer_collision,
         unitas_runtime_physics2d_set_layer_collision,
     };
 
+    let handle = unitas_runtime_new();
+    assert_ne!(handle, 0);
+    assert_eq!(
+        unitas_runtime_physics2d_apply_settings(handle, 0.0, -20.0, 9, 4, 0),
+        0
+    );
+    assert_eq!(
+        unitas_runtime_physics2d_get_layer_collision(handle, 1, 2),
+        1
+    );
+    assert_eq!(
+        unitas_runtime_physics2d_set_layer_collision(handle, 1, 2, 0),
+        0
+    );
+    assert_eq!(
+        unitas_runtime_physics2d_get_layer_collision(handle, 1, 2),
+        0
+    );
+    assert_eq!(
+        unitas_runtime_physics2d_get_layer_collision(handle, 2, 1),
+        0
+    );
+    assert_eq!(unitas_runtime_physics2d_clear(handle), 0);
+    assert_eq!(
+        unitas_runtime_physics2d_get_layer_collision(handle, 1, 2),
+        0
+    );
+    assert_eq!(
+        unitas_runtime_physics2d_set_layer_collision(handle, 32, 0, 1),
+        -2
+    );
+    assert_eq!(
+        unitas_runtime_physics2d_get_layer_collision(handle, 0, 32),
+        -2
+    );
+    assert_eq!(unitas_runtime_destroy(handle), 0);
+}
+
+#[test]
+fn physics2d_project_settings_and_abi_entry_points_configure_world_2d_and_survive_clear()
+-> Result<(), Box<dyn std::error::Error>> {
     let nanos = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_nanos())
@@ -159,42 +198,70 @@ fn physics2d_project_settings_and_abi_entry_points_configure_world_2d_and_surviv
     assert!(cleared_2d.get_ignore_layer_collision(0, 2));
 
     std::fs::remove_dir_all(&temp_root)?;
+    assert_physics2d_abi_layer_collision();
+    Ok(())
+}
+
+fn write_custom_rolloff_curve(handle: u64) -> Result<u64, Box<dyn std::error::Error>> {
+    use crate::{test_write_path_buffer, unitas_runtime_path_buffer};
+    let buf_addr = unitas_runtime_path_buffer(handle, 64);
+    let mut curve_bytes = Vec::new();
+    for (dist, gain) in [(0.0f32, 1.0f32), (0.5, 0.25), (1.0, 0.0)] {
+        curve_bytes.extend_from_slice(&dist.to_le_bytes());
+        curve_bytes.extend_from_slice(&gain.to_le_bytes());
+    }
+    test_write_path_buffer(handle, &curve_bytes)?;
+    Ok(buf_addr)
+}
+
+fn assert_audio_rolloff_ffi_round_trip() -> Result<(), Box<dyn std::error::Error>> {
+    use crate::{
+        unitas_runtime_audio_create, unitas_runtime_audio_rolloff_mode,
+        unitas_runtime_audio_set_custom_rolloff, unitas_runtime_audio_set_rolloff_mode,
+        unitas_runtime_audio_source_set_custom_rolloff,
+        unitas_runtime_audio_source_set_rolloff_mode, unitas_runtime_destroy, unitas_runtime_new,
+        unitas_runtime_object_create, unitas_runtime_object_set_transform,
+        unitas_runtime_render_camera_create, unitas_runtime_tick,
+    };
+    use unitas_audio::RolloffMode;
 
     let handle = unitas_runtime_new();
     assert_ne!(handle, 0);
+    let cam_id = unitas_runtime_object_create(handle, 0, 0);
     assert_eq!(
-        unitas_runtime_physics2d_apply_settings(handle, 0.0, -20.0, 9, 4, 0),
+        unitas_runtime_object_set_transform(
+            handle, cam_id, 3.0, 4.0, 5.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0
+        ),
+        0
+    );
+    assert_ne!(unitas_runtime_render_camera_create(handle, cam_id), 0);
+    let ffi_src = unitas_runtime_audio_create(handle, 0);
+    let log_mode = RolloffMode::Logarithmic.as_i32();
+    let lin_mode = RolloffMode::Linear.as_i32();
+    assert_eq!(unitas_runtime_audio_rolloff_mode(handle, ffi_src), log_mode);
+    assert_eq!(
+        unitas_runtime_audio_source_set_rolloff_mode(handle, ffi_src, 1),
+        0
+    );
+    assert_eq!(unitas_runtime_audio_rolloff_mode(handle, ffi_src), lin_mode);
+    assert_eq!(unitas_runtime_audio_set_rolloff_mode(handle, ffi_src, 0), 0);
+    assert_eq!(unitas_runtime_audio_rolloff_mode(handle, ffi_src), log_mode);
+
+    let buf_addr = write_custom_rolloff_curve(handle)?;
+    assert_eq!(
+        unitas_runtime_audio_source_set_custom_rolloff(handle, ffi_src, 3, buf_addr),
         0
     );
     assert_eq!(
-        unitas_runtime_physics2d_get_layer_collision(handle, 1, 2),
-        1
+        unitas_runtime_audio_rolloff_mode(handle, ffi_src),
+        RolloffMode::Custom.as_i32()
     );
     assert_eq!(
-        unitas_runtime_physics2d_set_layer_collision(handle, 1, 2, 0),
+        unitas_runtime_audio_set_custom_rolloff(handle, ffi_src, 3, buf_addr),
         0
     );
-    assert_eq!(
-        unitas_runtime_physics2d_get_layer_collision(handle, 1, 2),
-        0
-    );
-    assert_eq!(
-        unitas_runtime_physics2d_get_layer_collision(handle, 2, 1),
-        0
-    );
-    assert_eq!(unitas_runtime_physics2d_clear(handle), 0);
-    assert_eq!(
-        unitas_runtime_physics2d_get_layer_collision(handle, 1, 2),
-        0
-    );
-    assert_eq!(
-        unitas_runtime_physics2d_set_layer_collision(handle, 32, 0, 1),
-        -2
-    );
-    assert_eq!(
-        unitas_runtime_physics2d_get_layer_collision(handle, 0, 32),
-        -2
-    );
+    assert_eq!(unitas_runtime_tick(handle, 0.0), 0);
+    assert_eq!(unitas_runtime_tick(handle, 0.016), 0);
     assert_eq!(unitas_runtime_destroy(handle), 0);
     Ok(())
 }
@@ -202,16 +269,6 @@ fn physics2d_project_settings_and_abi_entry_points_configure_world_2d_and_surviv
 #[test]
 fn update_audio_syncs_listener_pose_from_active_camera_and_rolloff_ffi_round_trips()
 -> Result<(), Box<dyn std::error::Error>> {
-    use crate::{
-        test_write_path_buffer, unitas_runtime_audio_create, unitas_runtime_audio_rolloff_mode,
-        unitas_runtime_audio_set_custom_rolloff, unitas_runtime_audio_set_rolloff_mode,
-        unitas_runtime_audio_source_set_custom_rolloff,
-        unitas_runtime_audio_source_set_rolloff_mode, unitas_runtime_destroy, unitas_runtime_new,
-        unitas_runtime_object_create, unitas_runtime_object_set_transform,
-        unitas_runtime_path_buffer, unitas_runtime_render_camera_create, unitas_runtime_tick,
-    };
-    use unitas_audio::RolloffMode;
-
     let mut runtime = Runtime::new()?;
     let camera_entity = runtime.create_runtime_object("MainCamera")?;
     let sin_45 = std::f64::consts::FRAC_1_SQRT_2;
@@ -256,65 +313,10 @@ fn update_audio_syncs_listener_pose_from_active_camera_and_rolloff_ffi_round_tri
     let (near_l, near_r) = runtime.audio().source_gains(src).unwrap_or((0.0, 0.0));
     assert!((near_l - 0.5).abs() < 1e-5 && (near_r - 0.5).abs() < 1e-5);
 
-    let handle = unitas_runtime_new();
-    assert_ne!(handle, 0);
-    let cam_id = unitas_runtime_object_create(handle, 0, 0);
-    assert_eq!(
-        unitas_runtime_object_set_transform(
-            handle, cam_id, 3.0, 4.0, 5.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0
-        ),
-        0
-    );
-    assert_ne!(unitas_runtime_render_camera_create(handle, cam_id), 0);
-    let ffi_src = unitas_runtime_audio_create(handle, 0);
-    assert_eq!(
-        unitas_runtime_audio_rolloff_mode(handle, ffi_src),
-        RolloffMode::Logarithmic.as_i32()
-    );
-    assert_eq!(
-        unitas_runtime_audio_source_set_rolloff_mode(handle, ffi_src, 1),
-        0
-    );
-    assert_eq!(
-        unitas_runtime_audio_rolloff_mode(handle, ffi_src),
-        RolloffMode::Linear.as_i32()
-    );
-    assert_eq!(unitas_runtime_audio_set_rolloff_mode(handle, ffi_src, 0), 0);
-    assert_eq!(
-        unitas_runtime_audio_rolloff_mode(handle, ffi_src),
-        RolloffMode::Logarithmic.as_i32()
-    );
-
-    let buf_addr = unitas_runtime_path_buffer(handle, 64);
-    let mut curve_bytes = Vec::new();
-    for (dist, gain) in [(0.0f32, 1.0f32), (0.5, 0.25), (1.0, 0.0)] {
-        curve_bytes.extend_from_slice(&dist.to_le_bytes());
-        curve_bytes.extend_from_slice(&gain.to_le_bytes());
-    }
-    test_write_path_buffer(handle, &curve_bytes)?;
-    assert_eq!(
-        unitas_runtime_audio_source_set_custom_rolloff(handle, ffi_src, 3, buf_addr),
-        0
-    );
-    assert_eq!(
-        unitas_runtime_audio_rolloff_mode(handle, ffi_src),
-        RolloffMode::Custom.as_i32()
-    );
-    assert_eq!(
-        unitas_runtime_audio_set_custom_rolloff(handle, ffi_src, 3, buf_addr),
-        0
-    );
-    assert_eq!(unitas_runtime_tick(handle, 0.0), 0);
-    assert_eq!(unitas_runtime_tick(handle, 0.016), 0);
-    assert_eq!(unitas_runtime_destroy(handle), 0);
-    Ok(())
+    assert_audio_rolloff_ffi_round_trip()
 }
 
-#[test]
-fn scene_load_decodes_ogg_mp3_aiff_and_wav_audio_source_clips()
--> Result<(), Box<dyn std::error::Error>> {
-    let ogg_bytes = include_bytes!("../../unitas-asset/tests/fixtures/sine_mono.ogg");
-    let mp3_bytes = include_bytes!("../../unitas-asset/tests/fixtures/sine_mono.mp3");
+fn sample_aiff_bytes() -> Vec<u8> {
     let mut aiff_form = Vec::new();
     aiff_form.extend_from_slice(b"AIFFCOMM");
     aiff_form.extend_from_slice(&18u32.to_be_bytes());
@@ -328,18 +330,20 @@ fn scene_load_decodes_ogg_mp3_aiff_and_wav_audio_source_clips()
     let mut aiff_bytes = Vec::from(&b"FORM"[..]);
     aiff_bytes.extend_from_slice(&(aiff_form.len() as u32).to_be_bytes());
     aiff_bytes.extend_from_slice(&aiff_form);
+    aiff_bytes
+}
 
-    let temp_root = std::env::temp_dir().join(format!(
-        "unitas_runtime_scene_audio_formats_{}",
-        std::process::id()
-    ));
-    let _ = std::fs::remove_dir_all(&temp_root);
+fn write_multi_audio_scene(
+    temp_root: &Path,
+) -> Result<std::path::PathBuf, Box<dyn std::error::Error>> {
+    let ogg_bytes = include_bytes!("../../unitas-asset/tests/fixtures/sine_mono.ogg");
+    let mp3_bytes = include_bytes!("../../unitas-asset/tests/fixtures/sine_mono.mp3");
+    let aiff_bytes = sample_aiff_bytes();
     let audio_dir = temp_root.join("Assets").join("Audio");
     let scenes_dir = temp_root.join("Assets").join("Scenes");
     std::fs::create_dir_all(&audio_dir)?;
     std::fs::create_dir_all(&scenes_dir)?;
     std::fs::create_dir_all(temp_root.join("ProjectSettings"))?;
-
     let ogg_guid = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
     let mp3_guid = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
     let aiff_guid = "cccccccccccccccccccccccccccccccc";
@@ -354,12 +358,23 @@ fn scene_load_decodes_ogg_mp3_aiff_and_wav_audio_source_clips()
             format!("fileFormatVersion: 2\nguid: {guid}\n"),
         )?;
     }
-
     let scene_yaml = format!(
         "%YAML 1.1\n--- !u!1 &10\nGameObject:\n  m_Name: OggSrc\n--- !u!4 &11\nTransform:\n  m_GameObject: {{fileID: 10}}\n  m_Father: {{fileID: 0}}\n--- !u!82 &12\nAudioSource:\n  m_GameObject: {{fileID: 10}}\n  m_audioClip: {{fileID: 8300000, guid: {ogg_guid}, type: 3}}\n--- !u!1 &20\nGameObject:\n  m_Name: Mp3Src\n--- !u!4 &21\nTransform:\n  m_GameObject: {{fileID: 20}}\n  m_Father: {{fileID: 0}}\n--- !u!82 &22\nAudioSource:\n  m_GameObject: {{fileID: 20}}\n  m_audioClip: {{fileID: 8300000, guid: {mp3_guid}, type: 3}}\n--- !u!1 &30\nGameObject:\n  m_Name: AiffSrc\n--- !u!4 &31\nTransform:\n  m_GameObject: {{fileID: 30}}\n  m_Father: {{fileID: 0}}\n--- !u!82 &32\nAudioSource:\n  m_GameObject: {{fileID: 30}}\n  m_audioClip: {{fileID: 8300000, guid: {aiff_guid}, type: 3}}\n"
     );
     let scene_path = scenes_dir.join("MultiAudio.unity");
     std::fs::write(&scene_path, scene_yaml)?;
+    Ok(scene_path)
+}
+
+#[test]
+fn scene_load_decodes_ogg_mp3_aiff_and_wav_audio_source_clips()
+-> Result<(), Box<dyn std::error::Error>> {
+    let temp_root = std::env::temp_dir().join(format!(
+        "unitas_runtime_scene_audio_formats_{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&temp_root);
+    let scene_path = write_multi_audio_scene(&temp_root)?;
 
     let mut runtime = Runtime::new()?;
     runtime.load_scene(&scene_path)?;
@@ -377,8 +392,7 @@ fn scene_load_decodes_ogg_mp3_aiff_and_wav_audio_source_clips()
             .audio()
             .clip(clip_id)
             .ok_or("missing decoded clip")?;
-        assert!(clip.frame_count() > 0);
-        assert!(clip.duration > 0.0);
+        assert!(clip.frame_count() > 0 && clip.duration > 0.0);
     }
     std::fs::remove_dir_all(&temp_root)?;
     Ok(())

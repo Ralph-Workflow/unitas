@@ -344,51 +344,8 @@ fn matrix_world_layer_matrix_stops_collision_callbacks() -> Result<(), PhysicsEr
 fn matrix_removed_layer_pair_stops_default_mask_queries_and_default_material_applies(
 ) -> Result<(), PhysicsError> {
     let mut world = World::with_gravity([0.0, 0.0, 0.0]);
-    let body_l0 = EntityId::new(10);
-    let body_l1 = EntityId::new(11);
-    let body_l2 = EntityId::new(12);
-
-    world.add_body_with_default_material(
-        body_l0,
-        sphere_body([0.0, 0.0, 0.0], [0.0, 0.0, 0.0], 0),
-    )?;
-    world.add_body_with_material(
-        body_l1,
-        sphere_body([3.0, 0.0, 0.0], [0.0, 0.0, 0.0], 1),
-        None,
-    )?;
-    world.add_body_with_material(
-        body_l2,
-        sphere_body([6.0, 0.0, 0.0], [0.0, 0.0, 0.0], 2),
-        Some(PhysicsMaterial3D::new(0.25, 0.9)),
-    )?;
-
-    assert_eq!(
-        world.body_material(body_l0),
-        Some(PhysicsMaterial3D::default())
-    );
-    assert_eq!(
-        world.body_material(body_l1),
-        Some(PhysicsMaterial3D::default())
-    );
-    assert_eq!(
-        world.body_material(body_l2),
-        Some(PhysicsMaterial3D::new(0.25, 0.9))
-    );
-
-    world.set_default_material(PhysicsMaterial3D::new(0.8, 0.4));
-    assert_eq!(
-        world.body_material(body_l0),
-        Some(PhysicsMaterial3D::new(0.8, 0.4))
-    );
-    assert_eq!(
-        world.body_material(body_l1),
-        Some(PhysicsMaterial3D::new(0.8, 0.4))
-    );
-    assert_eq!(
-        world.body_material(body_l2),
-        Some(PhysicsMaterial3D::new(0.25, 0.9))
-    );
+    let (body_l0, body_l1, body_l2) = setup_default_material_bodies(&mut world)?;
+    assert_default_material_updates(&mut world, (body_l0, body_l1, body_l2));
 
     let initial_hits = world.raycast_default_layer([-2.0, 0.0, 0.0], [1.0, 0.0, 0.0], 20.0, 0);
     let initial_entities: Vec<EntityId> = initial_hits.iter().map(|h| h.entity).collect();
@@ -410,12 +367,95 @@ fn matrix_removed_layer_pair_stops_default_mask_queries_and_default_material_app
     Ok(())
 }
 
+fn setup_default_material_bodies(
+    world: &mut World,
+) -> Result<(EntityId, EntityId, EntityId), PhysicsError> {
+    let body_l0 = EntityId::new(10);
+    let body_l1 = EntityId::new(11);
+    let body_l2 = EntityId::new(12);
+    world.add_body_with_default_material(
+        body_l0,
+        sphere_body([0.0, 0.0, 0.0], [0.0, 0.0, 0.0], 0),
+    )?;
+    world.add_body_with_material(
+        body_l1,
+        sphere_body([3.0, 0.0, 0.0], [0.0, 0.0, 0.0], 1),
+        None,
+    )?;
+    world.add_body_with_material(
+        body_l2,
+        sphere_body([6.0, 0.0, 0.0], [0.0, 0.0, 0.0], 2),
+        Some(PhysicsMaterial3D::new(0.25, 0.9)),
+    )?;
+    Ok((body_l0, body_l1, body_l2))
+}
+
+fn assert_default_material_updates(
+    world: &mut World,
+    bodies: (EntityId, EntityId, EntityId),
+) {
+    let (body_l0, body_l1, body_l2) = bodies;
+    assert_eq!(
+        world.body_material(body_l0),
+        Some(PhysicsMaterial3D::default())
+    );
+    assert_eq!(
+        world.body_material(body_l1),
+        Some(PhysicsMaterial3D::default())
+    );
+    assert_eq!(
+        world.body_material(body_l2),
+        Some(PhysicsMaterial3D::new(0.25, 0.9))
+    );
+    world.set_default_material(PhysicsMaterial3D::new(0.8, 0.4));
+    assert_eq!(
+        world.body_material(body_l0),
+        Some(PhysicsMaterial3D::new(0.8, 0.4))
+    );
+    assert_eq!(
+        world.body_material(body_l1),
+        Some(PhysicsMaterial3D::new(0.8, 0.4))
+    );
+    assert_eq!(
+        world.body_material(body_l2),
+        Some(PhysicsMaterial3D::new(0.25, 0.9))
+    );
+}
+
 #[test]
 fn auto_sync_transforms_off_defers_moved_collider_visibility_until_sync_transforms_or_step(
 ) -> Result<(), PhysicsError> {
     let mut world = World::with_gravity([0.0, 0.0, 0.0]);
     assert!(world.auto_sync_transforms());
+    let (wall, crate_body) = setup_auto_sync_bodies(&mut world)?;
 
+    world.set_auto_sync_transforms(false);
+    assert!(!world.auto_sync_transforms());
+
+    world.set_position(wall, [2.0, 0.0, 0.0])?;
+    assert_eq!(world.position(wall), Some([2.0, 0.0, 0.0]));
+    assert_eq!(world.query_position(wall), Some([0.0, 10.0, 0.0]));
+    assert!(
+        world
+            .raycast([-5.0, 0.0, 0.0], [1.0, 0.0, 0.0], 20.0, 1)
+            .is_empty(),
+        "with auto_sync_transforms off, raycast must not see moved static collider before sync_transforms"
+    );
+    assert!(
+        world.overlap_sphere([2.0, 0.0, 0.0], 0.25, 1).is_empty(),
+        "with auto_sync_transforms off, overlap_sphere must not see moved static collider before sync_transforms"
+    );
+    assert_eq!(
+        world.overlap_sphere([0.0, 10.0, 0.0], 0.25, 1),
+        vec![wall],
+        "before sync_transforms, queries still observe the last synchronized position"
+    );
+
+    assert_sync_and_step_visibility(&mut world, wall, crate_body)?;
+    Ok(())
+}
+
+fn setup_auto_sync_bodies(world: &mut World) -> Result<(EntityId, EntityId), PhysicsError> {
     let wall = EntityId::new(1);
     let crate_body = EntityId::new(2);
     world.add_body(
@@ -454,29 +494,14 @@ fn auto_sync_transforms_off_defers_moved_collider_visibility_until_sync_transfor
             collision_detection_mode: unitas_physics::CollisionDetectionMode3D::Discrete,
         },
     )?;
+    Ok((wall, crate_body))
+}
 
-    world.set_auto_sync_transforms(false);
-    assert!(!world.auto_sync_transforms());
-
-    world.set_position(wall, [2.0, 0.0, 0.0])?;
-    assert_eq!(world.position(wall), Some([2.0, 0.0, 0.0]));
-    assert_eq!(world.query_position(wall), Some([0.0, 10.0, 0.0]));
-    assert!(
-        world
-            .raycast([-5.0, 0.0, 0.0], [1.0, 0.0, 0.0], 20.0, 1)
-            .is_empty(),
-        "with auto_sync_transforms off, raycast must not see moved static collider before sync_transforms"
-    );
-    assert!(
-        world.overlap_sphere([2.0, 0.0, 0.0], 0.25, 1).is_empty(),
-        "with auto_sync_transforms off, overlap_sphere must not see moved static collider before sync_transforms"
-    );
-    assert_eq!(
-        world.overlap_sphere([0.0, 10.0, 0.0], 0.25, 1),
-        vec![wall],
-        "before sync_transforms, queries still observe the last synchronized position"
-    );
-
+fn assert_sync_and_step_visibility(
+    world: &mut World,
+    wall: EntityId,
+    crate_body: EntityId,
+) -> Result<(), PhysicsError> {
     world.sync_transforms();
     assert_eq!(world.query_position(wall), Some([2.0, 0.0, 0.0]));
     let hits_after_sync = world.raycast([-5.0, 0.0, 0.0], [1.0, 0.0, 0.0], 20.0, 1);
@@ -519,10 +544,62 @@ fn auto_sync_transforms_off_defers_moved_collider_visibility_until_sync_transfor
 fn mesh_colliders_follow_the_unity_rules_for_convex_static_and_dynamic_bodies(
 ) -> Result<(), PhysicsError> {
     let mut world = World::new();
-    let floor = EntityId::new(1);
     let valid_convex_dynamic = EntityId::new(3);
     let valid_non_convex_static = EntityId::new(4);
+    setup_mesh_collider_world(&mut world, valid_convex_dynamic, valid_non_convex_static)?;
 
+    assert!(world.is_body_simulated(valid_convex_dynamic));
+    let hull_diags = world.entity_diagnostics(valid_convex_dynamic);
+    assert_eq!(hull_diags.len(), 1);
+    assert_eq!(hull_diags[0].code, "PHY-MESH-CONVEX-HULL-LIMIT");
+    assert!(hull_diags[0].message.contains("255"));
+
+    assert!(world.is_body_simulated(valid_non_convex_static));
+    assert!(world.entity_diagnostics(valid_non_convex_static).is_empty());
+
+    world.step(0.1)?;
+    let convex_y = world.position(valid_convex_dynamic).map_or(2.0, |p| p[1]);
+    assert!(
+        convex_y < 2.0,
+        "convex dynamic mesh collider simulates normally"
+    );
+
+    let attach_err = world.add_collider(
+        valid_convex_dynamic,
+        ColliderDesc {
+            shape: ColliderShape::Mesh {
+                vertices: plate_vertices(),
+                indices: plate_indices(),
+                convex: false,
+            },
+            offset: [0.0, 0.0, 0.0],
+            rotation: [0.0, 0.0, 0.0, 1.0],
+            is_trigger: false,
+            material: None,
+            layer: 1,
+        },
+    );
+    assert!(
+        matches!(
+            attach_err,
+            Err(PhysicsError::NonConvexMeshColliderOnDynamicBody { entity, .. })
+                if entity == valid_convex_dynamic
+        ),
+        "a non-convex mesh collider must be refused on a dynamic body: got {attach_err:?}"
+    );
+    assert!(
+        world.is_body_simulated(valid_convex_dynamic),
+        "the refused collider must leave the body it was refused for simulating"
+    );
+    Ok(())
+}
+
+fn setup_mesh_collider_world(
+    world: &mut World,
+    valid_convex_dynamic: EntityId,
+    valid_non_convex_static: EntityId,
+) -> Result<(), PhysicsError> {
+    let floor = EntityId::new(1);
     world.add_body(
         floor,
         BodyDesc {
@@ -573,12 +650,6 @@ fn mesh_colliders_follow_the_unity_rules_for_convex_static_and_dynamic_bodies(
             ..dynamic_desc
         },
     )?;
-    assert!(world.is_body_simulated(valid_convex_dynamic));
-    let hull_diags = world.entity_diagnostics(valid_convex_dynamic);
-    assert_eq!(hull_diags.len(), 1);
-    assert_eq!(hull_diags[0].code, "PHY-MESH-CONVEX-HULL-LIMIT");
-    assert!(hull_diags[0].message.contains("255"));
-
     world.add_body(
         valid_non_convex_static,
         BodyDesc {
@@ -594,43 +665,6 @@ fn mesh_colliders_follow_the_unity_rules_for_convex_static_and_dynamic_bodies(
             ..dynamic_desc
         },
     )?;
-    assert!(world.is_body_simulated(valid_non_convex_static));
-    assert!(world.entity_diagnostics(valid_non_convex_static).is_empty());
-
-    world.step(0.1)?;
-    let convex_y = world.position(valid_convex_dynamic).map_or(2.0, |p| p[1]);
-    assert!(
-        convex_y < 2.0,
-        "convex dynamic mesh collider simulates normally"
-    );
-
-    let attach_err = world.add_collider(
-        valid_convex_dynamic,
-        ColliderDesc {
-            shape: ColliderShape::Mesh {
-                vertices: plate_vertices(),
-                indices: plate_indices(),
-                convex: false,
-            },
-            offset: [0.0, 0.0, 0.0],
-            rotation: [0.0, 0.0, 0.0, 1.0],
-            is_trigger: false,
-            material: None,
-            layer: 1,
-        },
-    );
-    assert!(
-        matches!(
-            attach_err,
-            Err(PhysicsError::NonConvexMeshColliderOnDynamicBody { entity, .. })
-                if entity == valid_convex_dynamic
-        ),
-        "a non-convex mesh collider must be refused on a dynamic body: got {attach_err:?}"
-    );
-    assert!(
-        world.is_body_simulated(valid_convex_dynamic),
-        "the refused collider must leave the body it was refused for simulating"
-    );
     Ok(())
 }
 
@@ -758,12 +792,21 @@ fn phy_001_story_13_kinematic_move_position_pushes_dynamic_body_and_both_receive
         "PHY-001 story 13: kinematic MovePosition into dynamic body must emit OnCollisionEnter"
     );
 
+    assert_story_13_message_routing(world.collision_matrix(), kinematic_id, dynamic_id);
+    Ok(())
+}
+
+fn assert_story_13_message_routing(
+    matrix: &CollisionMatrix,
+    kinematic_id: EntityId,
+    dynamic_id: EntityId,
+) {
     let kinematic_obj = kinematic(kinematic_id.as_u64(), 0);
     let dynamic_obj = dynamic(dynamic_id.as_u64(), 0);
     let mut tracker = MessageTracker::new();
     let deliveries = tracker.update(
         &[touching(&kinematic_obj, &dynamic_obj, false)],
-        world.collision_matrix(),
+        matrix,
         &FrameEvents::default(),
     );
     assert_eq!(
@@ -782,7 +825,7 @@ fn phy_001_story_13_kinematic_move_position_pushes_dynamic_body_and_both_receive
     let mut rigidbodyless_tracker = MessageTracker::new();
     let silent = rigidbodyless_tracker.update(
         &[touching(&trigger_a, &trigger_b, true)],
-        world.collision_matrix(),
+        matrix,
         &FrameEvents::default(),
     );
     assert!(
@@ -795,7 +838,7 @@ fn phy_001_story_13_kinematic_move_position_pushes_dynamic_body_and_both_receive
     disabled_trigger.behaviour_enabled = false;
     let trigger_deliveries = tracker.update(
         &[touching(&disabled_trigger, &dynamic_obj, true)],
-        world.collision_matrix(),
+        matrix,
         &FrameEvents::default(),
     );
     assert!(
@@ -804,5 +847,4 @@ fn phy_001_story_13_kinematic_move_position_pushes_dynamic_body_and_both_receive
         }),
         "PHY-001 story 13: disabled MonoBehaviour on the trigger collider's GameObject must still receive OnTriggerEnter"
     );
-    Ok(())
 }

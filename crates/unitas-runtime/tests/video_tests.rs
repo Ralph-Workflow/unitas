@@ -81,54 +81,7 @@ fn video_player_corrupt_clip_and_abi_error_paths_report_cleanly() -> TestResult 
     Ok(())
 }
 
-#[test]
-fn ffmpeg_worker_decodes_cooked_video_and_renders_first_and_later_frames_to_scene_capture()
--> TestResult {
-    if !ffmpeg_libraries_available() {
-        eprintln!("skipping FFmpeg decode test: FFmpeg shared libraries not available on host");
-        return Ok(());
-    }
-    let temp =
-        std::env::temp_dir().join(format!("unitas_runtime_video_test_{}", std::process::id()));
-    let _ = fs::remove_dir_all(&temp);
-    let assets_dir = temp.join("Assets");
-    fs::create_dir_all(&assets_dir)?;
-    fs::create_dir_all(temp.join("ProjectSettings"))?;
-
-    let video_path = assets_dir.join("two_color.mp4");
-    if !generate_two_color_mp4(&video_path) {
-        let _ = fs::remove_dir_all(&temp);
-        eprintln!("skipping FFmpeg decode test: ffmpeg CLI not available to generate test clip");
-        return Ok(());
-    }
-
-    let cache_dir = temp.join("cache");
-    let cooked = load_or_cook_video_with_cache(&video_path, Some(&cache_dir))
-        .ok_or("failed to cook two_color.mp4")?;
-    assert_eq!(cooked.width, 64);
-    assert_eq!(cooked.height, 48);
-    assert_eq!(cooked.frame_count, 30);
-
-    let decoded = decode_cooked_video(&cooked)?;
-    assert_eq!(decoded.width, 64);
-    assert_eq!(decoded.height, 48);
-    assert_eq!(decoded.frames_rgba.len(), 30);
-    let first_frame = &decoded.frames_rgba[0];
-    let last_frame = &decoded.frames_rgba[29];
-    assert_ne!(first_frame, last_frame);
-    assert!(
-        first_frame[0] > 180 && first_frame[2] < 80,
-        "expected red first frame, got {:?}",
-        &first_frame[0..4]
-    );
-    assert!(
-        last_frame[2] > 180 && last_frame[0] < 80,
-        "expected blue last frame, got {:?}",
-        &last_frame[0..4]
-    );
-
-    let scene_path = assets_dir.join("VideoScene.unity");
-    let scene_yaml = "%YAML 1.1
+const VIDEO_SURFACE_SCENE_YAML: &str = "%YAML 1.1
 %TAG !u! tag:unity3d.com,2011:
 --- !u!1 &10
 GameObject:
@@ -162,7 +115,59 @@ Transform:
   m_Children: []
   m_Father: {fileID: 0}
 ";
-    fs::write(&scene_path, scene_yaml)?;
+
+fn assert_cooked_two_color_video(video_path: &Path, cache_dir: &Path) -> TestResult {
+    let cooked = load_or_cook_video_with_cache(video_path, Some(cache_dir))
+        .ok_or("failed to cook two_color.mp4")?;
+    assert_eq!(cooked.width, 64);
+    assert_eq!(cooked.height, 48);
+    assert_eq!(cooked.frame_count, 30);
+
+    let decoded = decode_cooked_video(&cooked)?;
+    assert_eq!(decoded.width, 64);
+    assert_eq!(decoded.height, 48);
+    assert_eq!(decoded.frames_rgba.len(), 30);
+    let first_frame = &decoded.frames_rgba[0];
+    let last_frame = &decoded.frames_rgba[29];
+    assert_ne!(first_frame, last_frame);
+    assert!(
+        first_frame[0] > 180 && first_frame[2] < 80,
+        "expected red first frame, got {:?}",
+        &first_frame[0..4]
+    );
+    assert!(
+        last_frame[2] > 180 && last_frame[0] < 80,
+        "expected blue last frame, got {:?}",
+        &last_frame[0..4]
+    );
+    Ok(())
+}
+
+#[test]
+fn ffmpeg_worker_decodes_cooked_video_and_renders_first_and_later_frames_to_scene_capture()
+-> TestResult {
+    if !ffmpeg_libraries_available() {
+        eprintln!("skipping FFmpeg decode test: FFmpeg shared libraries not available on host");
+        return Ok(());
+    }
+    let temp =
+        std::env::temp_dir().join(format!("unitas_runtime_video_test_{}", std::process::id()));
+    let _ = fs::remove_dir_all(&temp);
+    let assets_dir = temp.join("Assets");
+    fs::create_dir_all(&assets_dir)?;
+    fs::create_dir_all(temp.join("ProjectSettings"))?;
+
+    let video_path = assets_dir.join("two_color.mp4");
+    if !generate_two_color_mp4(&video_path) {
+        let _ = fs::remove_dir_all(&temp);
+        eprintln!("skipping FFmpeg decode test: ffmpeg CLI not available to generate test clip");
+        return Ok(());
+    }
+
+    assert_cooked_two_color_video(&video_path, &temp.join("cache"))?;
+
+    let scene_path = assets_dir.join("VideoScene.unity");
+    fs::write(&scene_path, VIDEO_SURFACE_SCENE_YAML)?;
 
     let mut runtime = Runtime::new()?;
     runtime.load_scene(&scene_path)?;
@@ -210,6 +215,31 @@ Transform:
     Ok(())
 }
 
+fn configure_and_load_abi_video(handle: u64, player: u64, video_path: &Path) -> TestResult {
+    let path_bytes = video_path.to_string_lossy().as_bytes().to_vec();
+    let buf_capacity = path_bytes.len().max(VIDEO_STATE_BLOB_BYTES);
+    let buf_ptr = unitas_runtime_path_buffer(handle, buf_capacity as u64);
+    assert_ne!(buf_ptr, 0);
+    test_write_path_buffer(handle, &path_bytes)?;
+    assert_eq!(unitas_runtime_video_set_target_entity(handle, player, 0), 0);
+    assert_eq!(unitas_runtime_video_set_looping(handle, player, 1), 0);
+    assert_eq!(
+        unitas_runtime_video_set_playback_speed(handle, player, 1.0),
+        0
+    );
+    assert_eq!(
+        unitas_runtime_video_set_send_frame_ready_events(handle, player, 1),
+        0
+    );
+    assert_eq!(
+        unitas_runtime_video_load_clip(handle, player, buf_ptr, path_bytes.len() as u64),
+        0
+    );
+    assert_eq!(unitas_runtime_video_prepare(handle, player), 0);
+    assert_eq!(unitas_runtime_video_wait_prepared(handle, player, 5000), 0);
+    Ok(())
+}
+
 #[test]
 fn abi_video_roundtrip_controls_playback_events_and_frame_buffer() -> TestResult {
     if !ffmpeg_libraries_available() {
@@ -234,27 +264,7 @@ fn abi_video_roundtrip_controls_playback_events_and_frame_buffer() -> TestResult
     let player = unitas_runtime_video_create(handle, 1);
     assert_ne!(player, 0);
 
-    let path_bytes = video_path.to_string_lossy().as_bytes().to_vec();
-    let buf_capacity = path_bytes.len().max(VIDEO_STATE_BLOB_BYTES);
-    let buf_ptr = unitas_runtime_path_buffer(handle, buf_capacity as u64);
-    assert_ne!(buf_ptr, 0);
-    test_write_path_buffer(handle, &path_bytes)?;
-    assert_eq!(unitas_runtime_video_set_target_entity(handle, player, 0), 0);
-    assert_eq!(unitas_runtime_video_set_looping(handle, player, 1), 0);
-    assert_eq!(
-        unitas_runtime_video_set_playback_speed(handle, player, 1.0),
-        0
-    );
-    assert_eq!(
-        unitas_runtime_video_set_send_frame_ready_events(handle, player, 1),
-        0
-    );
-    assert_eq!(
-        unitas_runtime_video_load_clip(handle, player, buf_ptr, path_bytes.len() as u64),
-        0
-    );
-    assert_eq!(unitas_runtime_video_prepare(handle, player), 0);
-    assert_eq!(unitas_runtime_video_wait_prepared(handle, player, 5000), 0);
+    configure_and_load_abi_video(handle, player, &video_path)?;
     assert_eq!(unitas_runtime_video_play(handle, player), 0);
     assert_eq!(unitas_runtime_video_advance(handle, player, 1.5), 0);
     let rgba_len = unitas_runtime_video_get_frame_rgba(handle, player);

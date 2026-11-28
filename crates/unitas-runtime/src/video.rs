@@ -432,7 +432,8 @@ impl FfmpegApi {
         }
     }
 
-    fn load() -> Result<Self, VideoDecodeError> {
+    fn load_libraries()
+    -> Result<(Library, Library, Library, Library), VideoDecodeError> {
         let avutil = load_ffmpeg_library(&[
             "/opt/homebrew/lib/libavutil.dylib",
             "/opt/homebrew/lib/libavutil.60.dylib",
@@ -485,6 +486,11 @@ impl FfmpegApi {
             "avformat-61.dll",
             "avformat-60.dll",
         ])?;
+        Ok((avutil, swscale, avcodec, avformat))
+    }
+
+    fn load() -> Result<Self, VideoDecodeError> {
+        let (avutil, swscale, avcodec, avformat) = Self::load_libraries()?;
 
         let avformat_open_input = load_symbol(&avformat, b"avformat_open_input\0")?;
         let avformat_find_stream_info = load_symbol(&avformat, b"avformat_find_stream_info\0")?;
@@ -661,14 +667,11 @@ impl FfmpegApi {
         Ok(codecpar.cast_const())
     }
 
-    fn run_codec_decode_loop(
+    fn open_codec_context(
         &self,
-        fmt_ctx: *mut AvFormatContextPrefix,
         codec_ctx: *mut c_void,
         codecpar: *const AvCodecParametersPrefix,
-        stream_index: c_int,
-        cooked: &CookedVideo,
-    ) -> Result<DecodedVideoClip, VideoDecodeError> {
+    ) -> Result<(), VideoDecodeError> {
         // SAFETY: codec_ctx and codecpar are valid pointers from libavcodec/libavformat.
         let par_rc = unsafe { (self.avcodec_parameters_to_context)(codec_ctx, codecpar) };
         if par_rc < 0 {
@@ -684,6 +687,18 @@ impl FfmpegApi {
                 "avcodec_open2 failed with code {open_rc}"
             )));
         }
+        Ok(())
+    }
+
+    fn run_codec_decode_loop(
+        &self,
+        fmt_ctx: *mut AvFormatContextPrefix,
+        codec_ctx: *mut c_void,
+        codecpar: *const AvCodecParametersPrefix,
+        stream_index: c_int,
+        cooked: &CookedVideo,
+    ) -> Result<DecodedVideoClip, VideoDecodeError> {
+        self.open_codec_context(codec_ctx, codecpar)?;
         // SAFETY: av_packet_alloc takes no arguments and returns a new AVPacket or null.
         let mut packet = unsafe { (self.av_packet_alloc)() };
         if packet.is_null() {
@@ -795,10 +810,9 @@ impl FfmpegApi {
         Ok(())
     }
 
-    fn convert_frame_to_rgba(
-        &self,
+    fn read_frame_header(
         frame: *mut AvFramePrefix,
-    ) -> Result<(Vec<u8>, u32, u32), VideoDecodeError> {
+    ) -> Result<(c_int, c_int, c_int), VideoDecodeError> {
         // SAFETY: frame points to a decoded AVFrame from avcodec_receive_frame.
         let width = unsafe { (*frame).width };
         // SAFETY: frame points to a decoded AVFrame from avcodec_receive_frame.
@@ -810,6 +824,14 @@ impl FfmpegApi {
                 "invalid decoded frame dimensions {width}x{height} format {pix_fmt}"
             )));
         }
+        Ok((width, height, pix_fmt))
+    }
+
+    fn convert_frame_to_rgba(
+        &self,
+        frame: *mut AvFramePrefix,
+    ) -> Result<(Vec<u8>, u32, u32), VideoDecodeError> {
+        let (width, height, pix_fmt) = Self::read_frame_header(frame)?;
         // SAFETY: sws_getContext allocates a scaler context for valid dimensions and pixel formats.
         let sws = unsafe {
             (self.sws_get_context)(

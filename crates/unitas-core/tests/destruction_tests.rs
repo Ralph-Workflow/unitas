@@ -1,6 +1,6 @@
 use std::time::{Duration, Instant};
 
-use unitas_core::{ChangeKind, CoreError, EntityId, SceneGraph};
+use unitas_core::{ChangeKind, CoreError, EntityId, SceneChange, SceneGraph};
 
 const SCALE_NODES: usize = 100_000;
 const SCALE_LOOKUPS: usize = 10_000;
@@ -246,9 +246,7 @@ fn shifting_identities_keeps_the_change_log_consistent() {
     assert!(!graph.contains(id));
 }
 
-#[test]
-fn a_hundred_thousand_nodes_build_look_up_iterate_and_destroy_within_the_budget(
-) -> Result<(), CoreError> {
+fn build_calibration_graph() -> Result<(SceneGraph, Duration), CoreError> {
     let calibration_started = Instant::now();
     let mut calibration = SceneGraph::new();
     let mut calibration_ids = Vec::with_capacity(SCALE_CALIBRATION_NODES);
@@ -260,7 +258,10 @@ fn a_hundred_thousand_nodes_build_look_up_iterate_and_destroy_within_the_budget(
         calibration.attach(*id, calibration_root)?;
     }
     let calibration_elapsed = calibration_started.elapsed();
+    Ok((calibration, calibration_elapsed))
+}
 
+fn build_scale_graph() -> Result<(SceneGraph, Vec<EntityId>, Instant, Duration), CoreError> {
     let mut graph = SceneGraph::new();
     let started = Instant::now();
 
@@ -273,8 +274,10 @@ fn a_hundred_thousand_nodes_build_look_up_iterate_and_destroy_within_the_budget(
         graph.attach(*id, root)?;
     }
     let built = started.elapsed();
+    Ok((graph, ids, started, built))
+}
 
-    let lookup_started = Instant::now();
+fn count_lookups(graph: &SceneGraph, ids: &[EntityId]) -> usize {
     let mut found = 0usize;
     for step in 0..SCALE_LOOKUPS {
         let index = (step * 7_919) % SCALE_NODES;
@@ -282,15 +285,24 @@ fn a_hundred_thousand_nodes_build_look_up_iterate_and_destroy_within_the_budget(
             found += 1;
         }
     }
-    let lookup_elapsed = lookup_started.elapsed();
+    found
+}
 
+fn count_traversal(graph: &SceneGraph) -> (usize, usize) {
     let mut visited = 0usize;
     let mut links = 0usize;
     graph.traverse_breadth_first(|_id, _entity, transform| {
         visited += 1;
         links += transform.children.len();
     });
+    (visited, links)
+}
 
+fn destroy_sampled_nodes(
+    graph: &mut SceneGraph,
+    ids: &[EntityId],
+    started: Instant,
+) -> Result<(usize, usize, Vec<SceneChange>, Duration), CoreError> {
     let destroyed: Vec<EntityId> = ids.iter().skip(1).step_by(1_000).copied().collect();
     for id in &destroyed {
         graph.mark_destroyed(*id)?;
@@ -299,24 +311,16 @@ fn a_hundred_thousand_nodes_build_look_up_iterate_and_destroy_within_the_budget(
 
     let changes = graph.take_changes();
     let elapsed = started.elapsed();
+    Ok((destroyed.len(), swept.len(), changes, elapsed))
+}
 
-    assert_eq!(found, SCALE_LOOKUPS);
-    assert_eq!(visited, SCALE_NODES);
-    assert_eq!(links, SCALE_NODES - 1);
-    assert_eq!(swept.len(), destroyed.len());
-    assert_eq!(graph.len(), SCALE_NODES - destroyed.len());
-    assert_eq!(
-        changes.len(),
-        SCALE_NODES + (SCALE_NODES - 1) + destroyed.len()
-    );
-    // The budgets are wall-clock, so a shared host that runs the same work
-    // slower must not report a fast implementation as slow. The budget scales
-    // with a calibration measured in the same run: the ratio between the scale
-    // run and the half-scale calibration is a property of the implementation
-    // and of the host's speed, and the nominal budget still binds on a host
-    // that is not shared.
-    let scale_budget = SCALE_BUDGET.max(SCALE_CALIBRATION_RATIO * calibration_elapsed);
-
+fn assert_scale_budget(
+    built: Duration,
+    lookup_elapsed: Duration,
+    elapsed: Duration,
+    scale_budget: Duration,
+    calibration_elapsed: Duration,
+) {
     assert!(
         built < scale_budget,
         "building {SCALE_NODES} nodes took {built:?} (budget {scale_budget:?}, calibration {calibration_elapsed:?})"
@@ -328,6 +332,41 @@ fn a_hundred_thousand_nodes_build_look_up_iterate_and_destroy_within_the_budget(
     assert!(
         elapsed < scale_budget,
         "the scale run took {elapsed:?} (budget {scale_budget:?}, calibration {calibration_elapsed:?})"
+    );
+}
+
+#[test]
+fn a_hundred_thousand_nodes_build_look_up_iterate_and_destroy_within_the_budget(
+) -> Result<(), CoreError> {
+    let (_calibration, calibration_elapsed) = build_calibration_graph()?;
+    let (mut graph, ids, started, built) = build_scale_graph()?;
+
+    let lookup_started = Instant::now();
+    let found = count_lookups(&graph, &ids);
+    let lookup_elapsed = lookup_started.elapsed();
+
+    let (visited, links) = count_traversal(&graph);
+
+    let (destroyed_count, swept_count, changes, elapsed) =
+        destroy_sampled_nodes(&mut graph, &ids, started)?;
+
+    assert_eq!(found, SCALE_LOOKUPS);
+    assert_eq!(visited, SCALE_NODES);
+    assert_eq!(links, SCALE_NODES - 1);
+    assert_eq!(swept_count, destroyed_count);
+    assert_eq!(graph.len(), SCALE_NODES - destroyed_count);
+    assert_eq!(
+        changes.len(),
+        SCALE_NODES + (SCALE_NODES - 1) + destroyed_count
+    );
+    let scale_budget = SCALE_BUDGET.max(SCALE_CALIBRATION_RATIO * calibration_elapsed);
+
+    assert_scale_budget(
+        built,
+        lookup_elapsed,
+        elapsed,
+        scale_budget,
+        calibration_elapsed,
     );
     Ok(())
 }

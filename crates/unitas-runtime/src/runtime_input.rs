@@ -149,6 +149,37 @@ mod tests {
         GAMEPAD_BUTTON_SOUTH, STATE_DOWN, STATE_PRESSED, STATE_RELEASED,
     };
 
+    fn assert_gamepad_release_and_disconnect(handle: u64) {
+        assert_eq!(unitas_runtime_tick(handle, 1.0 / 60.0), 0);
+        assert_eq!(
+            unitas_runtime_input_gamepad_button_state(handle, GAMEPAD_BUTTON_SOUTH),
+            STATE_DOWN
+        );
+
+        assert_eq!(
+            unitas_runtime_input_gamepad_button_event(handle, GAMEPAD_BUTTON_SOUTH, 0),
+            0
+        );
+        assert_eq!(unitas_runtime_tick(handle, 1.0 / 60.0), 0);
+        assert_eq!(
+            unitas_runtime_input_gamepad_button_state(handle, GAMEPAD_BUTTON_SOUTH),
+            STATE_RELEASED
+        );
+
+        assert_eq!(unitas_runtime_tick(handle, 1.0 / 60.0), 0);
+        assert_eq!(
+            unitas_runtime_input_gamepad_button_state(handle, GAMEPAD_BUTTON_SOUTH),
+            0
+        );
+
+        assert_eq!(unitas_runtime_input_gamepad_set_connected(handle, 0), 0);
+        assert_eq!(unitas_runtime_input_gamepad_connected(handle), 0);
+        assert_eq!(
+            unitas_runtime_input_gamepad_axis(handle, GAMEPAD_AXIS_LEFT_X),
+            0.0
+        );
+    }
+
     #[test]
     fn gamepad_ffi_exports_track_connection_button_transitions_and_axes() {
         let handle = unitas_runtime_new();
@@ -188,35 +219,7 @@ mod tests {
             (unitas_runtime_input_gamepad_axis(handle, GAMEPAD_AXIS_RIGHT_Y) - (-0.5)).abs() < 1e-9
         );
 
-        assert_eq!(unitas_runtime_tick(handle, 1.0 / 60.0), 0);
-        assert_eq!(
-            unitas_runtime_input_gamepad_button_state(handle, GAMEPAD_BUTTON_SOUTH),
-            STATE_DOWN
-        );
-
-        assert_eq!(
-            unitas_runtime_input_gamepad_button_event(handle, GAMEPAD_BUTTON_SOUTH, 0),
-            0
-        );
-        assert_eq!(unitas_runtime_tick(handle, 1.0 / 60.0), 0);
-        assert_eq!(
-            unitas_runtime_input_gamepad_button_state(handle, GAMEPAD_BUTTON_SOUTH),
-            STATE_RELEASED
-        );
-
-        assert_eq!(unitas_runtime_tick(handle, 1.0 / 60.0), 0);
-        assert_eq!(
-            unitas_runtime_input_gamepad_button_state(handle, GAMEPAD_BUTTON_SOUTH),
-            0
-        );
-
-        assert_eq!(unitas_runtime_input_gamepad_set_connected(handle, 0), 0);
-        assert_eq!(unitas_runtime_input_gamepad_connected(handle), 0);
-        assert_eq!(
-            unitas_runtime_input_gamepad_axis(handle, GAMEPAD_AXIS_LEFT_X),
-            0.0
-        );
-
+        assert_gamepad_release_and_disconnect(handle);
         assert_eq!(unitas_runtime_destroy(handle), 0);
     }
 

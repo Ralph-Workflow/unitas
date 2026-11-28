@@ -438,56 +438,74 @@ impl AnimatorController {
             StateMotion::BlendTree1D {
                 parameter,
                 thresholds,
-            } => {
-                self.validate_float_parameter(parameter, "blend tree", &state.name, diagnostics);
-                if thresholds.is_empty() {
-                    diagnostics.push(AnimationDiagnostic::MissingMotion {
-                        state_name: state.name.clone(),
-                    });
-                }
-                for (_, clip) in thresholds {
-                    validate_clip_bindings(clip, diagnostics);
-                }
-            }
+            } => self.validate_blend_tree_1d(state, parameter, thresholds, diagnostics),
             StateMotion::BlendTree2D {
                 parameter_x,
                 parameter_y,
                 children,
                 ..
             } => {
-                for parameter in [parameter_x, parameter_y] {
-                    self.validate_float_parameter(
-                        parameter,
-                        "2D blend tree",
-                        &state.name,
-                        diagnostics,
-                    );
-                }
-                if children.is_empty() {
-                    diagnostics.push(AnimationDiagnostic::MissingMotion {
-                        state_name: state.name.clone(),
-                    });
-                }
-                for (_, clip) in children {
-                    validate_clip_bindings(clip, diagnostics);
-                }
+                self.validate_blend_tree_2d(state, parameter_x, parameter_y, children, diagnostics);
             }
             StateMotion::BlendTreeDirect { children } => {
-                if children.is_empty() {
-                    diagnostics.push(AnimationDiagnostic::MissingMotion {
-                        state_name: state.name.clone(),
-                    });
-                }
-                for (parameter, clip) in children {
-                    self.validate_float_parameter(
-                        parameter,
-                        "Direct blend tree",
-                        &state.name,
-                        diagnostics,
-                    );
-                    validate_clip_bindings(clip, diagnostics);
-                }
+                self.validate_blend_tree_direct(state, children, diagnostics);
             }
+        }
+    }
+
+    fn validate_blend_tree_1d(
+        &self,
+        state: &AnimatorState,
+        parameter: &str,
+        thresholds: &[(f32, AnimationClip)],
+        diagnostics: &mut Vec<AnimationDiagnostic>,
+    ) {
+        self.validate_float_parameter(parameter, "blend tree", &state.name, diagnostics);
+        if thresholds.is_empty() {
+            diagnostics.push(AnimationDiagnostic::MissingMotion {
+                state_name: state.name.clone(),
+            });
+        }
+        for (_, clip) in thresholds {
+            validate_clip_bindings(clip, diagnostics);
+        }
+    }
+
+    fn validate_blend_tree_2d(
+        &self,
+        state: &AnimatorState,
+        parameter_x: &str,
+        parameter_y: &str,
+        children: &[([f32; 2], AnimationClip)],
+        diagnostics: &mut Vec<AnimationDiagnostic>,
+    ) {
+        for parameter in [parameter_x, parameter_y] {
+            self.validate_float_parameter(parameter, "2D blend tree", &state.name, diagnostics);
+        }
+        if children.is_empty() {
+            diagnostics.push(AnimationDiagnostic::MissingMotion {
+                state_name: state.name.clone(),
+            });
+        }
+        for (_, clip) in children {
+            validate_clip_bindings(clip, diagnostics);
+        }
+    }
+
+    fn validate_blend_tree_direct(
+        &self,
+        state: &AnimatorState,
+        children: &[(String, AnimationClip)],
+        diagnostics: &mut Vec<AnimationDiagnostic>,
+    ) {
+        if children.is_empty() {
+            diagnostics.push(AnimationDiagnostic::MissingMotion {
+                state_name: state.name.clone(),
+            });
+        }
+        for (parameter, clip) in children {
+            self.validate_float_parameter(parameter, "Direct blend tree", &state.name, diagnostics);
+            validate_clip_bindings(clip, diagnostics);
         }
     }
 
@@ -1360,70 +1378,8 @@ impl Animator {
         entered: Option<usize>,
     ) -> AnimatorStepResult {
         if let Some(mut tr) = self.active_transition {
-            let target_speed = self
-                .controller
-                .states
-                .get(tr.target_state)
-                .map_or(1.0, |s| s.speed);
-            let prev_target_time = tr.target_time;
-            let next_target_time = prev_target_time + dt * self.speed * target_speed.max(0.0);
-            tr.target_time = next_target_time;
-            tr.elapsed += dt * self.speed;
-
-            if tr.elapsed >= tr.duration {
-                let exited = self.current_state;
-                self.current_state = tr.target_state;
-                self.state_time = tr.target_time;
-                self.active_transition = None;
-                self.state_frames = 0;
-                if self
-                    .controller
-                    .states
-                    .get(self.current_state)
-                    .is_some_and(|s| s.is_exit)
-                {
-                    self.current_state = self
-                        .controller
-                        .entry_state
-                        .min(self.controller.states.len() - 1);
-                    self.state_time = 0.0;
-                }
-                let sample =
-                    self.sample_state(self.current_state, prev_target_time, self.state_time);
-                let bindings = self.apply_write_defaults(self.current_state, sample.bindings);
-                return self.finish(
-                    callbacks,
-                    entered,
-                    Some(exited),
-                    bindings,
-                    sample.fired_events,
-                    None,
-                );
-            }
-
-            tr.target_frames += 1;
-            let destination_update = if tr.target_frames >= 2 {
-                Some(tr.target_state)
-            } else {
-                None
-            };
-            self.active_transition = Some(tr);
-            let alpha = (tr.elapsed / tr.duration).clamp(0.0, 1.0);
-            let src_sample = self.sample_state(self.current_state, prev_time, new_time);
-            let dst_sample = self.sample_state(tr.target_state, prev_target_time, next_target_time);
-            let bindings =
-                blend_sampled_bindings(&src_sample.bindings, &dst_sample.bindings, alpha);
-            let mut fired_events = src_sample.fired_events;
-            fired_events.extend(dst_sample.fired_events);
-            let bindings = self.apply_write_defaults(self.current_state, bindings);
-            return self.finish(
-                callbacks,
-                entered,
-                None,
-                bindings,
-                fired_events,
-                destination_update,
-            );
+            return self
+                .sample_active_transition(&mut tr, dt, prev_time, new_time, callbacks, entered);
         }
 
         let sample = self.sample_state(self.current_state, prev_time, new_time);
@@ -1432,6 +1388,89 @@ impl Animator {
             callbacks,
             entered,
             None,
+            bindings,
+            sample.fired_events,
+            None,
+        )
+    }
+
+    fn sample_active_transition(
+        &mut self,
+        tr: &mut ActiveTransition,
+        dt: f32,
+        prev_time: f32,
+        new_time: f32,
+        callbacks: Vec<StateMachineCallback>,
+        entered: Option<usize>,
+    ) -> AnimatorStepResult {
+        let target_speed = self
+            .controller
+            .states
+            .get(tr.target_state)
+            .map_or(1.0, |s| s.speed);
+        let prev_target_time = tr.target_time;
+        let next_target_time = prev_target_time + dt * self.speed * target_speed.max(0.0);
+        tr.target_time = next_target_time;
+        tr.elapsed += dt * self.speed;
+
+        if tr.elapsed >= tr.duration {
+            return self.complete_transition(tr, prev_target_time, callbacks, entered);
+        }
+
+        tr.target_frames += 1;
+        let destination_update = if tr.target_frames >= 2 {
+            Some(tr.target_state)
+        } else {
+            None
+        };
+        self.active_transition = Some(*tr);
+        let alpha = (tr.elapsed / tr.duration).clamp(0.0, 1.0);
+        let src_sample = self.sample_state(self.current_state, prev_time, new_time);
+        let dst_sample = self.sample_state(tr.target_state, prev_target_time, next_target_time);
+        let bindings = blend_sampled_bindings(&src_sample.bindings, &dst_sample.bindings, alpha);
+        let mut fired_events = src_sample.fired_events;
+        fired_events.extend(dst_sample.fired_events);
+        let bindings = self.apply_write_defaults(self.current_state, bindings);
+        self.finish(
+            callbacks,
+            entered,
+            None,
+            bindings,
+            fired_events,
+            destination_update,
+        )
+    }
+
+    fn complete_transition(
+        &mut self,
+        tr: &ActiveTransition,
+        prev_target_time: f32,
+        callbacks: Vec<StateMachineCallback>,
+        entered: Option<usize>,
+    ) -> AnimatorStepResult {
+        let exited = self.current_state;
+        self.current_state = tr.target_state;
+        self.state_time = tr.target_time;
+        self.active_transition = None;
+        self.state_frames = 0;
+        if self
+            .controller
+            .states
+            .get(self.current_state)
+            .is_some_and(|s| s.is_exit)
+        {
+            self.current_state = self
+                .controller
+                .entry_state
+                .min(self.controller.states.len() - 1);
+            self.state_time = 0.0;
+        }
+        let sample = self.sample_state(self.current_state, prev_target_time, self.state_time);
+        let bindings = self.apply_write_defaults(self.current_state, sample.bindings);
+        self.finish(
+            callbacks,
+            entered,
+            Some(exited),
             bindings,
             sample.fired_events,
             None,
@@ -1708,175 +1747,195 @@ impl Animator {
 
     fn sample_state(&self, state_index: usize, prev_time: f32, current_time: f32) -> ClipSample {
         let Some(state) = self.controller.states.get(state_index) else {
-            return ClipSample {
-                bindings: Vec::new(),
-                fired_events: Vec::new(),
-                normalized_time: 0.0,
-                wrapped_time: 0.0,
-            };
+            return empty_clip_sample();
         };
         match &state.motion {
-            StateMotion::None => ClipSample {
-                bindings: Vec::new(),
-                fired_events: Vec::new(),
-                normalized_time: 0.0,
-                wrapped_time: 0.0,
-            },
+            StateMotion::None => empty_clip_sample(),
             StateMotion::Clip(clip) => clip.sample(prev_time, current_time),
             StateMotion::BlendTree1D {
                 parameter,
                 thresholds,
-            } => {
-                if thresholds.is_empty() {
-                    return ClipSample {
-                        bindings: Vec::new(),
-                        fired_events: Vec::new(),
-                        normalized_time: 0.0,
-                        wrapped_time: 0.0,
-                    };
-                }
-                let param_val = self.get_float(parameter).unwrap_or(0.0);
-                let mut sorted: Vec<&(f32, AnimationClip)> = thresholds.iter().collect();
-                sorted.sort_by(|a, b| a.0.total_cmp(&b.0));
-                if sorted.len() == 1 || param_val <= sorted[0].0 {
-                    return sorted[0].1.sample(prev_time, current_time);
-                }
-                let last = sorted[sorted.len() - 1];
-                if param_val >= last.0 {
-                    return last.1.sample(prev_time, current_time);
-                }
-                for pair in sorted.windows(2) {
-                    let (t0, c0) = pair[0];
-                    let (t1, c1) = pair[1];
-                    if param_val >= *t0 && param_val <= *t1 {
-                        let span = t1 - t0;
-                        let alpha = if span.abs() <= 1e-6 {
-                            0.0
-                        } else {
-                            ((param_val - t0) / span).clamp(0.0, 1.0)
-                        };
-                        let s0 = c0.sample(prev_time, current_time);
-                        let s1 = c1.sample(prev_time, current_time);
-                        let bindings = blend_sampled_bindings(&s0.bindings, &s1.bindings, alpha);
-                        let mut fired_events = s0.fired_events;
-                        fired_events.extend(s1.fired_events);
-                        return ClipSample {
-                            bindings,
-                            fired_events,
-                            normalized_time: s0.normalized_time
-                                + (s1.normalized_time - s0.normalized_time) * alpha,
-                            wrapped_time: s0.wrapped_time
-                                + (s1.wrapped_time - s0.wrapped_time) * alpha,
-                        };
-                    }
-                }
-                sorted[0].1.sample(prev_time, current_time)
-            }
+            } => self.sample_blend_tree_1d(parameter, thresholds, prev_time, current_time),
             StateMotion::BlendTree2D {
                 parameter_x,
                 parameter_y,
                 children,
                 ..
-            } => {
-                if children.is_empty() {
-                    return ClipSample {
-                        bindings: Vec::new(),
-                        fired_events: Vec::new(),
-                        normalized_time: 0.0,
-                        wrapped_time: 0.0,
-                    };
-                }
-                let px = self.get_float(parameter_x).unwrap_or(0.0);
-                let py = self.get_float(parameter_y).unwrap_or(0.0);
-                let mut raw_weights = Vec::with_capacity(children.len());
-                for (pos, _) in children {
-                    let dx = px - pos[0];
-                    let dy = py - pos[1];
-                    let dist_sq = dx * dx + dy * dy;
-                    if dist_sq <= 1e-8 {
-                        raw_weights.clear();
-                        for (idx, _) in children.iter().enumerate() {
-                            raw_weights.push(if children[idx].0 == *pos { 1.0 } else { 0.0 });
-                        }
-                        break;
-                    }
-                    raw_weights.push(1.0 / dist_sq);
-                }
-                let sum: f32 = raw_weights.iter().sum();
-                let mut bindings = Vec::new();
-                let mut fired_events = Vec::new();
-                let mut acc_weight = 0.0_f32;
-                let mut norm_time = 0.0_f32;
-                let mut wrap_time = 0.0_f32;
-                for ((_, clip), w_raw) in children.iter().zip(raw_weights) {
-                    let w = if sum > 1e-8 { w_raw / sum } else { 0.0 };
-                    if w <= 1e-6 {
-                        continue;
-                    }
-                    let sample = clip.sample(prev_time, current_time);
-                    let frac = w / (acc_weight + w);
-                    bindings = if bindings.is_empty() {
-                        sample.bindings
-                    } else {
-                        blend_sampled_bindings(&bindings, &sample.bindings, frac)
-                    };
-                    fired_events.extend(sample.fired_events);
-                    norm_time += sample.normalized_time * w;
-                    wrap_time += sample.wrapped_time * w;
-                    acc_weight += w;
-                }
-                ClipSample {
-                    bindings,
-                    fired_events,
-                    normalized_time: norm_time,
-                    wrapped_time: wrap_time,
-                }
-            }
+            } => self.sample_blend_tree_2d(
+                parameter_x,
+                parameter_y,
+                children,
+                prev_time,
+                current_time,
+            ),
             StateMotion::BlendTreeDirect { children } => {
-                if children.is_empty() {
-                    return ClipSample {
-                        bindings: Vec::new(),
-                        fired_events: Vec::new(),
-                        normalized_time: 0.0,
-                        wrapped_time: 0.0,
-                    };
-                }
-                let weights: Vec<f32> = children
-                    .iter()
-                    .map(|(param, _)| self.get_float(param).unwrap_or(0.0).max(0.0))
-                    .collect();
-                let sum: f32 = weights.iter().sum();
-                let mut bindings = Vec::new();
-                let mut fired_events = Vec::new();
-                let mut acc_weight = 0.0_f32;
-                let mut norm_time = 0.0_f32;
-                let mut wrap_time = 0.0_f32;
-                for ((_, clip), w_raw) in children.iter().zip(weights) {
-                    let w = if sum > 1e-8 { w_raw / sum } else { 0.0 };
-                    if w <= 1e-6 {
-                        continue;
-                    }
-                    let sample = clip.sample(prev_time, current_time);
-                    let frac = w / (acc_weight + w);
-                    bindings = if bindings.is_empty() {
-                        sample.bindings
-                    } else {
-                        blend_sampled_bindings(&bindings, &sample.bindings, frac)
-                    };
-                    fired_events.extend(sample.fired_events);
-                    norm_time += sample.normalized_time * w;
-                    wrap_time += sample.wrapped_time * w;
-                    acc_weight += w;
-                }
-                ClipSample {
-                    bindings,
-                    fired_events,
-                    normalized_time: norm_time,
-                    wrapped_time: wrap_time,
-                }
+                self.sample_blend_tree_direct(children, prev_time, current_time)
             }
         }
     }
+
+    fn sample_blend_tree_1d(
+        &self,
+        parameter: &str,
+        thresholds: &[(f32, AnimationClip)],
+        prev_time: f32,
+        current_time: f32,
+    ) -> ClipSample {
+        if thresholds.is_empty() {
+            return empty_clip_sample();
+        }
+        let param_val = self.get_float(parameter).unwrap_or(0.0);
+        let mut sorted: Vec<&(f32, AnimationClip)> = thresholds.iter().collect();
+        sorted.sort_by(|a, b| a.0.total_cmp(&b.0));
+        if sorted.len() == 1 || param_val <= sorted[0].0 {
+            return sorted[0].1.sample(prev_time, current_time);
+        }
+        let last = sorted[sorted.len() - 1];
+        if param_val >= last.0 {
+            return last.1.sample(prev_time, current_time);
+        }
+        for pair in sorted.windows(2) {
+            let (t0, c0) = pair[0];
+            let (t1, c1) = pair[1];
+            if param_val >= *t0 && param_val <= *t1 {
+                let span = t1 - t0;
+                let alpha = if span.abs() <= 1e-6 {
+                    0.0
+                } else {
+                    ((param_val - t0) / span).clamp(0.0, 1.0)
+                };
+                let s0 = c0.sample(prev_time, current_time);
+                let s1 = c1.sample(prev_time, current_time);
+                let bindings = blend_sampled_bindings(&s0.bindings, &s1.bindings, alpha);
+                let mut fired_events = s0.fired_events;
+                fired_events.extend(s1.fired_events);
+                return ClipSample {
+                    bindings,
+                    fired_events,
+                    normalized_time: s0.normalized_time
+                        + (s1.normalized_time - s0.normalized_time) * alpha,
+                    wrapped_time: s0.wrapped_time + (s1.wrapped_time - s0.wrapped_time) * alpha,
+                };
+            }
+        }
+        sorted[0].1.sample(prev_time, current_time)
+    }
+
+    fn sample_blend_tree_2d(
+        &self,
+        parameter_x: &str,
+        parameter_y: &str,
+        children: &[([f32; 2], AnimationClip)],
+        prev_time: f32,
+        current_time: f32,
+    ) -> ClipSample {
+        if children.is_empty() {
+            return empty_clip_sample();
+        }
+        let px = self.get_float(parameter_x).unwrap_or(0.0);
+        let py = self.get_float(parameter_y).unwrap_or(0.0);
+        let raw_weights = blend_tree_2d_weights(px, py, children);
+        let sum: f32 = raw_weights.iter().sum();
+        let mut bindings = Vec::new();
+        let mut fired_events = Vec::new();
+        let mut acc_weight = 0.0_f32;
+        let mut norm_time = 0.0_f32;
+        let mut wrap_time = 0.0_f32;
+        for ((_, clip), w_raw) in children.iter().zip(raw_weights) {
+            let w = if sum > 1e-8 { w_raw / sum } else { 0.0 };
+            if w <= 1e-6 {
+                continue;
+            }
+            let sample = clip.sample(prev_time, current_time);
+            let frac = w / (acc_weight + w);
+            bindings = if bindings.is_empty() {
+                sample.bindings
+            } else {
+                blend_sampled_bindings(&bindings, &sample.bindings, frac)
+            };
+            fired_events.extend(sample.fired_events);
+            norm_time += sample.normalized_time * w;
+            wrap_time += sample.wrapped_time * w;
+            acc_weight += w;
+        }
+        ClipSample {
+            bindings,
+            fired_events,
+            normalized_time: norm_time,
+            wrapped_time: wrap_time,
+        }
+    }
+
+    fn sample_blend_tree_direct(
+        &self,
+        children: &[(String, AnimationClip)],
+        prev_time: f32,
+        current_time: f32,
+    ) -> ClipSample {
+        if children.is_empty() {
+            return empty_clip_sample();
+        }
+        let weights: Vec<f32> = children
+            .iter()
+            .map(|(param, _)| self.get_float(param).unwrap_or(0.0).max(0.0))
+            .collect();
+        let sum: f32 = weights.iter().sum();
+        let mut bindings = Vec::new();
+        let mut fired_events = Vec::new();
+        let mut acc_weight = 0.0_f32;
+        let mut norm_time = 0.0_f32;
+        let mut wrap_time = 0.0_f32;
+        for ((_, clip), w_raw) in children.iter().zip(weights) {
+            let w = if sum > 1e-8 { w_raw / sum } else { 0.0 };
+            if w <= 1e-6 {
+                continue;
+            }
+            let sample = clip.sample(prev_time, current_time);
+            let frac = w / (acc_weight + w);
+            bindings = if bindings.is_empty() {
+                sample.bindings
+            } else {
+                blend_sampled_bindings(&bindings, &sample.bindings, frac)
+            };
+            fired_events.extend(sample.fired_events);
+            norm_time += sample.normalized_time * w;
+            wrap_time += sample.wrapped_time * w;
+            acc_weight += w;
+        }
+        ClipSample {
+            bindings,
+            fired_events,
+            normalized_time: norm_time,
+            wrapped_time: wrap_time,
+        }
+    }
+}
+
+fn empty_clip_sample() -> ClipSample {
+    ClipSample {
+        bindings: Vec::new(),
+        fired_events: Vec::new(),
+        normalized_time: 0.0,
+        wrapped_time: 0.0,
+    }
+}
+
+fn blend_tree_2d_weights(px: f32, py: f32, children: &[([f32; 2], AnimationClip)]) -> Vec<f32> {
+    let mut raw_weights = Vec::with_capacity(children.len());
+    for (pos, _) in children {
+        let dx = px - pos[0];
+        let dy = py - pos[1];
+        let dist_sq = dx * dx + dy * dy;
+        if dist_sq <= 1e-8 {
+            raw_weights.clear();
+            for (idx, _) in children.iter().enumerate() {
+                raw_weights.push(if children[idx].0 == *pos { 1.0 } else { 0.0 });
+            }
+            break;
+        }
+        raw_weights.push(1.0 / dist_sq);
+    }
+    raw_weights
 }
 
 pub fn blend_sampled_bindings(

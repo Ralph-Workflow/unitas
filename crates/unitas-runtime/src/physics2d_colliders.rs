@@ -257,6 +257,30 @@ fn ensure_composite_collider_on_entity(
     comp_col_id
 }
 
+fn resolve_fallback_body_for_composite(
+    state: &mut RuntimeState,
+    entity_id: EntityId,
+    comp_entity_id: EntityId,
+    part_colliders: &[ColliderId2D],
+) -> Option<BodyId2D> {
+    let direct = state
+        .runtime
+        .physics_mut()
+        .body_id_2d(comp_entity_id)
+        .or_else(|| state.runtime.physics_mut().body_id_2d(entity_id));
+    if direct.is_some() {
+        return direct;
+    }
+    part_colliders.iter().find_map(|&cid| {
+        state
+            .runtime
+            .physics_mut()
+            .world_2d()
+            .collider(cid)
+            .and_then(|c| c.attached_body)
+    })
+}
+
 pub(crate) fn set_collider_composite(
     state: &mut RuntimeState,
     entity: u64,
@@ -282,25 +306,8 @@ pub(crate) fn set_collider_composite(
         .physics_mut()
         .collider_ids_2d(entity_id)
         .to_vec();
-    let mut fallback_body = state
-        .runtime
-        .physics_mut()
-        .body_id_2d(comp_entity_id)
-        .or_else(|| state.runtime.physics_mut().body_id_2d(entity_id));
-    if fallback_body.is_none() {
-        for &cid in &part_colliders {
-            if let Some(body) = state
-                .runtime
-                .physics_mut()
-                .world_2d()
-                .collider(cid)
-                .and_then(|c| c.attached_body)
-            {
-                fallback_body = Some(body);
-                break;
-            }
-        }
-    }
+    let fallback_body =
+        resolve_fallback_body_for_composite(state, entity_id, comp_entity_id, &part_colliders);
     let comp_col_id =
         ensure_composite_collider_on_entity(state, comp_entity_id, fallback_body, geometry_type);
     let comp_body = state
@@ -310,10 +317,9 @@ pub(crate) fn set_collider_composite(
         .collider(comp_col_id)
         .and_then(|c| c.attached_body);
     for cid in part_colliders {
-        if cid == comp_col_id {
-            continue;
-        }
-        if let Some(col) = state.runtime.physics_mut().world_2d_mut().collider_mut(cid) {
+        if cid != comp_col_id
+            && let Some(col) = state.runtime.physics_mut().world_2d_mut().collider_mut(cid)
+        {
             col.used_by_composite = true;
             if let Some(body) = comp_body {
                 col.attached_body = Some(body);
@@ -418,6 +424,98 @@ fn build_tilemap_collider_from_artifact(
     tilemap
 }
 
+fn ensure_tilemap_target_body(
+    state: &mut RuntimeState,
+    entity_id: EntityId,
+    composite_entity: u64,
+) -> BodyId2D {
+    let target_body = if composite_entity != 0 {
+        state
+            .runtime
+            .physics_mut()
+            .body_id_2d(EntityId::new(composite_entity))
+            .or_else(|| state.runtime.physics_mut().body_id_2d(entity_id))
+    } else {
+        state.runtime.physics_mut().body_id_2d(entity_id)
+    };
+    if let Some(body) = target_body {
+        return body;
+    }
+    let owner = if composite_entity != 0 {
+        EntityId::new(composite_entity)
+    } else {
+        entity_id
+    };
+    state
+        .runtime
+        .physics_mut()
+        .add_body_2d(BodyDesc2D::static_body(owner, [0.0, 0.0]))
+}
+
+fn ensure_tilemap_collider_slot(
+    state: &mut RuntimeState,
+    entity_id: EntityId,
+    composite_entity: u64,
+    target_body: BodyId2D,
+    comp_col_id: Option<ColliderId2D>,
+) -> ColliderId2D {
+    let used_by_composite = composite_entity != 0;
+    if let (true, Some(comp_id)) = (composite_entity == entity_id.as_u64(), comp_col_id) {
+        return comp_id;
+    }
+    let existing = state
+        .runtime
+        .physics_mut()
+        .collider_ids_2d(entity_id)
+        .iter()
+        .copied()
+        .find(|id| Some(*id) != comp_col_id);
+    if let Some(id) = existing {
+        if let Some(col) = state.runtime.physics_mut().world_2d_mut().collider_mut(id) {
+            col.attached_body = Some(target_body);
+            col.used_by_composite = used_by_composite;
+        }
+        return id;
+    }
+    let desc = ColliderDesc2D::box_collider(entity_id, [0.0, 0.0])
+        .with_used_by_composite(used_by_composite)
+        .with_attached_body(target_body);
+    state.runtime.physics_mut().add_collider_2d(desc)
+}
+
+fn resolve_tilemap_composite_collider(
+    state: &mut RuntimeState,
+    composite_entity: u64,
+    target_body: BodyId2D,
+) -> Option<ColliderId2D> {
+    if composite_entity == 0 {
+        return None;
+    }
+    let comp_entity_id = EntityId::new(composite_entity);
+    let comp_ids = state
+        .runtime
+        .physics_mut()
+        .collider_ids_2d(comp_entity_id)
+        .to_vec();
+    let existing_geom = comp_ids
+        .iter()
+        .find_map(|id| {
+            state
+                .runtime
+                .physics_mut()
+                .world_2d()
+                .composite(*id)
+                .map(|c| c.geometry_type)
+        })
+        .unwrap_or(CompositeGeometryType2D::Outlines);
+    Some(ensure_composite_collider_on_entity(
+        state,
+        comp_entity_id,
+        Some(target_body),
+        existing_geom,
+    ))
+}
+
 pub(crate) fn build_tilemap_collider(
     state: &mut RuntimeState,
     entity: u64,
@@ -438,85 +536,10 @@ pub(crate) fn build_tilemap_collider(
     let used_by_composite = composite_entity != 0;
     let tilemap = build_tilemap_collider_from_artifact(&artifact, used_by_composite);
     let entity_id = EntityId::new(entity);
-
-    let mut target_body = if composite_entity != 0 {
-        state
-            .runtime
-            .physics_mut()
-            .body_id_2d(EntityId::new(composite_entity))
-            .or_else(|| state.runtime.physics_mut().body_id_2d(entity_id))
-    } else {
-        state.runtime.physics_mut().body_id_2d(entity_id)
-    };
-    if target_body.is_none() {
-        let owner = if composite_entity != 0 {
-            EntityId::new(composite_entity)
-        } else {
-            entity_id
-        };
-        target_body = Some(
-            state
-                .runtime
-                .physics_mut()
-                .add_body_2d(BodyDesc2D::static_body(owner, [0.0, 0.0])),
-        );
-    }
-
-    let comp_col_id = if composite_entity != 0 {
-        let comp_entity_id = EntityId::new(composite_entity);
-        let comp_ids = state
-            .runtime
-            .physics_mut()
-            .collider_ids_2d(comp_entity_id)
-            .to_vec();
-        let existing_geom = comp_ids
-            .iter()
-            .find_map(|id| {
-                state
-                    .runtime
-                    .physics_mut()
-                    .world_2d()
-                    .composite(*id)
-                    .map(|c| c.geometry_type)
-            })
-            .unwrap_or(CompositeGeometryType2D::Outlines);
-        Some(ensure_composite_collider_on_entity(
-            state,
-            comp_entity_id,
-            target_body,
-            existing_geom,
-        ))
-    } else {
-        None
-    };
-
-    let tm_col_id = match (composite_entity == entity, comp_col_id) {
-        (true, Some(comp_id)) => comp_id,
-        _ => {
-            let existing = state
-                .runtime
-                .physics_mut()
-                .collider_ids_2d(entity_id)
-                .iter()
-                .copied()
-                .find(|id| Some(*id) != comp_col_id);
-            if let Some(id) = existing {
-                if let Some(col) = state.runtime.physics_mut().world_2d_mut().collider_mut(id) {
-                    col.attached_body = target_body;
-                    col.used_by_composite = used_by_composite;
-                }
-                id
-            } else {
-                let mut desc = ColliderDesc2D::box_collider(entity_id, [0.0, 0.0])
-                    .with_used_by_composite(used_by_composite);
-                if let Some(body) = target_body {
-                    desc = desc.with_attached_body(body);
-                }
-                state.runtime.physics_mut().add_collider_2d(desc)
-            }
-        }
-    };
-
+    let target_body = ensure_tilemap_target_body(state, entity_id, composite_entity);
+    let comp_col_id = resolve_tilemap_composite_collider(state, composite_entity, target_body);
+    let tm_col_id =
+        ensure_tilemap_collider_slot(state, entity_id, composite_entity, target_body, comp_col_id);
     state
         .runtime
         .physics_mut()
@@ -583,7 +606,7 @@ fn build_shape_2d(shape: &ColliderShape2DDesc, scale: [f32; 2]) -> Shape2D {
 }
 
 fn to_runtime_effector_2d(binding: &SceneEffector2DBinding) -> Effector2D {
-    let collider_mask = if binding.use_collider_mask {
+    let cm = if binding.use_collider_mask {
         binding.collider_mask
     } else {
         u32::MAX
@@ -596,7 +619,7 @@ fn to_runtime_effector_2d(binding: &SceneEffector2DBinding) -> Effector2D {
             side_arc: p.side_arc,
             use_side_friction: p.use_side_friction,
             use_side_bounce: p.use_side_bounce,
-            collider_mask,
+            collider_mask: cm,
         }),
         SceneEffectorKind2D::Surface(s) => Effector2D::Surface(SurfaceEffector2D {
             speed: s.speed,
@@ -605,7 +628,7 @@ fn to_runtime_effector_2d(binding: &SceneEffector2DBinding) -> Effector2D {
             use_contact_force: s.use_contact_force,
             use_friction: s.use_friction,
             use_bounce: s.use_bounce,
-            collider_mask,
+            collider_mask: cm,
         }),
         SceneEffectorKind2D::Area(a) => Effector2D::Area(AreaEffector2D {
             force_angle: a.force_angle,
@@ -614,7 +637,7 @@ fn to_runtime_effector_2d(binding: &SceneEffector2DBinding) -> Effector2D {
             drag: a.drag,
             angular_drag: a.angular_drag,
             use_global_angle: a.use_global_angle,
-            collider_mask,
+            collider_mask: cm,
         }),
         SceneEffectorKind2D::Point(pt) => Effector2D::Point(PointEffector2D {
             force_magnitude: pt.force_magnitude,
@@ -622,19 +645,26 @@ fn to_runtime_effector_2d(binding: &SceneEffector2DBinding) -> Effector2D {
             distance_scale: pt.distance_scale,
             drag: pt.drag,
             angular_drag: pt.angular_drag,
-            collider_mask,
+            collider_mask: cm,
         }),
-        SceneEffectorKind2D::Buoyancy(b) => Effector2D::Buoyancy(BuoyancyEffector2D {
-            surface_level: b.surface_level,
-            density: b.density,
-            linear_drag: b.linear_drag,
-            angular_drag: b.angular_drag,
-            flow_angle: b.flow_angle,
-            flow_magnitude: b.flow_magnitude,
-            flow_variation: b.flow_variation,
-            collider_mask,
-        }),
+        SceneEffectorKind2D::Buoyancy(b) => to_buoyancy_effector_2d(&b, cm),
     }
+}
+
+fn to_buoyancy_effector_2d(
+    b: &unitas_asset::scene::scene_physics::BuoyancyEffector2DDesc,
+    collider_mask: u32,
+) -> Effector2D {
+    Effector2D::Buoyancy(BuoyancyEffector2D {
+        surface_level: b.surface_level,
+        density: b.density,
+        linear_drag: b.linear_drag,
+        angular_drag: b.angular_drag,
+        flow_angle: b.flow_angle,
+        flow_magnitude: b.flow_magnitude,
+        flow_variation: b.flow_variation,
+        collider_mask,
+    })
 }
 
 fn attach_scene_collider_2d(

@@ -379,36 +379,42 @@ pub(crate) fn surface_normal_at_point(
             normalize2([-tangent[1], tangent[0]])
         }
         Shape2D::Polygon { .. } | Shape2D::Capsule { .. } => {
-            let verts = shape_vertices_world(shape, center, angle)?;
-            let mut centroid = [0.0, 0.0];
-            for v in &verts {
-                centroid = add2(centroid, *v);
-            }
-            centroid = scale2(centroid, 1.0 / verts.len() as f32);
-            let mut best: Option<([f32; 2], [f32; 2], f32)> = None;
-            for i in 0..verts.len() {
-                let a = verts[i];
-                let b = verts[(i + 1) % verts.len()];
-                let cp = closest_point_on_segment2(a, b, point);
-                let d = sub2(point, cp);
-                let d2 = dot2(d, d);
-                if best.is_none_or(|(_, _, best_d2)| d2 < best_d2) {
-                    best = Some((cp, sub2(b, a), d2));
-                }
-            }
-            let (cp, edge, _) = best?;
-            let raw = normalize2(sub2(point, cp)).or_else(|| normalize2([-edge[1], edge[0]]))?;
-            // Orient outward, away from the centroid.
-            if dot2(raw, sub2(cp, centroid)) >= 0.0 {
-                Some(raw)
-            } else {
-                Some([-raw[0], -raw[1]])
-            }
+            polygon_surface_normal_at_point(shape, center, angle, point)
         }
         Shape2D::Composite { shapes } => shapes
             .iter()
             .find_map(|sub| surface_normal_at_point(sub, center, angle, point)),
     }
+}
+
+fn polygon_surface_normal_at_point(
+    shape: &Shape2D,
+    center: [f32; 2],
+    angle: f32,
+    point: [f32; 2],
+) -> Option<[f32; 2]> {
+    let verts = shape_vertices_world(shape, center, angle)?;
+    let centroid = scale2(
+        verts.iter().fold([0.0, 0.0], |acc, v| add2(acc, *v)),
+        1.0 / verts.len() as f32,
+    );
+    let mut best: Option<([f32; 2], [f32; 2], f32)> = None;
+    for i in 0..verts.len() {
+        let (a, b) = (verts[i], verts[(i + 1) % verts.len()]);
+        let cp = closest_point_on_segment2(a, b, point);
+        let d = sub2(point, cp);
+        let d2 = dot2(d, d);
+        if best.is_none_or(|(_, _, best_d2)| d2 < best_d2) {
+            best = Some((cp, sub2(b, a), d2));
+        }
+    }
+    let (cp, edge, _) = best?;
+    let raw = normalize2(sub2(point, cp)).or_else(|| normalize2([-edge[1], edge[0]]))?;
+    Some(if dot2(raw, sub2(cp, centroid)) >= 0.0 {
+        raw
+    } else {
+        [-raw[0], -raw[1]]
+    })
 }
 
 pub(crate) fn sub2(a: [f32; 2], b: [f32; 2]) -> [f32; 2] {
@@ -476,17 +482,15 @@ pub(crate) fn shape_to_local_shapes_in_frame(
 ) -> Vec<Shape2D> {
     match shape {
         Shape2D::Box { half_extents } => {
-            if half_extents[0] <= 0.0 || half_extents[1] <= 0.0 {
+            let [hx, hy] = *half_extents;
+            if hx <= 0.0 || hy <= 0.0 {
                 return Vec::new();
             }
-            let hx = half_extents[0];
-            let hy = half_extents[1];
-            let locals = [[-hx, -hy], [hx, -hy], [hx, hy], [-hx, hy]];
-            let vertices = locals
-                .iter()
-                .map(|p| transform_point2(*p, rel_offset, rel_angle))
-                .collect();
-            vec![Shape2D::Polygon { vertices }]
+            vec![map_local_polygon_2d(
+                &[[-hx, -hy], [hx, -hy], [hx, hy], [-hx, hy]],
+                rel_offset,
+                rel_angle,
+            )]
         }
         Shape2D::Edge { start, end } => vec![Shape2D::Edge {
             start: transform_point2(*start, rel_offset, rel_angle),
@@ -494,13 +498,10 @@ pub(crate) fn shape_to_local_shapes_in_frame(
         }],
         Shape2D::Polygon { vertices } => {
             if vertices.len() < 2 {
-                return Vec::new();
+                Vec::new()
+            } else {
+                vec![map_local_polygon_2d(vertices, rel_offset, rel_angle)]
             }
-            let mapped = vertices
-                .iter()
-                .map(|p| transform_point2(*p, rel_offset, rel_angle))
-                .collect();
-            vec![Shape2D::Polygon { vertices: mapped }]
         }
         Shape2D::Capsule {
             radius,
@@ -508,37 +509,42 @@ pub(crate) fn shape_to_local_shapes_in_frame(
             direction,
         } => {
             if *radius <= 0.0 {
-                return Vec::new();
-            }
-            let mapped = capsule_local_polygon(*radius, *height, *direction)
-                .iter()
-                .map(|p| transform_point2(*p, rel_offset, rel_angle))
-                .collect();
-            vec![Shape2D::Polygon { vertices: mapped }]
-        }
-        Shape2D::Circle { radius } => {
-            if *radius <= 0.0 {
-                return Vec::new();
-            }
-            if rel_offset[0].abs() <= EPSILON && rel_offset[1].abs() <= EPSILON {
-                vec![Shape2D::Circle { radius: *radius }]
+                Vec::new()
             } else {
-                let mut vertices = Vec::with_capacity(12);
-                for k in 0..12 {
-                    let theta = (k as f32) * (std::f32::consts::TAU / 12.0);
-                    let (s, c) = theta.sin_cos();
-                    vertices.push([rel_offset[0] + c * radius, rel_offset[1] + s * radius]);
-                }
-                vec![Shape2D::Polygon { vertices }]
+                let local = capsule_local_polygon(*radius, *height, *direction);
+                vec![map_local_polygon_2d(&local, rel_offset, rel_angle)]
             }
         }
-        Shape2D::Composite { shapes } => {
-            let mut out = Vec::new();
-            for sub in shapes {
-                out.extend(shape_to_local_shapes_in_frame(sub, rel_offset, rel_angle));
-            }
-            out
-        }
+        Shape2D::Circle { radius } => circle_to_local_shapes_in_frame(*radius, rel_offset),
+        Shape2D::Composite { shapes } => shapes
+            .iter()
+            .flat_map(|sub| shape_to_local_shapes_in_frame(sub, rel_offset, rel_angle))
+            .collect(),
+    }
+}
+
+fn circle_to_local_shapes_in_frame(radius: f32, rel_offset: [f32; 2]) -> Vec<Shape2D> {
+    if radius <= 0.0 {
+        Vec::new()
+    } else if rel_offset[0].abs() <= EPSILON && rel_offset[1].abs() <= EPSILON {
+        vec![Shape2D::Circle { radius }]
+    } else {
+        let vertices = (0..12)
+            .map(|k| {
+                let (s, c) = ((k as f32) * (std::f32::consts::TAU / 12.0)).sin_cos();
+                [rel_offset[0] + c * radius, rel_offset[1] + s * radius]
+            })
+            .collect();
+        vec![Shape2D::Polygon { vertices }]
+    }
+}
+
+fn map_local_polygon_2d(vertices: &[[f32; 2]], rel_offset: [f32; 2], rel_angle: f32) -> Shape2D {
+    Shape2D::Polygon {
+        vertices: vertices
+            .iter()
+            .map(|p| transform_point2(*p, rel_offset, rel_angle))
+            .collect(),
     }
 }
 
@@ -925,23 +931,15 @@ pub(crate) fn raycast_shape2d(
         return None;
     }
     if let Shape2D::Composite { shapes } = shape {
-        let mut best: Option<(f32, [f32; 2], [f32; 2])> = None;
-        for sub in shapes {
-            if let Some(hit) = raycast_shape2d(
-                origin,
-                dir,
-                max_distance,
-                sub,
-                center,
-                angle,
-                queries_start_in_colliders,
-            ) {
-                if best.is_none_or(|(best_t, _, _)| hit.0 < best_t) {
-                    best = Some(hit);
-                }
-            }
-        }
-        return best;
+        return raycast_composite_2d(
+            origin,
+            dir,
+            max_distance,
+            shapes,
+            center,
+            angle,
+            queries_start_in_colliders,
+        );
     }
     if point_in_shape2d(origin, shape, center, angle) {
         if !queries_start_in_colliders {
@@ -950,57 +948,9 @@ pub(crate) fn raycast_shape2d(
         return Some((0.0, origin, [-dir[0], -dir[1]]));
     }
     match shape {
-        Shape2D::Circle { radius } => {
-            let offset = sub2(origin, center);
-            let half_b = dot2(offset, dir);
-            let c = dot2(offset, offset) - radius * radius;
-            let disc = half_b * half_b - c;
-            if disc < 0.0 {
-                return None;
-            }
-            let t = -half_b - disc.sqrt();
-            if t < 0.0 || t > max_distance {
-                return None;
-            }
-            let pt = add2(origin, scale2(dir, t));
-            let normal = normalize2(sub2(pt, center)).unwrap_or([-dir[0], -dir[1]]);
-            Some((t, pt, normal))
-        }
+        Shape2D::Circle { radius } => raycast_circle_2d(origin, dir, max_distance, center, *radius),
         Shape2D::Box { half_extents } => {
-            let local_orig = inverse_transform_point2(origin, center, angle);
-            let local_dir = rotate_vec2(dir, -angle);
-            let mut t_min = f32::NEG_INFINITY;
-            let mut t_max = f32::INFINITY;
-            let mut normal_local = [0.0, 0.0];
-            for axis in 0..2 {
-                let min_v = -half_extents[axis];
-                let max_v = half_extents[axis];
-                if local_dir[axis].abs() <= EPSILON {
-                    if local_orig[axis] < min_v || local_orig[axis] > max_v {
-                        return None;
-                    }
-                } else {
-                    let t1 = (min_v - local_orig[axis]) / local_dir[axis];
-                    let t2 = (max_v - local_orig[axis]) / local_dir[axis];
-                    let (near, far, sign) = if t1 <= t2 {
-                        (t1, t2, -1.0)
-                    } else {
-                        (t2, t1, 1.0)
-                    };
-                    if near > t_min {
-                        t_min = near;
-                        normal_local = [0.0, 0.0];
-                        normal_local[axis] = sign;
-                    }
-                    t_max = t_max.min(far);
-                }
-            }
-            if t_max < t_min || t_min < 0.0 || t_min > max_distance {
-                return None;
-            }
-            let pt = add2(origin, scale2(dir, t_min));
-            let world_normal = rotate_vec2(normal_local, angle);
-            Some((t_min, pt, world_normal))
+            raycast_box_2d(origin, dir, max_distance, center, angle, *half_extents)
         }
         Shape2D::Edge { start, end } => {
             let a = transform_point2(*start, center, angle);
@@ -1009,20 +959,124 @@ pub(crate) fn raycast_shape2d(
         }
         Shape2D::Polygon { .. } | Shape2D::Capsule { .. } => {
             let verts = shape_vertices_world(shape, center, angle)?;
-            let mut best: Option<(f32, [f32; 2], [f32; 2])> = None;
-            for i in 0..verts.len() {
-                let a = verts[i];
-                let b = verts[(i + 1) % verts.len()];
-                if let Some((t, pt, n)) = ray_segment_intersect(origin, dir, max_distance, a, b) {
-                    if best.is_none_or(|(best_t, _, _)| t < best_t) {
-                        best = Some((t, pt, n));
-                    }
-                }
-            }
-            best
+            raycast_polygon_2d(origin, dir, max_distance, &verts)
         }
         Shape2D::Composite { .. } => None,
     }
+}
+
+fn raycast_composite_2d(
+    origin: [f32; 2],
+    dir: [f32; 2],
+    max_distance: f32,
+    shapes: &[Shape2D],
+    center: [f32; 2],
+    angle: f32,
+    queries_start_in_colliders: bool,
+) -> Option<(f32, [f32; 2], [f32; 2])> {
+    let mut best: Option<(f32, [f32; 2], [f32; 2])> = None;
+    for sub in shapes {
+        if let Some(hit) = raycast_shape2d(
+            origin,
+            dir,
+            max_distance,
+            sub,
+            center,
+            angle,
+            queries_start_in_colliders,
+        ) {
+            if best.is_none_or(|(best_t, _, _)| hit.0 < best_t) {
+                best = Some(hit);
+            }
+        }
+    }
+    best
+}
+
+fn raycast_circle_2d(
+    origin: [f32; 2],
+    dir: [f32; 2],
+    max_distance: f32,
+    center: [f32; 2],
+    radius: f32,
+) -> Option<(f32, [f32; 2], [f32; 2])> {
+    let offset = sub2(origin, center);
+    let half_b = dot2(offset, dir);
+    let c = dot2(offset, offset) - radius * radius;
+    let disc = half_b * half_b - c;
+    if disc < 0.0 {
+        return None;
+    }
+    let t = -half_b - disc.sqrt();
+    if t < 0.0 || t > max_distance {
+        return None;
+    }
+    let pt = add2(origin, scale2(dir, t));
+    let normal = normalize2(sub2(pt, center)).unwrap_or([-dir[0], -dir[1]]);
+    Some((t, pt, normal))
+}
+
+fn raycast_box_2d(
+    origin: [f32; 2],
+    dir: [f32; 2],
+    max_distance: f32,
+    center: [f32; 2],
+    angle: f32,
+    half_extents: [f32; 2],
+) -> Option<(f32, [f32; 2], [f32; 2])> {
+    let local_orig = inverse_transform_point2(origin, center, angle);
+    let local_dir = rotate_vec2(dir, -angle);
+    let mut t_min = f32::NEG_INFINITY;
+    let mut t_max = f32::INFINITY;
+    let mut normal_local = [0.0, 0.0];
+    for axis in 0..2 {
+        let min_v = -half_extents[axis];
+        let max_v = half_extents[axis];
+        if local_dir[axis].abs() <= EPSILON {
+            if local_orig[axis] < min_v || local_orig[axis] > max_v {
+                return None;
+            }
+        } else {
+            let t1 = (min_v - local_orig[axis]) / local_dir[axis];
+            let t2 = (max_v - local_orig[axis]) / local_dir[axis];
+            let (near, far, sign) = if t1 <= t2 {
+                (t1, t2, -1.0)
+            } else {
+                (t2, t1, 1.0)
+            };
+            if near > t_min {
+                t_min = near;
+                normal_local = [0.0, 0.0];
+                normal_local[axis] = sign;
+            }
+            t_max = t_max.min(far);
+        }
+    }
+    if t_max < t_min || t_min < 0.0 || t_min > max_distance {
+        return None;
+    }
+    let pt = add2(origin, scale2(dir, t_min));
+    let world_normal = rotate_vec2(normal_local, angle);
+    Some((t_min, pt, world_normal))
+}
+
+fn raycast_polygon_2d(
+    origin: [f32; 2],
+    dir: [f32; 2],
+    max_distance: f32,
+    verts: &[[f32; 2]],
+) -> Option<(f32, [f32; 2], [f32; 2])> {
+    let mut best: Option<(f32, [f32; 2], [f32; 2])> = None;
+    for i in 0..verts.len() {
+        let a = verts[i];
+        let b = verts[(i + 1) % verts.len()];
+        if let Some((t, pt, n)) = ray_segment_intersect(origin, dir, max_distance, a, b) {
+            if best.is_none_or(|(best_t, _, _)| t < best_t) {
+                best = Some((t, pt, n));
+            }
+        }
+    }
+    best
 }
 
 fn ray_segment_intersect(

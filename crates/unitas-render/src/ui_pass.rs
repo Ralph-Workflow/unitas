@@ -26,7 +26,6 @@ pub fn ui_sprite_image(guid: &str) -> Option<Rgba8> {
     guard.get(guid).map(|image| (**image).clone())
 }
 
-/// The registered sprite texture, shared so a sliced image does not copy it per quad.
 pub fn ui_sprite_texture(guid: &str) -> Option<Arc<Rgba8>> {
     let guard = match ui_sprite_registry().lock() {
         Ok(guard) => guard,
@@ -35,7 +34,6 @@ pub fn ui_sprite_texture(guid: &str) -> Option<Arc<Rgba8>> {
     guard.get(guid).cloned()
 }
 
-/// The pixel size of a registered sprite, used to split its nine-slice border.
 pub fn ui_sprite_size(guid: &str) -> Option<[f32; 2]> {
     let guard = match ui_sprite_registry().lock() {
         Ok(guard) => guard,
@@ -138,6 +136,53 @@ pub struct UiCoverage {
     pub height: u32,
 }
 
+fn ui_item_bounds<T: UiElement>(
+    item: &T,
+    bounds: (u32, u32, u32, u32),
+    width: u32,
+    height: u32,
+) -> Option<(u32, u32, u32, u32)> {
+    match item.clip_rect() {
+        Some(clip) => intersect_bounds(bounds, pixel_bounds(clip, width, height)),
+        None => Some(bounds),
+    }
+}
+
+fn draw_ui_sprite<T: UiElement>(
+    target: &mut UiTarget<'_>,
+    item: &T,
+    bounds: (u32, u32, u32, u32),
+    draw_bounds: (u32, u32, u32, u32),
+) {
+    if let Some((sprite, image)) = item.sprite().and_then(|s| {
+        ui_sprite_texture(&s.texture_guid)
+            .filter(|img| img.width > 0 && img.height > 0)
+            .map(|img| (s, img))
+    }) {
+        let quad = crate::glyphs::TexturedQuad {
+            x: bounds.0 as f32,
+            y: bounds.1 as f32,
+            width: (bounds.2 - bounds.0) as f32,
+            height: (bounds.3 - bounds.1) as f32,
+            uv: sprite.uv_rect,
+            color: item.color(),
+        };
+        crate::glyphs::draw_image_quads(
+            &mut *target.image,
+            &image,
+            &[quad],
+            Rect {
+                x: draw_bounds.0 as f32,
+                y: draw_bounds.1 as f32,
+                width: (draw_bounds.2 - draw_bounds.0) as f32,
+                height: (draw_bounds.3 - draw_bounds.1) as f32,
+            },
+        );
+    } else {
+        fill_rect(target, draw_bounds, item.color());
+    }
+}
+
 pub fn composite_ui<T: UiElement>(
     target: &mut UiTarget<'_>,
     items: &[T],
@@ -159,43 +204,12 @@ pub fn composite_ui<T: UiElement>(
                 }
             }
             None => {
-                let draw_bounds = match item.clip_rect() {
-                    Some(clip) => match intersect_bounds(
-                        bounds,
-                        pixel_bounds(clip, target.image.width, target.image.height),
-                    ) {
-                        Some(clipped) => clipped,
-                        None => continue,
-                    },
-                    None => bounds,
+                let Some(draw_bounds) =
+                    ui_item_bounds(item, bounds, target.image.width, target.image.height)
+                else {
+                    continue;
                 };
-                if let Some((sprite, image)) = item.sprite().and_then(|s| {
-                    ui_sprite_texture(&s.texture_guid)
-                        .filter(|img| img.width > 0 && img.height > 0)
-                        .map(|img| (s, img))
-                }) {
-                    let quad = crate::glyphs::TexturedQuad {
-                        x: bounds.0 as f32,
-                        y: bounds.1 as f32,
-                        width: (bounds.2 - bounds.0) as f32,
-                        height: (bounds.3 - bounds.1) as f32,
-                        uv: sprite.uv_rect,
-                        color: item.color(),
-                    };
-                    crate::glyphs::draw_image_quads(
-                        &mut *target.image,
-                        &image,
-                        &[quad],
-                        Rect {
-                            x: draw_bounds.0 as f32,
-                            y: draw_bounds.1 as f32,
-                            width: (draw_bounds.2 - draw_bounds.0) as f32,
-                            height: (draw_bounds.3 - draw_bounds.1) as f32,
-                        },
-                    );
-                } else {
-                    fill_rect(target, draw_bounds, item.color());
-                }
+                draw_ui_sprite(target, item, bounds, draw_bounds);
             }
         }
         write_ids(target, bounds, id);

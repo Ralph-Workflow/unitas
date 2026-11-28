@@ -31,34 +31,7 @@ fn sub_emitter_birth_collision_trigger_and_death_events_fire_at_parent_particle_
     world.add_body(solid, static_collider([1.0, 0.0, 0.0], 0.5, false))?;
     world.add_body(trigger_zone, static_collider([3.0, 0.0, 0.0], 0.5, true))?;
 
-    let mut system = ParticleSystem::new(42);
-    system.set_emit_params(EmitParams {
-        start_speed: 0.0,
-        start_size: 0.5,
-        start_lifetime: 1.0,
-        start_color: [1.0; 4],
-    });
-    system.add_sub_emitter(SubEmitterConfig::new(
-        SubEmitterTrigger::Birth,
-        EntityId::new(100),
-        2,
-    ));
-    system.add_sub_emitter(SubEmitterConfig::new(
-        SubEmitterTrigger::Collision,
-        EntityId::new(101),
-        3,
-    ));
-    system.add_sub_emitter(SubEmitterConfig::new(
-        SubEmitterTrigger::Trigger,
-        EntityId::new(102),
-        4,
-    ));
-    system.add_sub_emitter(SubEmitterConfig::new(
-        SubEmitterTrigger::Death,
-        EntityId::new(103),
-        5,
-    ));
-
+    let mut system = configured_sub_emitter_system();
     system.set_emit_position([1.0, 0.0, 0.0]);
     system.emit(1);
     system.set_emit_position([3.0, 0.0, 0.0]);
@@ -97,6 +70,37 @@ fn sub_emitter_birth_collision_trigger_and_death_events_fire_at_parent_particle_
             && event.emit_count == 5
     }));
     Ok(())
+}
+
+fn configured_sub_emitter_system() -> ParticleSystem {
+    let mut system = ParticleSystem::new(42);
+    system.set_emit_params(EmitParams {
+        start_speed: 0.0,
+        start_size: 0.5,
+        start_lifetime: 1.0,
+        start_color: [1.0; 4],
+    });
+    system.add_sub_emitter(SubEmitterConfig::new(
+        SubEmitterTrigger::Birth,
+        EntityId::new(100),
+        2,
+    ));
+    system.add_sub_emitter(SubEmitterConfig::new(
+        SubEmitterTrigger::Collision,
+        EntityId::new(101),
+        3,
+    ));
+    system.add_sub_emitter(SubEmitterConfig::new(
+        SubEmitterTrigger::Trigger,
+        EntityId::new(102),
+        4,
+    ));
+    system.add_sub_emitter(SubEmitterConfig::new(
+        SubEmitterTrigger::Death,
+        EntityId::new(103),
+        5,
+    ));
+    system
 }
 
 #[test]

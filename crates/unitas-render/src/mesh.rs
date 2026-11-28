@@ -78,9 +78,8 @@ impl MeshAttributes {
     }
 }
 
-pub fn cube(size: f32) -> Mesh {
-    let h = size * 0.5;
-    let face_definitions: [(Vec3, [Vec3; 4]); 6] = [
+fn cube_z_faces(h: f32) -> [(Vec3, [Vec3; 4]); 2] {
+    [
         (
             Vec3::new(0.0, 0.0, -1.0),
             [
@@ -99,6 +98,11 @@ pub fn cube(size: f32) -> Mesh {
                 Vec3::new(-h, -h, h),
             ],
         ),
+    ]
+}
+
+fn cube_x_faces(h: f32) -> [(Vec3, [Vec3; 4]); 2] {
+    [
         (
             Vec3::new(-1.0, 0.0, 0.0),
             [
@@ -117,6 +121,11 @@ pub fn cube(size: f32) -> Mesh {
                 Vec3::new(h, -h, h),
             ],
         ),
+    ]
+}
+
+fn cube_y_faces(h: f32) -> [(Vec3, [Vec3; 4]); 2] {
+    [
         (
             Vec3::new(0.0, -1.0, 0.0),
             [
@@ -135,7 +144,21 @@ pub fn cube(size: f32) -> Mesh {
                 Vec3::new(h, h, -h),
             ],
         ),
-    ];
+    ]
+}
+
+fn cube_face_definitions(h: f32) -> [(Vec3, [Vec3; 4]); 6] {
+    let z_faces = cube_z_faces(h);
+    let x_faces = cube_x_faces(h);
+    let y_faces = cube_y_faces(h);
+    [
+        z_faces[0], z_faces[1], x_faces[0], x_faces[1], y_faces[0], y_faces[1],
+    ]
+}
+
+pub fn cube(size: f32) -> Mesh {
+    let h = size * 0.5;
+    let face_definitions = cube_face_definitions(h);
 
     let mut positions = Vec::with_capacity(24);
     let mut normals = Vec::with_capacity(24);

@@ -7,8 +7,8 @@ use crate::render_graph::{RenderGraph, RenderPassKind};
 
 use super::{
     align_up, background_color, capture_draw_items, opaque_order, transparent_order, DrawItem,
-    PreparedDraw, PreparedSprite, RenderError, Renderer, COPY_ROW_ALIGNMENT, ID_FORMAT,
-    OFFSCREEN_FORMAT,
+    PreparedDraw, PreparedSprite, RenderError, RenderScene, Renderer, COPY_ROW_ALIGNMENT,
+    ID_FORMAT, OFFSCREEN_FORMAT,
 };
 
 struct CaptureTargets<'a> {
@@ -31,6 +31,55 @@ struct CaptureTargets<'a> {
 }
 
 impl Renderer {
+    fn prepare_capture_targets<'a>(
+        &self,
+        instances: &[CaptureInstance<'a>],
+        scene: RenderScene<'_>,
+        width: u32,
+        height: u32,
+    ) -> Result<CaptureTargets<'a>, RenderError> {
+        let shadows_enabled = self.prepare_shadow_map(width.max(height));
+        let sprites = self.sprites();
+        let graph = RenderGraph::capture(shadows_enabled).with_sprites(!sprites.is_empty());
+        let color_texture =
+            self.create_capture_texture("capture-color", width, height, OFFSCREEN_FORMAT);
+        let id_texture = self.create_capture_texture("capture-ids", width, height, ID_FORMAT);
+        let depth_texture = self.create_depth_texture(width, height);
+        let color_view = color_texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let id_view = id_texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let depth_view = depth_texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let items = capture_draw_items(instances);
+        let (prepared, prepared_sprites) =
+            self.prepare_draw_items(&items, &sprites, scene.camera, scene.view, scene.light)?;
+        let bytes_per_row = align_up(u64::from(width) * 4, COPY_ROW_ALIGNMENT);
+        let color_readback = create_readback_buffer(
+            &self.device,
+            "capture-color-readback",
+            bytes_per_row,
+            height,
+        );
+        let id_readback =
+            create_readback_buffer(&self.device, "capture-id-readback", bytes_per_row, height);
+        Ok(CaptureTargets {
+            graph,
+            items,
+            prepared,
+            prepared_sprites,
+            color_texture,
+            id_texture,
+            color_view,
+            id_view,
+            depth_view,
+            color_readback,
+            id_readback,
+            bytes_per_row,
+            width,
+            height,
+            background: scene.background,
+            view: scene.view,
+        })
+    }
+
     pub fn render_offscreen_with_ids(
         &self,
         instances: &[CaptureInstance<'_>],
@@ -48,46 +97,13 @@ impl Renderer {
                 objects: Vec::new(),
             });
         }
-        let shadows_enabled = self.prepare_shadow_map(width.max(height));
-        let sprites = self.sprites();
-        let graph = RenderGraph::capture(shadows_enabled).with_sprites(!sprites.is_empty());
-        let color_texture =
-            self.create_capture_texture("capture-color", width, height, OFFSCREEN_FORMAT);
-        let id_texture = self.create_capture_texture("capture-ids", width, height, ID_FORMAT);
-        let depth_texture = self.create_depth_texture(width, height);
-        let color_view = color_texture.create_view(&wgpu::TextureViewDescriptor::default());
-        let id_view = id_texture.create_view(&wgpu::TextureViewDescriptor::default());
-        let depth_view = depth_texture.create_view(&wgpu::TextureViewDescriptor::default());
-        let items = capture_draw_items(instances);
-        let (prepared, prepared_sprites) =
-            self.prepare_draw_items(&items, &sprites, camera, view, light)?;
-        let bytes_per_row = align_up(u64::from(width) * 4, COPY_ROW_ALIGNMENT);
-        let color_readback = create_readback_buffer(
-            &self.device,
-            "capture-color-readback",
-            bytes_per_row,
-            height,
-        );
-        let id_readback =
-            create_readback_buffer(&self.device, "capture-id-readback", bytes_per_row, height);
-        let targets = CaptureTargets {
-            graph,
-            items,
-            prepared,
-            prepared_sprites,
-            color_texture,
-            id_texture,
-            color_view,
-            id_view,
-            depth_view,
-            color_readback,
-            id_readback,
-            bytes_per_row,
-            width,
-            height,
-            background,
+        let scene = RenderScene {
+            camera,
             view,
+            light,
+            background,
         };
+        let targets = self.prepare_capture_targets(instances, scene, width, height)?;
         let mut encoder = self
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
@@ -100,7 +116,7 @@ impl Renderer {
         Ok(capture_frame_from_readback(
             &color_data,
             &id_data,
-            bytes_per_row,
+            targets.bytes_per_row,
             width,
             height,
             instances,

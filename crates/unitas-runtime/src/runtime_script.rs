@@ -95,11 +95,8 @@ impl Runtime {
             .find(|script| script.entity == entity)
     }
 
-    pub(crate) fn init_pending_scripts<H>(&mut self, callbacks: Callbacks, hook: &mut H)
-    where
-        H: FnMut(&mut Self, &mut dyn FnMut()),
-    {
-        let mut pending: Vec<(EntityId, usize, u64, u64, u64)> = Vec::new();
+    fn collect_pending_scripts(&self) -> Vec<(EntityId, usize, u64, u64, u64)> {
+        let mut pending = Vec::new();
         for scene in &self.scenes {
             for (ordinal, script) in scene.scripts.iter().enumerate() {
                 if !script.awake_called {
@@ -124,6 +121,14 @@ impl Runtime {
                 ));
             }
         }
+        pending
+    }
+
+    pub(crate) fn init_pending_scripts<H>(&mut self, callbacks: Callbacks, hook: &mut H)
+    where
+        H: FnMut(&mut Self, &mut dyn FnMut()),
+    {
+        let pending = self.collect_pending_scripts();
         for (entity, ordinal, guid_hi, guid_lo, existing_handle) in pending.iter().copied() {
             if existing_handle != 0 {
                 continue;
@@ -139,13 +144,11 @@ impl Runtime {
         for (entity, ordinal, _, _, _) in pending.iter().copied() {
             let Some(handle) = self
                 .find_script_at(entity, ordinal)
-                .map(|script| script.script_handle)
+                .map(|s| s.script_handle)
             else {
                 continue;
             };
-            hook(self, &mut || {
-                (callbacks.awake)(handle);
-            });
+            hook(self, &mut || (callbacks.awake)(handle));
             if let Some(script) = self.find_script_at_mut(entity, ordinal) {
                 script.awake_called = true;
             }
@@ -153,13 +156,11 @@ impl Runtime {
         for (entity, ordinal, _, _, _) in pending.iter().copied() {
             let Some(handle) = self
                 .find_script_at(entity, ordinal)
-                .map(|script| script.script_handle)
+                .map(|s| s.script_handle)
             else {
                 continue;
             };
-            hook(self, &mut || {
-                (callbacks.on_enable)(handle);
-            });
+            hook(self, &mut || (callbacks.on_enable)(handle));
             if let Some(script) = self.find_script_at_mut(entity, ordinal) {
                 script.on_enable_called = true;
             }
@@ -167,13 +168,11 @@ impl Runtime {
         for (entity, ordinal, _, _, _) in pending.iter().copied() {
             let Some(handle) = self
                 .find_script_at(entity, ordinal)
-                .map(|script| script.script_handle)
+                .map(|s| s.script_handle)
             else {
                 continue;
             };
-            hook(self, &mut || {
-                (callbacks.start)(handle);
-            });
+            hook(self, &mut || (callbacks.start)(handle));
             if let Some(script) = self.find_script_at_mut(entity, ordinal) {
                 script.start_called = true;
             }

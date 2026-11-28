@@ -44,16 +44,9 @@ pub struct SpritePart {
     pub target: [f32; 4],
 }
 
-pub fn nine_slice_parts(
-    border: [f32; 4],
-    source_size: [f32; 2],
-    target_size: [f32; 2],
-) -> Vec<SpritePart> {
+fn nine_slice_border(border: [f32; 4], source_size: [f32; 2], target_size: [f32; 2]) -> [f32; 4] {
     let [source_width, source_height] = source_size;
     let [target_width, target_height] = target_size;
-    if source_width <= 0.0 || source_height <= 0.0 || target_width <= 0.0 || target_height <= 0.0 {
-        return Vec::new();
-    }
     let [mut left, mut bottom, mut right, mut top] = border;
     left = left.clamp(0.0, source_width * 0.5);
     right = right.clamp(0.0, source_width * 0.5);
@@ -69,20 +62,15 @@ pub fn nine_slice_parts(
         bottom *= shrink;
         top *= shrink;
     }
-    let source_x = [
-        0u32,
-        left.round() as u32,
-        (source_width - right).round() as u32,
-        source_width.round() as u32,
-    ];
-    let source_y = [
-        0u32,
-        bottom.round() as u32,
-        (source_height - top).round() as u32,
-        source_height.round() as u32,
-    ];
-    let target_x = [0.0, left, target_width - right, target_width];
-    let target_y = [0.0, bottom, target_height - top, target_height];
+    [left, bottom, right, top]
+}
+
+fn nine_slice_grid_parts(
+    source_x: [u32; 4],
+    source_y: [u32; 4],
+    target_x: [f32; 4],
+    target_y: [f32; 4],
+) -> Vec<SpritePart> {
     let mut parts = Vec::with_capacity(9);
     for row in 0..3 {
         for column in 0..3 {
@@ -103,6 +91,34 @@ pub fn nine_slice_parts(
         }
     }
     parts
+}
+
+pub fn nine_slice_parts(
+    border: [f32; 4],
+    source_size: [f32; 2],
+    target_size: [f32; 2],
+) -> Vec<SpritePart> {
+    let [source_width, source_height] = source_size;
+    let [target_width, target_height] = target_size;
+    if source_width <= 0.0 || source_height <= 0.0 || target_width <= 0.0 || target_height <= 0.0 {
+        return Vec::new();
+    }
+    let [left, bottom, right, top] = nine_slice_border(border, source_size, target_size);
+    let source_x = [
+        0u32,
+        left.round() as u32,
+        (source_width - right).round() as u32,
+        source_width.round() as u32,
+    ];
+    let source_y = [
+        0u32,
+        bottom.round() as u32,
+        (source_height - top).round() as u32,
+        source_height.round() as u32,
+    ];
+    let target_x = [0.0, left, target_width - right, target_width];
+    let target_y = [0.0, bottom, target_height - top, target_height];
+    nine_slice_grid_parts(source_x, source_y, target_x, target_y)
 }
 
 pub fn tiled_parts(source_size: [f32; 2], target_size: [f32; 2]) -> Vec<SpritePart> {

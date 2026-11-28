@@ -14,10 +14,48 @@ use super::Runtime;
 use crate::animation::{AnimationRuntimeDiagnostic, AnimationWorld, apply_transform_property};
 
 impl Runtime {
-    /// Binds the controllers the scene authored to the entities that carry them.
-    ///
-    /// The animator is registered the way a scripted animator is registered, so the
-    /// per-frame animation step walks it like every other animator.
+    fn bind_scene_animator_controller(
+        &mut self,
+        entity: EntityId,
+        binding: &AnimatorBinding,
+        index: Option<&GuidIndex>,
+        diagnostics: &mut Vec<(EntityId, String)>,
+    ) {
+        let Some(guid) = binding.controller_guid.as_deref() else {
+            return;
+        };
+        let Some(index) = index else {
+            diagnostics.push((entity, unresolved_controller(entity, guid, None::<&str>)));
+            return;
+        };
+        let Some(controller_path) = resolve_guid_path(index, guid) else {
+            diagnostics.push((entity, unresolved_controller(entity, guid, None::<&str>)));
+            return;
+        };
+        let controller = match import_animator_controller(&controller_path, index) {
+            Ok(controller) => controller,
+            Err(error) => {
+                diagnostics.push((entity, unresolved_controller(entity, guid, Some(error))));
+                return;
+            }
+        };
+        register_controller_sprite_assets(&mut self.animation, &controller, index);
+        let handle = self.animation.register_controller(controller);
+        if let Err(error) = self.animation.set_controller(entity, handle) {
+            diagnostics.push((
+                entity,
+                format!(
+                    "Animator on entity {} could not bind its controller: {error}",
+                    entity.as_u64()
+                ),
+            ));
+            return;
+        }
+        if !binding.enabled {
+            let _ = self.animation.disable_animator(entity);
+        }
+    }
+
     pub(crate) fn register_scene_animators(
         &mut self,
         bindings: &[AnimatorBinding],
@@ -45,44 +83,7 @@ impl Runtime {
                 let _ = self.animation.disable_animator(entity);
             }
             animator_entities.push(entity);
-
-            let Some(guid) = binding.controller_guid.as_deref() else {
-                continue;
-            };
-            let Some(index) = index.as_ref() else {
-                diagnostics.push((entity, unresolved_controller(entity, guid, None::<&str>)));
-                continue;
-            };
-            let Some(controller_path) = resolve_guid_path(index, guid) else {
-                diagnostics.push((entity, unresolved_controller(entity, guid, None::<&str>)));
-                continue;
-            };
-            let controller = match import_animator_controller(&controller_path, index) {
-                Ok(controller) => controller,
-                Err(error) => {
-                    diagnostics.push((entity, unresolved_controller(entity, guid, Some(error))));
-                    continue;
-                }
-            };
-            register_controller_sprite_assets(&mut self.animation, &controller, index);
-            let handle = self.animation.register_controller(controller);
-            let child_bindings = match self.animation.set_controller(entity, handle) {
-                Ok(child_bindings) => child_bindings,
-                Err(error) => {
-                    diagnostics.push((
-                        entity,
-                        format!(
-                            "Animator on entity {} could not bind its controller: {error}",
-                            entity.as_u64()
-                        ),
-                    ));
-                    continue;
-                }
-            };
-            let _ = child_bindings;
-            if !binding.enabled {
-                let _ = self.animation.disable_animator(entity);
-            }
+            self.bind_scene_animator_controller(entity, binding, index.as_ref(), diagnostics);
         }
         animator_entities
     }

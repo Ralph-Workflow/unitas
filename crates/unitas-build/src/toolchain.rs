@@ -288,175 +288,203 @@ fn dotnet_runtime_pack_requirement(rid: &str, purpose: &str) -> ToolchainRequire
 
 pub fn required_toolchain(target: BuildTarget) -> TargetToolchain {
     match (target.os(), target.arch()) {
-        (TargetOs::Windows, TargetArch::X86_64) => TargetToolchain {
-            target,
-            requirements: vec![
-                command_requirement(
-                    "x86_64-w64-mingw32-gcc",
-                    "mingw-w64 14.0.0 or newer",
-                    "cross C compiler and linker that builds the Windows x86-64 player binary",
-                    &["--version"],
-                ),
-                command_requirement(
-                    "x86_64-w64-mingw32-windres",
-                    "mingw-w64 14.0.0 or newer",
-                    "Windows resource compiler that embeds the player resources",
-                    &["--version"],
-                ),
-                rust_requirement(
-                    target.rust_triple(),
-                    target.alternate_rust_triples(),
-                    "Rust compiler and standard library that builds the Windows x86-64 player",
-                ),
-                dotnet_runtime_pack_requirement(
-                    target.dotnet_runtime_identifier(),
-                    ".NET 8.0 runtime pack that hosts managed game scripts on Windows x86-64",
-                ),
-            ],
-            resolving_action: String::from(
-                "install the mingw-w64 cross toolchain with 'brew install mingw-w64', add the Rust target with 'rustup target add x86_64-pc-windows-gnu', and restore the .NET runtime pack with 'dotnet restore -r win-x64', then package the player on a Windows x86-64 host where unitas builds that target",
+        (TargetOs::Windows, TargetArch::X86_64) => windows_x86_64_toolchain(target),
+        (TargetOs::Windows, TargetArch::Arm64) => windows_arm64_toolchain(target),
+        (TargetOs::Linux, TargetArch::X86_64) => linux_x86_64_toolchain(target),
+        (TargetOs::Linux, TargetArch::Arm64) => linux_arm64_toolchain(target),
+        (TargetOs::MacOs, TargetArch::Arm64) => macos_arm64_toolchain(target),
+        (TargetOs::MacOs, TargetArch::X86_64) => macos_x86_64_toolchain(target),
+        (TargetOs::Web, _) | (_, TargetArch::Wasm32) => web_toolchain(target),
+    }
+}
+
+fn windows_x86_64_toolchain(target: BuildTarget) -> TargetToolchain {
+    TargetToolchain {
+        target,
+        requirements: vec![
+            command_requirement(
+                "x86_64-w64-mingw32-gcc",
+                "mingw-w64 14.0.0 or newer",
+                "cross C compiler and linker that builds the Windows x86-64 player binary",
+                &["--version"],
             ),
-        },
-        (TargetOs::Windows, TargetArch::Arm64) => TargetToolchain {
-            target,
-            requirements: vec![
-                command_requirement(
-                    "aarch64-w64-mingw32-gcc",
-                    "mingw-w64 14.0.0 or newer",
-                    "cross C compiler and linker that builds the Windows ARM64 player binary",
-                    &["--version"],
-                ),
-                command_requirement(
-                    "aarch64-w64-mingw32-windres",
-                    "mingw-w64 14.0.0 or newer",
-                    "Windows resource compiler that embeds the player resources",
-                    &["--version"],
-                ),
-                rust_requirement(
-                    target.rust_triple(),
-                    target.alternate_rust_triples(),
-                    "Rust compiler and standard library that builds the Windows ARM64 player",
-                ),
-                dotnet_runtime_pack_requirement(
-                    target.dotnet_runtime_identifier(),
-                    ".NET 8.0 runtime pack that hosts managed game scripts on Windows ARM64",
-                ),
-            ],
-            resolving_action: String::from(
-                "install the mingw-w64 cross toolchain with 'brew install mingw-w64', add the Rust target with 'rustup target add aarch64-pc-windows-gnu', and restore the .NET runtime pack with 'dotnet restore -r win-arm64', then package the player on a Windows ARM64 host where unitas builds that target",
+            command_requirement(
+                "x86_64-w64-mingw32-windres",
+                "mingw-w64 14.0.0 or newer",
+                "Windows resource compiler that embeds the player resources",
+                &["--version"],
             ),
-        },
-        (TargetOs::Linux, TargetArch::X86_64) => TargetToolchain {
-            target,
-            requirements: vec![
-                command_requirement(
-                    "x86_64-linux-gnu-gcc",
-                    "GCC 12 or newer",
-                    "cross C compiler and linker that builds the Linux x86-64 player binary",
-                    &["--version"],
-                ),
-                rust_requirement(
-                    target.rust_triple(),
-                    target.alternate_rust_triples(),
-                    "Rust compiler and standard library that builds the Linux x86-64 player",
-                ),
-                dotnet_runtime_pack_requirement(
-                    target.dotnet_runtime_identifier(),
-                    ".NET 8.0 runtime pack that hosts managed game scripts on Linux x86-64",
-                ),
-            ],
-            resolving_action: String::from(
-                "build the player in a Linux x86-64 environment that provides x86_64-linux-gnu-gcc (the 'rust:1.93' container image provides one), add the Rust target with 'rustup target add x86_64-unknown-linux-gnu', and restore the .NET runtime pack with 'dotnet restore -r linux-x64', then package the player on that Linux x86-64 host where unitas builds that target",
+            rust_requirement(
+                target.rust_triple(),
+                target.alternate_rust_triples(),
+                "Rust compiler and standard library that builds the Windows x86-64 player",
             ),
-        },
-        (TargetOs::Linux, TargetArch::Arm64) => TargetToolchain {
-            target,
-            requirements: vec![
-                command_requirement(
-                    "aarch64-linux-gnu-gcc",
-                    "GCC 12 or newer",
-                    "cross C compiler and linker that builds the Linux ARM64 player binary",
-                    &["--version"],
-                ),
-                rust_requirement(
-                    target.rust_triple(),
-                    target.alternate_rust_triples(),
-                    "Rust compiler and standard library that builds the Linux ARM64 player",
-                ),
-                dotnet_runtime_pack_requirement(
-                    target.dotnet_runtime_identifier(),
-                    ".NET 8.0 runtime pack that hosts managed game scripts on Linux ARM64",
-                ),
-            ],
-            resolving_action: String::from(
-                "build the player in a Linux ARM64 environment that provides aarch64-linux-gnu-gcc (the 'rust:1.93' container image provides one), add the Rust target with 'rustup target add aarch64-unknown-linux-gnu', and restore the .NET runtime pack with 'dotnet restore -r linux-arm64', then package the player on that Linux ARM64 host where unitas builds that target",
+            dotnet_runtime_pack_requirement(
+                target.dotnet_runtime_identifier(),
+                ".NET 8.0 runtime pack that hosts managed game scripts on Windows x86-64",
             ),
-        },
-        (TargetOs::MacOs, TargetArch::Arm64) => TargetToolchain {
-            target,
-            requirements: vec![
-                command_requirement(
-                    "clang",
-                    "Apple clang 21 or newer (Xcode 26.0 or newer)",
-                    "Apple C compiler and linker that builds the macOS ARM64 player binary",
-                    &["--version"],
-                ),
-                rust_requirement(
-                    target.rust_triple(),
-                    target.alternate_rust_triples(),
-                    "Rust compiler and standard library that builds the macOS ARM64 player",
-                ),
-                dotnet_runtime_pack_requirement(
-                    target.dotnet_runtime_identifier(),
-                    ".NET 8.0 runtime pack that hosts managed game scripts on macOS ARM64",
-                ),
-            ],
-            resolving_action: String::from(
-                "install the Xcode command line tools with 'xcode-select --install', add the Rust target with 'rustup target add aarch64-apple-darwin', and restore the .NET runtime pack with 'dotnet restore -r osx-arm64', then package the player on a macOS ARM64 host where unitas builds that target",
+        ],
+        resolving_action: String::from(
+            "install the mingw-w64 cross toolchain with 'brew install mingw-w64', add the Rust target with 'rustup target add x86_64-pc-windows-gnu', and restore the .NET runtime pack with 'dotnet restore -r win-x64', then package the player on a Windows x86-64 host where unitas builds that target",
+        ),
+    }
+}
+
+fn windows_arm64_toolchain(target: BuildTarget) -> TargetToolchain {
+    TargetToolchain {
+        target,
+        requirements: vec![
+            command_requirement(
+                "aarch64-w64-mingw32-gcc",
+                "mingw-w64 14.0.0 or newer",
+                "cross C compiler and linker that builds the Windows ARM64 player binary",
+                &["--version"],
             ),
-        },
-        (TargetOs::MacOs, TargetArch::X86_64) => TargetToolchain {
-            target,
-            requirements: vec![
-                command_requirement(
-                    "clang",
-                    "Apple clang 21 or newer (Xcode 26.0 or newer)",
-                    "Apple C compiler and linker that builds the macOS x86-64 player binary",
-                    &["--version"],
-                ),
-                rust_requirement(
-                    target.rust_triple(),
-                    target.alternate_rust_triples(),
-                    "Rust compiler and standard library that builds the macOS x86-64 player",
-                ),
-                dotnet_runtime_pack_requirement(
-                    target.dotnet_runtime_identifier(),
-                    ".NET 8.0 runtime pack that hosts managed game scripts on macOS x86-64",
-                ),
-            ],
-            resolving_action: String::from(
-                "install the Xcode command line tools with 'xcode-select --install', add the Rust target with 'rustup target add x86_64-apple-darwin', and restore the .NET runtime pack with 'dotnet restore -r osx-x64', then package the player on a macOS x86-64 host where unitas builds that target",
+            command_requirement(
+                "aarch64-w64-mingw32-windres",
+                "mingw-w64 14.0.0 or newer",
+                "Windows resource compiler that embeds the player resources",
+                &["--version"],
             ),
-        },
-        (TargetOs::Web, _) | (_, TargetArch::Wasm32) => TargetToolchain {
-            target,
-            requirements: vec![
-                command_requirement(
-                    "emcc",
-                    "Emscripten 3.1.56 or newer",
-                    "Emscripten C/C++ compiler and WebAssembly bundler that links the Web player bundle",
-                    &["--version"],
-                ),
-                rust_requirement(
-                    target.rust_triple(),
-                    target.alternate_rust_triples(),
-                    "Rust compiler and standard library that builds the WebAssembly player for wasm32-unknown-unknown",
-                ),
-            ],
-            resolving_action: String::from(
-                "install and activate the Emscripten SDK with 'emsdk install latest && emsdk activate latest' so 'emcc' is on PATH, and add the Rust WebAssembly target with 'rustup target add wasm32-unknown-unknown'",
+            rust_requirement(
+                target.rust_triple(),
+                target.alternate_rust_triples(),
+                "Rust compiler and standard library that builds the Windows ARM64 player",
             ),
-        },
+            dotnet_runtime_pack_requirement(
+                target.dotnet_runtime_identifier(),
+                ".NET 8.0 runtime pack that hosts managed game scripts on Windows ARM64",
+            ),
+        ],
+        resolving_action: String::from(
+            "install the mingw-w64 cross toolchain with 'brew install mingw-w64', add the Rust target with 'rustup target add aarch64-pc-windows-gnu', and restore the .NET runtime pack with 'dotnet restore -r win-arm64', then package the player on a Windows ARM64 host where unitas builds that target",
+        ),
+    }
+}
+
+fn linux_x86_64_toolchain(target: BuildTarget) -> TargetToolchain {
+    TargetToolchain {
+        target,
+        requirements: vec![
+            command_requirement(
+                "x86_64-linux-gnu-gcc",
+                "GCC 12 or newer",
+                "cross C compiler and linker that builds the Linux x86-64 player binary",
+                &["--version"],
+            ),
+            rust_requirement(
+                target.rust_triple(),
+                target.alternate_rust_triples(),
+                "Rust compiler and standard library that builds the Linux x86-64 player",
+            ),
+            dotnet_runtime_pack_requirement(
+                target.dotnet_runtime_identifier(),
+                ".NET 8.0 runtime pack that hosts managed game scripts on Linux x86-64",
+            ),
+        ],
+        resolving_action: String::from(
+            "build the player in a Linux x86-64 environment that provides x86_64-linux-gnu-gcc (the 'rust:1.93' container image provides one), add the Rust target with 'rustup target add x86_64-unknown-linux-gnu', and restore the .NET runtime pack with 'dotnet restore -r linux-x64', then package the player on that Linux x86-64 host where unitas builds that target",
+        ),
+    }
+}
+
+fn linux_arm64_toolchain(target: BuildTarget) -> TargetToolchain {
+    TargetToolchain {
+        target,
+        requirements: vec![
+            command_requirement(
+                "aarch64-linux-gnu-gcc",
+                "GCC 12 or newer",
+                "cross C compiler and linker that builds the Linux ARM64 player binary",
+                &["--version"],
+            ),
+            rust_requirement(
+                target.rust_triple(),
+                target.alternate_rust_triples(),
+                "Rust compiler and standard library that builds the Linux ARM64 player",
+            ),
+            dotnet_runtime_pack_requirement(
+                target.dotnet_runtime_identifier(),
+                ".NET 8.0 runtime pack that hosts managed game scripts on Linux ARM64",
+            ),
+        ],
+        resolving_action: String::from(
+            "build the player in a Linux ARM64 environment that provides aarch64-linux-gnu-gcc (the 'rust:1.93' container image provides one), add the Rust target with 'rustup target add aarch64-unknown-linux-gnu', and restore the .NET runtime pack with 'dotnet restore -r linux-arm64', then package the player on that Linux ARM64 host where unitas builds that target",
+        ),
+    }
+}
+
+fn macos_arm64_toolchain(target: BuildTarget) -> TargetToolchain {
+    TargetToolchain {
+        target,
+        requirements: vec![
+            command_requirement(
+                "clang",
+                "Apple clang 21 or newer (Xcode 26.0 or newer)",
+                "Apple C compiler and linker that builds the macOS ARM64 player binary",
+                &["--version"],
+            ),
+            rust_requirement(
+                target.rust_triple(),
+                target.alternate_rust_triples(),
+                "Rust compiler and standard library that builds the macOS ARM64 player",
+            ),
+            dotnet_runtime_pack_requirement(
+                target.dotnet_runtime_identifier(),
+                ".NET 8.0 runtime pack that hosts managed game scripts on macOS ARM64",
+            ),
+        ],
+        resolving_action: String::from(
+            "install the Xcode command line tools with 'xcode-select --install', add the Rust target with 'rustup target add aarch64-apple-darwin', and restore the .NET runtime pack with 'dotnet restore -r osx-arm64', then package the player on a macOS ARM64 host where unitas builds that target",
+        ),
+    }
+}
+
+fn macos_x86_64_toolchain(target: BuildTarget) -> TargetToolchain {
+    TargetToolchain {
+        target,
+        requirements: vec![
+            command_requirement(
+                "clang",
+                "Apple clang 21 or newer (Xcode 26.0 or newer)",
+                "Apple C compiler and linker that builds the macOS x86-64 player binary",
+                &["--version"],
+            ),
+            rust_requirement(
+                target.rust_triple(),
+                target.alternate_rust_triples(),
+                "Rust compiler and standard library that builds the macOS x86-64 player",
+            ),
+            dotnet_runtime_pack_requirement(
+                target.dotnet_runtime_identifier(),
+                ".NET 8.0 runtime pack that hosts managed game scripts on macOS x86-64",
+            ),
+        ],
+        resolving_action: String::from(
+            "install the Xcode command line tools with 'xcode-select --install', add the Rust target with 'rustup target add x86_64-apple-darwin', and restore the .NET runtime pack with 'dotnet restore -r osx-x64', then package the player on a macOS x86-64 host where unitas builds that target",
+        ),
+    }
+}
+
+fn web_toolchain(target: BuildTarget) -> TargetToolchain {
+    TargetToolchain {
+        target,
+        requirements: vec![
+            command_requirement(
+                "emcc",
+                "Emscripten 3.1.56 or newer",
+                "Emscripten C/C++ compiler and WebAssembly bundler that links the Web player bundle",
+                &["--version"],
+            ),
+            rust_requirement(
+                target.rust_triple(),
+                target.alternate_rust_triples(),
+                "Rust compiler and standard library that builds the WebAssembly player for wasm32-unknown-unknown",
+            ),
+        ],
+        resolving_action: String::from(
+            "install and activate the Emscripten SDK with 'emsdk install latest && emsdk activate latest' so 'emcc' is on PATH, and add the Rust WebAssembly target with 'rustup target add wasm32-unknown-unknown'",
+        ),
     }
 }
 

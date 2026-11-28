@@ -223,14 +223,13 @@ pub(super) fn create_post_sampler(device: &wgpu::Device) -> wgpu::Sampler {
     })
 }
 
-fn build_pipelines(
+fn build_scene_pipelines(
     device: &wgpu::Device,
     layout: &wgpu::PipelineLayout,
     shader: &wgpu::ShaderModule,
-    entry_points: PipelineEntryPoints<'_>,
+    entry_points: &PipelineEntryPoints<'_>,
     targets: &[Option<wgpu::ColorTargetState>],
-    blend_targets: &[Option<wgpu::ColorTargetState>],
-) -> Pipelines {
+) -> (wgpu::RenderPipeline, wgpu::RenderPipeline) {
     let lit = build_pipeline(
         device,
         layout,
@@ -249,6 +248,20 @@ fn build_pipelines(
         "unlit",
         true,
     );
+    (lit, unlit)
+}
+
+fn build_blend_pipelines(
+    device: &wgpu::Device,
+    layout: &wgpu::PipelineLayout,
+    shader: &wgpu::ShaderModule,
+    entry_points: &PipelineEntryPoints<'_>,
+    blend_targets: &[Option<wgpu::ColorTargetState>],
+) -> (
+    wgpu::RenderPipeline,
+    wgpu::RenderPipeline,
+    wgpu::RenderPipeline,
+) {
     let lit_blend = build_pipeline(
         device,
         layout,
@@ -276,6 +289,20 @@ fn build_pipelines(
         "sprite",
         false,
     );
+    (lit_blend, unlit_blend, sprite)
+}
+
+fn build_pipelines(
+    device: &wgpu::Device,
+    layout: &wgpu::PipelineLayout,
+    shader: &wgpu::ShaderModule,
+    entry_points: PipelineEntryPoints<'_>,
+    targets: &[Option<wgpu::ColorTargetState>],
+    blend_targets: &[Option<wgpu::ColorTargetState>],
+) -> Pipelines {
+    let (lit, unlit) = build_scene_pipelines(device, layout, shader, &entry_points, targets);
+    let (lit_blend, unlit_blend, sprite) =
+        build_blend_pipelines(device, layout, shader, &entry_points, blend_targets);
     Pipelines {
         lit,
         unlit,
@@ -447,40 +474,26 @@ pub(super) fn create_instance_layout(device: &wgpu::Device) -> wgpu::BindGroupLa
     })
 }
 
+fn fragment_texture_entry(binding: u32) -> wgpu::BindGroupLayoutEntry {
+    wgpu::BindGroupLayoutEntry {
+        binding,
+        visibility: wgpu::ShaderStages::FRAGMENT,
+        ty: wgpu::BindingType::Texture {
+            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+            view_dimension: wgpu::TextureViewDimension::D2,
+            multisampled: false,
+        },
+        count: None,
+    }
+}
+
 pub(super) fn create_material_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
     device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
         label: Some("material"),
         entries: &[
-            wgpu::BindGroupLayoutEntry {
-                binding: 0,
-                visibility: wgpu::ShaderStages::FRAGMENT,
-                ty: wgpu::BindingType::Texture {
-                    sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                    view_dimension: wgpu::TextureViewDimension::D2,
-                    multisampled: false,
-                },
-                count: None,
-            },
-            wgpu::BindGroupLayoutEntry {
-                binding: 1,
-                visibility: wgpu::ShaderStages::FRAGMENT,
-                ty: wgpu::BindingType::Texture {
-                    sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                    view_dimension: wgpu::TextureViewDimension::D2,
-                    multisampled: false,
-                },
-                count: None,
-            },
-            wgpu::BindGroupLayoutEntry {
-                binding: 2,
-                visibility: wgpu::ShaderStages::FRAGMENT,
-                ty: wgpu::BindingType::Texture {
-                    sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                    view_dimension: wgpu::TextureViewDimension::D2,
-                    multisampled: false,
-                },
-                count: None,
-            },
+            fragment_texture_entry(0),
+            fragment_texture_entry(1),
+            fragment_texture_entry(2),
             wgpu::BindGroupLayoutEntry {
                 binding: 3,
                 visibility: wgpu::ShaderStages::FRAGMENT,

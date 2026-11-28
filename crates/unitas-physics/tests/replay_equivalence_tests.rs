@@ -66,6 +66,12 @@ fn crate_shape() -> Shape {
 
 fn build_world() -> Result<World, PhysicsError> {
     let mut world = World::new();
+    add_static_and_crates(&mut world)?;
+    add_ball_pushed_and_mover(&mut world)?;
+    Ok(world)
+}
+
+fn add_static_and_crates(world: &mut World) -> Result<(), PhysicsError> {
     world.add_body(
         GROUND,
         body(
@@ -101,6 +107,10 @@ fn build_world() -> Result<World, PhysicsError> {
             true,
         ),
     )?;
+    Ok(())
+}
+
+fn add_ball_pushed_and_mover(world: &mut World) -> Result<(), PhysicsError> {
     world.add_body(
         BALL,
         body(
@@ -136,7 +146,7 @@ fn build_world() -> Result<World, PhysicsError> {
             false,
         ),
     )?;
-    Ok(world)
+    Ok(())
 }
 
 fn scripted_input(world: &mut World, step: usize) -> Result<(), PhysicsError> {

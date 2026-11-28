@@ -8,31 +8,42 @@ use unitas_animation::{
 const WIRE_OBJECT_GUID_A: u128 = 0x0123_4567_89ab_cdef_0123_4567_89ab_cdef;
 const WIRE_OBJECT_GUID_B: u128 = 0xfedc_ba98_7654_3210_fedc_ba98_7654_3210;
 
-fn build_rich_controller() -> AnimatorController {
-    let float_curve = FloatCurve::new(vec![
+fn build_float_curve() -> FloatCurve {
+    FloatCurve::new(vec![
         Keyframe::new(0.0, 0.0, 1.0, 1.0),
         Keyframe::linear(0.5, 2.0),
         Keyframe::stepped(1.0, 4.0),
-    ]);
-    let vec3_curve = PropertyCurve::Vector3([
+    ])
+}
+
+fn build_vec3_curve() -> PropertyCurve {
+    PropertyCurve::Vector3([
         FloatCurve::new(vec![Keyframe::linear(0.0, 1.0), Keyframe::linear(1.0, 2.0)]),
         FloatCurve::new(vec![Keyframe::linear(0.0, 3.0), Keyframe::linear(1.0, 4.0)]),
         FloatCurve::new(vec![Keyframe::linear(0.0, 5.0), Keyframe::linear(1.0, 6.0)]),
-    ]);
-    let quat_curve = PropertyCurve::Quaternion([
+    ])
+}
+
+fn build_quat_curve() -> PropertyCurve {
+    PropertyCurve::Quaternion([
         FloatCurve::new(vec![Keyframe::linear(0.0, 0.0)]),
         FloatCurve::new(vec![Keyframe::linear(0.0, 0.0)]),
         FloatCurve::new(vec![Keyframe::linear(0.0, 0.0)]),
         FloatCurve::new(vec![Keyframe::linear(0.0, 1.0)]),
-    ]);
-    let color_curve = PropertyCurve::Color([
+    ])
+}
+
+fn build_color_curve() -> PropertyCurve {
+    PropertyCurve::Color([
         FloatCurve::new(vec![Keyframe::linear(0.0, 0.1)]),
         FloatCurve::new(vec![Keyframe::linear(0.0, 0.2)]),
         FloatCurve::new(vec![Keyframe::linear(0.0, 0.3)]),
         FloatCurve::new(vec![Keyframe::linear(0.0, 1.0)]),
-    ]);
+    ])
+}
 
-    let clip_a = AnimationClip::new(
+fn build_clip_a() -> AnimationClip {
+    AnimationClip::new(
         "ClipA",
         1.0,
         60.0,
@@ -40,19 +51,19 @@ fn build_rich_controller() -> AnimatorController {
         vec![
             CurveBinding::float(
                 CurveBindingTarget::new("", "Transform", "localPosition.x"),
-                float_curve.clone(),
+                build_float_curve(),
             ),
             CurveBinding::new(
                 CurveBindingTarget::new("Child", "Transform", "localScale"),
-                vec3_curve,
+                build_vec3_curve(),
             ),
             CurveBinding::new(
                 CurveBindingTarget::new("", "Transform", "localRotation"),
-                quat_curve,
+                build_quat_curve(),
             ),
             CurveBinding::new(
                 CurveBindingTarget::new("Mesh", "MeshRenderer", "material.color"),
-                color_curve,
+                build_color_curve(),
             ),
         ],
         vec![unitas_animation::AnimationEvent {
@@ -62,72 +73,90 @@ fn build_rich_controller() -> AnimatorController {
             int_parameter: 42,
             string_parameter: "payload".to_string(),
         }],
-    );
+    )
+}
 
-    let clip_b = AnimationClip::new(
+fn build_clip_b() -> AnimationClip {
+    AnimationClip::new(
         "ClipB",
         2.0,
         30.0,
         WrapMode::PingPong,
         vec![CurveBinding::float(
             CurveBindingTarget::new("", "Transform", "localPosition.x"),
-            float_curve,
+            build_float_curve(),
         )],
         Vec::new(),
-    );
+    )
+}
 
+fn build_rich_parameters() -> Vec<ParameterDef> {
+    vec![
+        ParameterDef::float("speed", 0.5),
+        ParameterDef::int("mode", 1),
+        ParameterDef::bool("grounded", true),
+        ParameterDef::trigger("attack"),
+    ]
+}
+
+fn build_rich_states(clip_a: AnimationClip, clip_b: AnimationClip) -> Vec<AnimatorState> {
+    vec![
+        AnimatorState::with_speed("Locomotion", StateMotion::Clip(clip_a.clone()), 1.25),
+        AnimatorState::new(
+            "BlendState",
+            StateMotion::BlendTree1D {
+                parameter: "speed".to_string(),
+                thresholds: vec![(0.0, clip_a), (1.0, clip_b)],
+            },
+        ),
+        AnimatorState {
+            name: "EmptyExit".to_string(),
+            motion: StateMotion::None,
+            speed: 1.0,
+            is_exit: true,
+            write_defaults: true,
+        },
+    ]
+}
+
+fn build_rich_transitions() -> Vec<StateTransition> {
+    vec![
+        StateTransition::new(
+            0,
+            TransitionTarget::State(1),
+            vec![
+                TransitionCondition::new("speed", ConditionOp::Greater(1.0)),
+                TransitionCondition::new("mode", ConditionOp::Equals(1)),
+                TransitionCondition::new("grounded", ConditionOp::If),
+                TransitionCondition::new("attack", ConditionOp::IfNot),
+            ],
+            true,
+            0.75,
+            0.2,
+        ),
+        StateTransition::new(
+            1,
+            TransitionTarget::Exit,
+            vec![
+                TransitionCondition::new("speed", ConditionOp::Less(0.1)),
+                TransitionCondition::new("mode", ConditionOp::NotEqual(9)),
+            ],
+            false,
+            0.0,
+            0.0,
+        ),
+    ]
+}
+
+fn build_rich_controller() -> AnimatorController {
+    let clip_a = build_clip_a();
+    let clip_b = build_clip_b();
     AnimatorController::new(
         "HeroController",
-        vec![
-            ParameterDef::float("speed", 0.5),
-            ParameterDef::int("mode", 1),
-            ParameterDef::bool("grounded", true),
-            ParameterDef::trigger("attack"),
-        ],
-        vec![
-            AnimatorState::with_speed("Locomotion", StateMotion::Clip(clip_a.clone()), 1.25),
-            AnimatorState::new(
-                "BlendState",
-                StateMotion::BlendTree1D {
-                    parameter: "speed".to_string(),
-                    thresholds: vec![(0.0, clip_a), (1.0, clip_b)],
-                },
-            ),
-            AnimatorState {
-                name: "EmptyExit".to_string(),
-                motion: StateMotion::None,
-                speed: 1.0,
-                is_exit: true,
-                write_defaults: true,
-            },
-        ],
+        build_rich_parameters(),
+        build_rich_states(clip_a, clip_b),
         0,
-        vec![
-            StateTransition::new(
-                0,
-                TransitionTarget::State(1),
-                vec![
-                    TransitionCondition::new("speed", ConditionOp::Greater(1.0)),
-                    TransitionCondition::new("mode", ConditionOp::Equals(1)),
-                    TransitionCondition::new("grounded", ConditionOp::If),
-                    TransitionCondition::new("attack", ConditionOp::IfNot),
-                ],
-                true,
-                0.75,
-                0.2,
-            ),
-            StateTransition::new(
-                1,
-                TransitionTarget::Exit,
-                vec![
-                    TransitionCondition::new("speed", ConditionOp::Less(0.1)),
-                    TransitionCondition::new("mode", ConditionOp::NotEqual(9)),
-                ],
-                false,
-                0.0,
-                0.0,
-            ),
-        ],
+        build_rich_transitions(),
     )
 }
 

@@ -134,93 +134,66 @@ pub enum PlayerStartupError {
 impl fmt::Display for PlayerStartupError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            PlayerStartupError::ManifestLoad { bundle_dir, source } => {
-                write!(
-                    formatter,
-                    "failed to load bundle manifest from '{}': {source}",
-                    bundle_dir.display()
-                )
-            }
-            PlayerStartupError::NoStartupSceneConfigured { bundle_dir } => {
-                write!(
-                    formatter,
-                    "bundle '{}' has no startup scene configured",
-                    bundle_dir.display()
-                )
-            }
-            PlayerStartupError::StartupSceneMissing { scene_path } => {
-                write!(
-                    formatter,
-                    "startup scene does not exist at '{}'",
-                    scene_path.display()
-                )
-            }
-            PlayerStartupError::RuntimeInit { message } => {
+            Self::ManifestLoad { bundle_dir, source } => write!(
+                formatter,
+                "failed to load bundle manifest from '{}': {source}",
+                bundle_dir.display()
+            ),
+            Self::NoStartupSceneConfigured { bundle_dir } => write!(
+                formatter,
+                "bundle '{}' has no startup scene configured",
+                bundle_dir.display()
+            ),
+            Self::StartupSceneMissing { scene_path } => write!(
+                formatter,
+                "startup scene does not exist at '{}'",
+                scene_path.display()
+            ),
+            Self::RuntimeInit { message } => {
                 write!(formatter, "failed to initialize runtime: {message}")
             }
-            PlayerStartupError::SceneLoadFailed {
+            Self::SceneLoadFailed {
                 scene_path,
                 message,
-            } => {
-                write!(
-                    formatter,
-                    "failed to load startup scene '{}': {message}",
-                    scene_path.display()
-                )
-            }
-            PlayerStartupError::FrameTickFailed { frame, message } => {
+            } => write!(
+                formatter,
+                "failed to load startup scene '{}': {message}",
+                scene_path.display()
+            ),
+            Self::FrameTickFailed { frame, message } => {
                 write!(formatter, "frame tick {frame} failed: {message}")
             }
-            PlayerStartupError::WindowFailed { message } => {
-                write!(formatter, "windowed player failed: {message}")
-            }
-            PlayerStartupError::RenderFailed { message } => {
-                write!(formatter, "GPU renderer failed: {message}")
-            }
-            PlayerStartupError::AudioFailed { message } => {
-                write!(formatter, "audio output failed: {message}")
-            }
-            PlayerStartupError::VerificationFailed { message } => {
+            Self::WindowFailed { message } => write!(formatter, "windowed player failed: {message}"),
+            Self::RenderFailed { message } => write!(formatter, "GPU renderer failed: {message}"),
+            Self::AudioFailed { message } => write!(formatter, "audio output failed: {message}"),
+            Self::VerificationFailed { message } => {
                 write!(formatter, "device verification failed: {message}")
             }
-            PlayerStartupError::RuntimeLibraryUnavailable { path } => {
-                write!(
-                    formatter,
-                    "the runtime library does not exist at '{}'",
-                    path.display()
-                )
-            }
-            PlayerStartupError::ScriptPayloadMissing {
+            Self::RuntimeLibraryUnavailable { path } => write!(
+                formatter,
+                "the runtime library does not exist at '{}'",
+                path.display()
+            ),
+            Self::ScriptPayloadMissing {
                 bundle_dir,
                 expected_path,
-            } => {
-                write!(
-                    formatter,
-                    "bundle '{}' declares script_host=coreclr, but the managed payload does not exist at '{}'",
-                    bundle_dir.display(),
-                    expected_path.display()
-                )
-            }
-            PlayerStartupError::ScriptHostBootFailed { message } => {
+            } => write!(
+                formatter,
+                "bundle '{}' declares script_host=coreclr, but the managed payload does not exist at '{}'",
+                bundle_dir.display(),
+                expected_path.display()
+            ),
+            Self::ScriptHostBootFailed { message } => {
                 write!(formatter, "the script host failed to boot: {message}")
             }
-            PlayerStartupError::ScriptHostInitFailed { stage } => {
-                write!(
-                    formatter,
-                    "the script host failed to initialize: stage {stage}"
-                )
+            Self::ScriptHostInitFailed { stage } => {
+                write!(formatter, "the script host failed to initialize: stage {stage}")
             }
-            PlayerStartupError::ScriptHostTickFailed { frame, stage } => {
-                write!(
-                    formatter,
-                    "the script host failed to tick frame {frame}: stage {stage}"
-                )
+            Self::ScriptHostTickFailed { frame, stage } => {
+                write!(formatter, "the script host failed to tick frame {frame}: stage {stage}")
             }
-            PlayerStartupError::ScriptHostShutdownFailed { stage } => {
-                write!(
-                    formatter,
-                    "the script host failed to shut down: stage {stage}"
-                )
+            Self::ScriptHostShutdownFailed { stage } => {
+                write!(formatter, "the script host failed to shut down: stage {stage}")
             }
         }
     }
@@ -481,54 +454,12 @@ pub fn apply_content_update_to_player(
     }
 
     for emitted in &content_update.emitted_bundles {
-        let updated_bundle_path = content_update.output_dir.join(&emitted.staged_path);
-        let bytes =
-            fs::read(&updated_bundle_path).map_err(|error| PlayerStartupError::ManifestLoad {
-                bundle_dir: player_bundle_dir.to_path_buf(),
-                source: BundleError::Io {
-                    path: updated_bundle_path.clone(),
-                    message: error.to_string(),
-                },
-            })?;
-        let dest_content_bundle = player_bundle_dir.join(&emitted.staged_path);
-        if let Some(parent) = dest_content_bundle.parent() {
-            fs::create_dir_all(parent).map_err(|error| PlayerStartupError::ManifestLoad {
-                bundle_dir: player_bundle_dir.to_path_buf(),
-                source: BundleError::Io {
-                    path: parent.to_path_buf(),
-                    message: error.to_string(),
-                },
-            })?;
-        }
-        fs::write(&dest_content_bundle, &bytes).map_err(|error| {
-            PlayerStartupError::ManifestLoad {
-                bundle_dir: player_bundle_dir.to_path_buf(),
-                source: BundleError::Io {
-                    path: dest_content_bundle,
-                    message: error.to_string(),
-                },
-            }
-        })?;
-
-        for entry in &mut manifest.entries {
-            if entry.source_path == emitted.source_path
-                || entry.staged_path.ends_with(&emitted.source_path)
-            {
-                let staged_scene_dest = player_bundle_dir.join(&entry.staged_path);
-                fs::write(&staged_scene_dest, &bytes).map_err(|error| {
-                    PlayerStartupError::ManifestLoad {
-                        bundle_dir: player_bundle_dir.to_path_buf(),
-                        source: BundleError::Io {
-                            path: staged_scene_dest,
-                            message: error.to_string(),
-                        },
-                    }
-                })?;
-                entry.content_hash = emitted.content_hash.clone();
-                entry.size_bytes = emitted.size_bytes;
-                entry.root_object_count = emitted.root_object_count;
-            }
-        }
+        stage_emitted_content_update(
+            player_bundle_dir,
+            &content_update.output_dir,
+            emitted,
+            &mut manifest,
+        )?;
     }
 
     manifest.total_content_bytes = manifest
@@ -536,29 +467,73 @@ pub fn apply_content_update_to_player(
         .iter()
         .fold(0u64, |acc, item| acc.saturating_add(item.size_bytes));
     manifest.manifest_hash = manifest.compute_manifest_hash();
-    let manifest_path = player_bundle_dir.join(BUNDLE_MANIFEST_FILENAME);
-    fs::write(&manifest_path, manifest.to_canonical_string()).map_err(|error| {
-        PlayerStartupError::ManifestLoad {
-            bundle_dir: player_bundle_dir.to_path_buf(),
-            source: BundleError::Io {
-                path: manifest_path,
-                message: error.to_string(),
-            },
-        }
-    })?;
-
-    let catalog_dest = player_bundle_dir.join(CONTENT_CATALOG_FILENAME);
-    fs::write(&catalog_dest, content_update.catalog.to_canonical_string()).map_err(|error| {
-        PlayerStartupError::ManifestLoad {
-            bundle_dir: player_bundle_dir.to_path_buf(),
-            source: BundleError::Io {
-                path: catalog_dest,
-                message: error.to_string(),
-            },
-        }
-    })?;
+    write_manifest_file(
+        player_bundle_dir,
+        &player_bundle_dir.join(BUNDLE_MANIFEST_FILENAME),
+        manifest.to_canonical_string().as_bytes(),
+    )?;
+    write_manifest_file(
+        player_bundle_dir,
+        &player_bundle_dir.join(CONTENT_CATALOG_FILENAME),
+        content_update.catalog.to_canonical_string().as_bytes(),
+    )?;
 
     launch_bundle(player_bundle_dir, frames, delta_seconds)
+}
+
+fn stage_emitted_content_update(
+    player_bundle_dir: &Path,
+    update_output_dir: &Path,
+    emitted: &crate::bundle::ContentCatalogEntry,
+    manifest: &mut BundleManifest,
+) -> Result<(), PlayerStartupError> {
+    let updated_bundle_path = update_output_dir.join(&emitted.staged_path);
+    let bytes =
+        fs::read(&updated_bundle_path).map_err(|error| PlayerStartupError::ManifestLoad {
+            bundle_dir: player_bundle_dir.to_path_buf(),
+            source: BundleError::Io {
+                path: updated_bundle_path,
+                message: error.to_string(),
+            },
+        })?;
+    let dest_content_bundle = player_bundle_dir.join(&emitted.staged_path);
+    if let Some(parent) = dest_content_bundle.parent() {
+        fs::create_dir_all(parent).map_err(|error| PlayerStartupError::ManifestLoad {
+            bundle_dir: player_bundle_dir.to_path_buf(),
+            source: BundleError::Io {
+                path: parent.to_path_buf(),
+                message: error.to_string(),
+            },
+        })?;
+    }
+    write_manifest_file(player_bundle_dir, &dest_content_bundle, &bytes)?;
+
+    for entry in &mut manifest.entries {
+        if entry.source_path == emitted.source_path
+            || entry.staged_path.ends_with(&emitted.source_path)
+        {
+            let staged_scene_dest = player_bundle_dir.join(&entry.staged_path);
+            write_manifest_file(player_bundle_dir, &staged_scene_dest, &bytes)?;
+            entry.content_hash = emitted.content_hash.clone();
+            entry.size_bytes = emitted.size_bytes;
+            entry.root_object_count = emitted.root_object_count;
+        }
+    }
+    Ok(())
+}
+
+fn write_manifest_file(
+    bundle_dir: &Path,
+    dest_path: &Path,
+    bytes: &[u8],
+) -> Result<(), PlayerStartupError> {
+    fs::write(dest_path, bytes).map_err(|error| PlayerStartupError::ManifestLoad {
+        bundle_dir: bundle_dir.to_path_buf(),
+        source: BundleError::Io {
+            path: dest_path.to_path_buf(),
+            message: error.to_string(),
+        },
+    })
 }
 
 #[cfg(feature = "device")]
@@ -1108,8 +1083,6 @@ fn capture_device_chime(
         })
 }
 
-/// Measures the time from launching a packaged player until it answers its
-/// first control request.
 pub fn measure_player_startup(launch_artifact: &Path) -> StartupMeasurement {
     let mut child = match Command::new(launch_artifact)
         .arg("--control-stdio")
@@ -1134,7 +1107,16 @@ pub fn measure_player_startup(launch_artifact: &Path) -> StartupMeasurement {
         let _ = stdin.write_all(b"{\"cmd\":\"state\"}\n");
         let _ = stdin.flush();
     }
-    let stdout = child.stdout.take();
+    let answered = wait_for_startup_control_reply(child.stdout.take());
+    let elapsed = started.elapsed();
+    let _ = child.kill();
+    let _ = child.wait();
+    interpret_startup_control_reply(answered, elapsed)
+}
+
+fn wait_for_startup_control_reply(
+    stdout: Option<std::process::ChildStdout>,
+) -> Result<Option<(usize, String)>, mpsc::RecvTimeoutError> {
     let (sender, receiver) = mpsc::channel();
     std::thread::spawn(move || {
         let answer = stdout.and_then(|stdout| {
@@ -1144,10 +1126,13 @@ pub fn measure_player_startup(launch_artifact: &Path) -> StartupMeasurement {
         });
         let _ = sender.send(answer);
     });
-    let answered = receiver.recv_timeout(Duration::from_secs(STARTUP_MEASUREMENT_TIMEOUT_SECONDS));
-    let elapsed = started.elapsed();
-    let _ = child.kill();
-    let _ = child.wait();
+    receiver.recv_timeout(Duration::from_secs(STARTUP_MEASUREMENT_TIMEOUT_SECONDS))
+}
+
+fn interpret_startup_control_reply(
+    answered: Result<Option<(usize, String)>, mpsc::RecvTimeoutError>,
+    elapsed: Duration,
+) -> StartupMeasurement {
     match answered {
         Ok(Some((read, line))) if read > 0 && line.trim_start().starts_with('{') => {
             StartupMeasurement::measured(
@@ -1172,8 +1157,6 @@ pub fn measure_player_startup(launch_artifact: &Path) -> StartupMeasurement {
     }
 }
 
-/// Measures the startup of the player a staged bundle produced, when the
-/// bundle carries a launchable player on this host.
 pub fn measure_packaged_startup(staged: &StagedBundle) -> StartupMeasurement {
     if staged.application_bundle_path.is_none() {
         return StartupMeasurement::unavailable(
@@ -1203,64 +1186,8 @@ pub fn build_project_for_host(
 ) -> Result<(StagedBundle, BuildReport), Box<(BundleError, BuildReport)>> {
     match stage_bundle_for_host(config, output_dir, host) {
         Ok(staged) => {
-            let mut contributors = Vec::with_capacity(staged.manifest.entries.len() + 3);
-            let mut scenes_size = 0u64;
-            for entry in &staged.manifest.entries {
-                scenes_size = scenes_size.saturating_add(entry.size_bytes);
-                contributors.push(SizeContributor::new(
-                    entry.staged_path.clone(),
-                    "scenes",
-                    entry.size_bytes,
-                    entry.content_hash.clone(),
-                ));
-            }
-
-            let manifest_bytes = fs::read(&staged.manifest_path).unwrap_or_default();
-            let metadata_size = manifest_bytes.len() as u64;
-            contributors.push(SizeContributor::new(
-                BUNDLE_MANIFEST_FILENAME,
-                "metadata",
-                metadata_size,
-                content_hash_hex(&manifest_bytes),
-            ));
-
-            let launcher_bytes = fs::read(&staged.launch_artifact_path).unwrap_or_default();
-            let launcher_size = launcher_bytes.len() as u64;
-            let launcher_name = staged
-                .launch_artifact_path
-                .file_name()
-                .and_then(|name| name.to_str())
-                .unwrap_or("unitas-player");
-            contributors.push(SizeContributor::new(
-                launcher_name,
-                "launcher",
-                launcher_size,
-                content_hash_hex(&launcher_bytes),
-            ));
-
-            let mut category_sizes = vec![
-                SizeCategoryEntry::new("scenes", scenes_size),
-                SizeCategoryEntry::new("metadata", metadata_size),
-                SizeCategoryEntry::new("launcher", launcher_size),
-            ];
-
-            let mut total_size_bytes = scenes_size
-                .saturating_add(metadata_size)
-                .saturating_add(launcher_size);
-
-            if let Some(ref marker_path) = staged.diagnostics_marker_path {
-                let marker_bytes = fs::read(marker_path).unwrap_or_default();
-                let diagnostics_size = marker_bytes.len() as u64;
-                total_size_bytes = total_size_bytes.saturating_add(diagnostics_size);
-                category_sizes.push(SizeCategoryEntry::new("diagnostics", diagnostics_size));
-                contributors.push(SizeContributor::new(
-                    DEVELOPMENT_DIAGNOSTICS_MARKER_FILENAME,
-                    "diagnostics",
-                    diagnostics_size,
-                    content_hash_hex(&marker_bytes),
-                ));
-            }
-
+            let (total_size_bytes, category_sizes, contributors) =
+                collect_staged_bundle_sizes(&staged);
             let availability = target_availability_report();
             let desktop_packaging = desktop_packaging_outcomes_from_availability(
                 &availability,
@@ -1300,6 +1227,70 @@ pub fn build_project_for_host(
             Err(Box::new((error, report)))
         }
     }
+}
+
+fn collect_staged_bundle_sizes(
+    staged: &StagedBundle,
+) -> (u64, Vec<SizeCategoryEntry>, Vec<SizeContributor>) {
+    let mut contributors = Vec::with_capacity(staged.manifest.entries.len() + 3);
+    let mut scenes_size = 0u64;
+    for entry in &staged.manifest.entries {
+        scenes_size = scenes_size.saturating_add(entry.size_bytes);
+        contributors.push(SizeContributor::new(
+            entry.staged_path.clone(),
+            "scenes",
+            entry.size_bytes,
+            entry.content_hash.clone(),
+        ));
+    }
+
+    let manifest_bytes = fs::read(&staged.manifest_path).unwrap_or_default();
+    let metadata_size = manifest_bytes.len() as u64;
+    contributors.push(SizeContributor::new(
+        BUNDLE_MANIFEST_FILENAME,
+        "metadata",
+        metadata_size,
+        content_hash_hex(&manifest_bytes),
+    ));
+
+    let launcher_bytes = fs::read(&staged.launch_artifact_path).unwrap_or_default();
+    let launcher_size = launcher_bytes.len() as u64;
+    let launcher_name = staged
+        .launch_artifact_path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("unitas-player");
+    contributors.push(SizeContributor::new(
+        launcher_name,
+        "launcher",
+        launcher_size,
+        content_hash_hex(&launcher_bytes),
+    ));
+
+    let mut category_sizes = vec![
+        SizeCategoryEntry::new("scenes", scenes_size),
+        SizeCategoryEntry::new("metadata", metadata_size),
+        SizeCategoryEntry::new("launcher", launcher_size),
+    ];
+
+    let mut total_size_bytes = scenes_size
+        .saturating_add(metadata_size)
+        .saturating_add(launcher_size);
+
+    if let Some(ref marker_path) = staged.diagnostics_marker_path {
+        let marker_bytes = fs::read(marker_path).unwrap_or_default();
+        let diagnostics_size = marker_bytes.len() as u64;
+        total_size_bytes = total_size_bytes.saturating_add(diagnostics_size);
+        category_sizes.push(SizeCategoryEntry::new("diagnostics", diagnostics_size));
+        contributors.push(SizeContributor::new(
+            DEVELOPMENT_DIAGNOSTICS_MARKER_FILENAME,
+            "diagnostics",
+            diagnostics_size,
+            content_hash_hex(&marker_bytes),
+        ));
+    }
+
+    (total_size_bytes, category_sizes, contributors)
 }
 
 pub fn execute_build(

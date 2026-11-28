@@ -4,7 +4,8 @@ use std::sync::{Mutex, OnceLock, RwLock};
 use unitas_asset::scene::{
     CanvasComponent, CanvasMatchMode, CanvasRenderMode, CanvasScaleMode, ContentSizeFitMode,
     LayoutGroupAxis, RectTransformComponent, SpriteDrawMode, UiBinding, UiButtonComponent,
-    UiContentSizeFitterComponent, UiElementComponent, UiLayoutGroupComponent,
+    UiContentSizeFitterComponent, UiElementComponent, UiImageComponent, UiLayoutGroupComponent,
+    UiTextComponent,
 };
 use unitas_core::EntityId;
 use unitas_render::glyphs::{FontLibrary, TextStyle, layout_text};
@@ -96,7 +97,6 @@ pub struct InputFieldEndEditEvent {
 const MAX_HIERARCHY_DEPTH: usize = 64;
 const FOCUS_BORDER_THICKNESS: f32 = 2.0;
 const STICK_NAVIGATION_THRESHOLD: f64 = 0.5;
-/// The uv region of a whole sprite.
 const FULL_UV: [f32; 4] = [0.0, 0.0, 1.0, 1.0];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
@@ -248,23 +248,13 @@ pub struct CanvasRect {
     pub size: [f32; 2],
 }
 
-/// A sprite quad: the screen rect it covers and the sprite uv region it shows.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct SpriteQuad {
     pub rect: [f32; 4],
     pub uv: [f32; 4],
 }
 
-/// The nine-slice quads of a sprite drawn into `rect`, as Unity's sliced `Image`
-/// does: the corners keep the border's pixel size, the edges stretch on one axis
-/// and the centre stretches on both.
-pub fn slice_sprite_quads(
-    border: [f32; 4],
-    sprite_size: [f32; 2],
-    rect: [f32; 4],
-    uv_rect: [f32; 4],
-    scale: f32,
-) -> Vec<SpriteQuad> {
+fn clamp_sliced_borders(border: [f32; 4], rect: [f32; 4], scale: f32) -> (f32, f32, f32, f32) {
     let (mut left, mut bottom, mut right, mut top) = (
         border[0] * scale,
         border[1] * scale,
@@ -282,60 +272,48 @@ pub fn slice_sprite_quads(
         bottom = 0.5 * height - 0.5 * difference;
         top = 0.5 * height + 0.5 * difference;
     }
+    (left, bottom, right, top)
+}
+
+pub fn slice_sprite_quads(
+    border: [f32; 4],
+    sprite_size: [f32; 2],
+    rect: [f32; 4],
+    uv_rect: [f32; 4],
+    scale: f32,
+) -> Vec<SpriteQuad> {
+    let (left, bottom, right, top) = clamp_sliced_borders(border, rect, scale);
+    let (width, height) = (rect[2], rect[3]);
     let (u0, v0, u1, v1) = (uv_rect[0], uv_rect[1], uv_rect[2], uv_rect[3]);
-    let u_span = u1 - u0;
-    let v_span = v1 - v0;
+    let (u_span, v_span) = (u1 - u0, v1 - v0);
     let u_left = u0 + border[0] / sprite_size[0] * u_span;
     let u_right = u1 - border[2] / sprite_size[0] * u_span;
     let v_top = v0 + border[3] / sprite_size[1] * v_span;
     let v_bottom = v1 - border[1] / sprite_size[1] * v_span;
     let (x, y) = (rect[0], rect[1]);
-    let mid_x = x + left;
-    let end_x = x + width - right;
-    let mid_y = y + top;
-    let end_y = y + height - bottom;
+    let (mid_x, end_x) = (x + left, x + width - right);
+    let (mid_y, end_y) = (y + top, y + height - bottom);
+    let (mid_w, mid_h) = (end_x - mid_x, end_y - mid_y);
+    let quad = |r, uv| SpriteQuad { rect: r, uv };
     vec![
-        SpriteQuad {
-            rect: [x, y, left, top],
-            uv: [u0, v0, u_left, v_top],
-        },
-        SpriteQuad {
-            rect: [mid_x, y, end_x - mid_x, top],
-            uv: [u_left, v0, u_right, v_top],
-        },
-        SpriteQuad {
-            rect: [end_x, y, right, top],
-            uv: [u_right, v0, u1, v_top],
-        },
-        SpriteQuad {
-            rect: [x, mid_y, left, end_y - mid_y],
-            uv: [u0, v_top, u_left, v_bottom],
-        },
-        SpriteQuad {
-            rect: [mid_x, mid_y, end_x - mid_x, end_y - mid_y],
-            uv: [u_left, v_top, u_right, v_bottom],
-        },
-        SpriteQuad {
-            rect: [end_x, mid_y, right, end_y - mid_y],
-            uv: [u_right, v_top, u1, v_bottom],
-        },
-        SpriteQuad {
-            rect: [x, end_y, left, bottom],
-            uv: [u0, v_bottom, u_left, v1],
-        },
-        SpriteQuad {
-            rect: [mid_x, end_y, end_x - mid_x, bottom],
-            uv: [u_left, v_bottom, u_right, v1],
-        },
-        SpriteQuad {
-            rect: [end_x, end_y, right, bottom],
-            uv: [u_right, v_bottom, u1, v1],
-        },
+        quad([x, y, left, top], [u0, v0, u_left, v_top]),
+        quad([mid_x, y, mid_w, top], [u_left, v0, u_right, v_top]),
+        quad([end_x, y, right, top], [u_right, v0, u1, v_top]),
+        quad([x, mid_y, left, mid_h], [u0, v_top, u_left, v_bottom]),
+        quad(
+            [mid_x, mid_y, mid_w, mid_h],
+            [u_left, v_top, u_right, v_bottom],
+        ),
+        quad([end_x, mid_y, right, mid_h], [u_right, v_top, u1, v_bottom]),
+        quad([x, end_y, left, bottom], [u0, v_bottom, u_left, v1]),
+        quad(
+            [mid_x, end_y, mid_w, bottom],
+            [u_left, v_bottom, u_right, v1],
+        ),
+        quad([end_x, end_y, right, bottom], [u_right, v_bottom, u1, v1]),
     ]
 }
 
-/// The tiled quads of a sprite drawn into `rect`: the sprite repeats at its own
-/// pixel size and the tiles are clipped to the rect.
 pub fn tile_sprite_quads(
     sprite_size: [f32; 2],
     rect: [f32; 4],
@@ -757,8 +735,7 @@ impl CanvasState {
         None
     }
 
-    pub fn handle_focus(&mut self, input: &InputState, screen_size: [f32; 2]) -> Vec<EntityId> {
-        let focusables = self.focusable_buttons(screen_size);
+    fn current_focus_target(&mut self, focusables: &[EntityId]) -> Option<EntityId> {
         let current = self
             .focused
             .filter(|id| focusables.contains(id))
@@ -770,6 +747,30 @@ impl CanvasState {
             field.editing_original_text = Some(field.text.clone());
             field.was_canceled = false;
         }
+        current
+    }
+
+    fn collect_submit_click(&mut self, input: &InputState) -> Vec<EntityId> {
+        let submit = input
+            .button_state("Submit")
+            .is_some_and(|state| state & STATE_PRESSED != 0)
+            || input.is_key_pressed(KEY_RETURN)
+            || input.is_key_pressed(KEY_SPACE)
+            || input.is_gamepad_button_pressed(GAMEPAD_BUTTON_SOUTH);
+        let mut clicked = Vec::new();
+        if submit
+            && let Some(entity) = self.focused
+            && !self.input_fields.contains_key(&entity)
+        {
+            self.pending_clicks.push(entity.as_u64());
+            clicked.push(entity);
+        }
+        clicked
+    }
+
+    pub fn handle_focus(&mut self, input: &InputState, screen_size: [f32; 2]) -> Vec<EntityId> {
+        let focusables = self.focusable_buttons(screen_size);
+        let current = self.current_focus_target(&focusables);
         self.focused = current;
 
         let stick_x = input.gamepad_axis(GAMEPAD_AXIS_LEFT_X);
@@ -809,27 +810,12 @@ impl CanvasState {
             self.set_focused_button(Some(next));
         }
 
-        let submit = input
-            .button_state("Submit")
-            .is_some_and(|state| state & STATE_PRESSED != 0)
-            || input.is_key_pressed(KEY_RETURN)
-            || input.is_key_pressed(KEY_SPACE)
-            || input.is_gamepad_button_pressed(GAMEPAD_BUTTON_SOUTH);
-        let mut clicked = Vec::new();
-        if submit
-            && let Some(entity) = self.focused
-            && !self.input_fields.contains_key(&entity)
-        {
-            self.pending_clicks.push(entity.as_u64());
-            clicked.push(entity);
-        }
-        clicked
+        self.collect_submit_click(input)
     }
 
-    fn handle_input_field_editing(&mut self, entity: EntityId, input: &InputState) {
-        let chars = input.flush_queued_chars();
+    fn begin_field_edit(&mut self, entity: EntityId) -> bool {
         let Some(field) = self.input_fields.get_mut(&entity) else {
-            return;
+            return false;
         };
         if field.editing_original_text.is_none() {
             field.editing_original_text = Some(field.text.clone());
@@ -837,8 +823,14 @@ impl CanvasState {
         }
         field.caret_position =
             UiInputFieldComponent::clamp_caret(&field.text, field.caret_position);
+        true
+    }
 
-        for ch in chars {
+    fn insert_field_chars(&mut self, entity: EntityId, chars: &[char]) {
+        let Some(field) = self.input_fields.get_mut(&entity) else {
+            return;
+        };
+        for &ch in chars {
             if field.character_limit == 0 || field.text.chars().count() < field.character_limit {
                 field.text.insert(field.caret_position, ch);
                 field.caret_position += ch.len_utf8();
@@ -849,7 +841,12 @@ impl CanvasState {
                     });
             }
         }
+    }
 
+    fn delete_field_chars(&mut self, entity: EntityId, input: &InputState) {
+        let Some(field) = self.input_fields.get_mut(&entity) else {
+            return;
+        };
         if input.is_key_pressed(KEY_BACKSPACE) && field.caret_position > 0 {
             let prev = prev_char_boundary(&field.text, field.caret_position);
             field.text.replace_range(prev..field.caret_position, "");
@@ -870,7 +867,12 @@ impl CanvasState {
                     text: field.text.clone(),
                 });
         }
+    }
 
+    fn move_field_caret(&mut self, entity: EntityId, input: &InputState) {
+        let Some(field) = self.input_fields.get_mut(&entity) else {
+            return;
+        };
         if input.is_key_pressed(KEY_LEFT_ARROW) && field.caret_position > 0 {
             field.caret_position = prev_char_boundary(&field.text, field.caret_position);
         }
@@ -883,7 +885,12 @@ impl CanvasState {
         if input.is_key_pressed(KEY_END) {
             field.caret_position = field.text.len();
         }
+    }
 
+    fn end_field_edit(&mut self, entity: EntityId, input: &InputState) {
+        let Some(field) = self.input_fields.get_mut(&entity) else {
+            return;
+        };
         if input.is_key_pressed(KEY_RETURN) {
             field.was_canceled = false;
             field.editing_original_text = Some(field.text.clone());
@@ -913,6 +920,17 @@ impl CanvasState {
         }
     }
 
+    fn handle_input_field_editing(&mut self, entity: EntityId, input: &InputState) {
+        let chars = input.flush_queued_chars();
+        if !self.begin_field_edit(entity) {
+            return;
+        }
+        self.insert_field_chars(entity, &chars);
+        self.delete_field_chars(entity, input);
+        self.move_field_caret(entity, input);
+        self.end_field_edit(entity, input);
+    }
+
     pub fn draw_items(&self, screen_size: [f32; 2]) -> Vec<UiDrawItem> {
         self.draw_items_with(screen_size, &HashMap::new())
     }
@@ -935,68 +953,7 @@ impl CanvasState {
             if !self.is_hierarchy_visible(element.entity()) {
                 continue;
             }
-            match element {
-                UiElementComponent::Image(image) => {
-                    if !self.is_element_enabled(image.entity, image.enabled) {
-                        continue;
-                    }
-                    let sprite_guid = image.sprite_guid.clone();
-                    let sprite_size = sprite_guid.as_deref().and_then(ui_sprite_size);
-                    let quads = match (image.draw_mode, sprite_size) {
-                        (SpriteDrawMode::Sliced, Some(size)) => {
-                            slice_sprite_quads(image.sprite_border, size, rect_px, FULL_UV, scale)
-                        }
-                        (SpriteDrawMode::Tiled, Some(size)) => {
-                            tile_sprite_quads(size, rect_px, FULL_UV, scale)
-                        }
-                        _ => vec![SpriteQuad {
-                            rect: rect_px,
-                            uv: FULL_UV,
-                        }],
-                    };
-                    for quad in quads {
-                        items.push(UiDrawItem {
-                            rect_px: quad.rect,
-                            color: image.color,
-                            sprite: sprite_guid.as_ref().map(|guid| SpriteRef {
-                                texture_guid: guid.clone(),
-                                uv_rect: quad.uv,
-                            }),
-                            text: None,
-                            text_layout: TextLayoutConfig::default(),
-                            text_clip_rect: None,
-                        });
-                    }
-                }
-                UiElementComponent::Text(text) => {
-                    if !self.is_element_enabled(text.entity, text.enabled) {
-                        continue;
-                    }
-                    let state = texts.get(&text.entity);
-                    let content = state.map_or(text.text.as_str(), |state| state.text.as_str());
-                    let color = state.map_or(text.color, |state| state.color);
-                    let font_size = state.map_or(text.font_size, |state| state.font_size);
-                    let text_layout = state.map_or_else(TextLayoutConfig::default, |s| s.layout);
-                    let text_clip_rect = (text_layout.vertical_overflow
-                        == VerticalWrapMode::Truncate)
-                        .then_some(rect_px);
-                    items.push(UiDrawItem {
-                        rect_px,
-                        color,
-                        sprite: None,
-                        text: Some(UiTextItem {
-                            text: content.to_string(),
-                            x: rect_px[0],
-                            y: rect_px[1],
-                            size_px: font_size * scale,
-                            color,
-                        }),
-                        text_layout,
-                        text_clip_rect,
-                    });
-                }
-                UiElementComponent::Button(_) => {}
-            }
+            self.push_element_draw_items(element, rect_px, scale, texts, &mut items);
         }
         let focused_id = self.focused_button(screen_size);
         for &entity in &self.input_field_order {
@@ -1018,22 +975,123 @@ impl CanvasState {
                 &mut items,
             );
         }
-        if let Some(focused_id) = focused_id
-            && let Some((rect_px, scale)) = resolved_rects.get(&focused_id).copied()
-        {
-            let thickness = (FOCUS_BORDER_THICKNESS * scale).round().max(1.0);
-            for edge_rect in focus_border_rects(rect_px, thickness) {
-                items.push(UiDrawItem {
-                    rect_px: edge_rect,
-                    color: FOCUS_INDICATOR_COLOR,
-                    sprite: None,
-                    text: None,
-                    text_layout: TextLayoutConfig::default(),
-                    text_clip_rect: None,
-                });
-            }
-        }
+        self.push_focus_border_items(focused_id, &resolved_rects, &mut items);
         items
+    }
+
+    fn push_element_draw_items(
+        &self,
+        element: &UiElementComponent,
+        rect_px: [f32; 4],
+        scale: f32,
+        texts: &HashMap<EntityId, TextOverride>,
+        items: &mut Vec<UiDrawItem>,
+    ) {
+        match element {
+            UiElementComponent::Image(image) => {
+                self.push_image_draw_items(image, rect_px, scale, items);
+            }
+            UiElementComponent::Text(text) => {
+                self.push_text_draw_items(text, rect_px, scale, texts, items);
+            }
+            UiElementComponent::Button(_) => {}
+        }
+    }
+
+    fn push_image_draw_items(
+        &self,
+        image: &UiImageComponent,
+        rect_px: [f32; 4],
+        scale: f32,
+        items: &mut Vec<UiDrawItem>,
+    ) {
+        if !self.is_element_enabled(image.entity, image.enabled) {
+            return;
+        }
+        let sprite_guid = image.sprite_guid.clone();
+        let sprite_size = sprite_guid.as_deref().and_then(ui_sprite_size);
+        let quads = match (image.draw_mode, sprite_size) {
+            (SpriteDrawMode::Sliced, Some(size)) => {
+                slice_sprite_quads(image.sprite_border, size, rect_px, FULL_UV, scale)
+            }
+            (SpriteDrawMode::Tiled, Some(size)) => tile_sprite_quads(size, rect_px, FULL_UV, scale),
+            _ => vec![SpriteQuad {
+                rect: rect_px,
+                uv: FULL_UV,
+            }],
+        };
+        for quad in quads {
+            items.push(UiDrawItem {
+                rect_px: quad.rect,
+                color: image.color,
+                sprite: sprite_guid.as_ref().map(|guid| SpriteRef {
+                    texture_guid: guid.clone(),
+                    uv_rect: quad.uv,
+                }),
+                text: None,
+                text_layout: TextLayoutConfig::default(),
+                text_clip_rect: None,
+            });
+        }
+    }
+
+    fn push_text_draw_items(
+        &self,
+        text: &UiTextComponent,
+        rect_px: [f32; 4],
+        scale: f32,
+        texts: &HashMap<EntityId, TextOverride>,
+        items: &mut Vec<UiDrawItem>,
+    ) {
+        if !self.is_element_enabled(text.entity, text.enabled) {
+            return;
+        }
+        let state = texts.get(&text.entity);
+        let content = state.map_or(text.text.as_str(), |state| state.text.as_str());
+        let color = state.map_or(text.color, |state| state.color);
+        let font_size = state.map_or(text.font_size, |state| state.font_size);
+        let text_layout = state.map_or_else(TextLayoutConfig::default, |s| s.layout);
+        let text_clip_rect =
+            (text_layout.vertical_overflow == VerticalWrapMode::Truncate).then_some(rect_px);
+        items.push(UiDrawItem {
+            rect_px,
+            color,
+            sprite: None,
+            text: Some(UiTextItem {
+                text: content.to_string(),
+                x: rect_px[0],
+                y: rect_px[1],
+                size_px: font_size * scale,
+                color,
+            }),
+            text_layout,
+            text_clip_rect,
+        });
+    }
+
+    fn push_focus_border_items(
+        &self,
+        focused_id: Option<EntityId>,
+        resolved_rects: &HashMap<EntityId, ([f32; 4], f32)>,
+        items: &mut Vec<UiDrawItem>,
+    ) {
+        let Some(focused_id) = focused_id else {
+            return;
+        };
+        let Some((rect_px, scale)) = resolved_rects.get(&focused_id).copied() else {
+            return;
+        };
+        let thickness = (FOCUS_BORDER_THICKNESS * scale).round().max(1.0);
+        for edge_rect in focus_border_rects(rect_px, thickness) {
+            items.push(UiDrawItem {
+                rect_px: edge_rect,
+                color: FOCUS_INDICATOR_COLOR,
+                sprite: None,
+                text: None,
+                text_layout: TextLayoutConfig::default(),
+                text_clip_rect: None,
+            });
+        }
     }
 
     fn push_input_field_draw_items(
@@ -1089,22 +1147,7 @@ impl CanvasState {
             });
         }
         if is_focused {
-            let caret_idx = UiInputFieldComponent::clamp_caret(&field.text, field.caret_position);
-            let prefix = &field.text[..caret_idx];
-            let prefix_width = measure_text_preferred(prefix, font_px, field.color)[0];
-            let caret_w = (2.0 * scale).round().max(2.0);
-            let caret_h = font_px.min(text_rect[3]).max(4.0);
-            let max_x = (text_rect[0] + text_rect[2] - caret_w).max(text_rect[0]);
-            let caret_x = (text_rect[0] + prefix_width).min(max_x);
-            let caret_y = text_rect[1];
-            items.push(UiDrawItem {
-                rect_px: [caret_x, caret_y, caret_w, caret_h],
-                color: field.color,
-                sprite: None,
-                text: None,
-                text_layout: TextLayoutConfig::default(),
-                text_clip_rect: Some(rect_px),
-            });
+            push_input_field_caret_item(field, rect_px, text_rect, font_px, scale, items);
         }
     }
 
@@ -1501,6 +1544,32 @@ impl CanvasState {
     }
 }
 
+fn push_input_field_caret_item(
+    field: &UiInputFieldComponent,
+    rect_px: [f32; 4],
+    text_rect: [f32; 4],
+    font_px: f32,
+    scale: f32,
+    items: &mut Vec<UiDrawItem>,
+) {
+    let caret_idx = UiInputFieldComponent::clamp_caret(&field.text, field.caret_position);
+    let prefix = &field.text[..caret_idx];
+    let prefix_width = measure_text_preferred(prefix, font_px, field.color)[0];
+    let caret_w = (2.0 * scale).round().max(2.0);
+    let caret_h = font_px.min(text_rect[3]).max(4.0);
+    let max_x = (text_rect[0] + text_rect[2] - caret_w).max(text_rect[0]);
+    let caret_x = (text_rect[0] + prefix_width).min(max_x);
+    let caret_y = text_rect[1];
+    items.push(UiDrawItem {
+        rect_px: [caret_x, caret_y, caret_w, caret_h],
+        color: field.color,
+        sprite: None,
+        text: None,
+        text_layout: TextLayoutConfig::default(),
+        text_clip_rect: Some(rect_px),
+    });
+}
+
 fn step_focus(focusables: &[EntityId], current: Option<EntityId>, step: i32) -> EntityId {
     let index = current
         .and_then(|id| focusables.iter().position(|&candidate| candidate == id))
@@ -1866,6 +1935,72 @@ mod tests {
         }
     }
 
+    fn simple_image_element(
+        entity: EntityId,
+        enabled: bool,
+        color: [f32; 4],
+    ) -> UiElementComponent {
+        UiElementComponent::Image(UiImageComponent {
+            entity,
+            enabled,
+            color,
+            sprite_guid: None,
+            draw_mode: SpriteDrawMode::Simple,
+            sprite_border: [0.0; 4],
+        })
+    }
+
+    fn button_element(entity: EntityId, interactable: bool) -> UiElementComponent {
+        UiElementComponent::Button(UiButtonComponent {
+            entity,
+            target_graphic: Some(entity),
+            interactable,
+        })
+    }
+
+    fn sample_rect_transforms() -> Vec<RectTransformComponent> {
+        vec![
+            centered_rect(CANVAS_ID, None, [0.0, 0.0], SCREEN),
+            centered_rect(TITLE_PANEL_ID, Some(CANVAS_ID), [0.0, 0.0], [420.0, 260.0]),
+            centered_rect(
+                PLAY_BUTTON_ID,
+                Some(TITLE_PANEL_ID),
+                [0.0, 10.0],
+                [200.0, 48.0],
+            ),
+            centered_rect(
+                QUIT_BUTTON_ID,
+                Some(TITLE_PANEL_ID),
+                [0.0, -50.0],
+                [200.0, 48.0],
+            ),
+            centered_rect(
+                DISABLED_BUTTON_ID,
+                Some(TITLE_PANEL_ID),
+                [0.0, -110.0],
+                [200.0, 48.0],
+            ),
+            centered_rect(
+                RESULTS_PANEL_ID,
+                Some(CANVAS_ID),
+                [0.0, 0.0],
+                [440.0, 320.0],
+            ),
+            centered_rect(
+                RETRY_BUTTON_ID,
+                Some(RESULTS_PANEL_ID),
+                [-100.0, -70.0],
+                [180.0, 44.0],
+            ),
+            centered_rect(
+                ARENA_SELECT_BUTTON_ID,
+                Some(RESULTS_PANEL_ID),
+                [100.0, -70.0],
+                [180.0, 44.0],
+            ),
+        ]
+    }
+
     fn sample_canvas() -> CanvasState {
         let binding = UiBinding {
             canvases: vec![CanvasComponent {
@@ -1879,68 +2014,11 @@ mod tests {
                     match_width_or_height: 0.5,
                 }),
             }],
-            rect_transforms: vec![
-                centered_rect(CANVAS_ID, None, [0.0, 0.0], SCREEN),
-                centered_rect(TITLE_PANEL_ID, Some(CANVAS_ID), [0.0, 0.0], [420.0, 260.0]),
-                centered_rect(
-                    PLAY_BUTTON_ID,
-                    Some(TITLE_PANEL_ID),
-                    [0.0, 10.0],
-                    [200.0, 48.0],
-                ),
-                centered_rect(
-                    QUIT_BUTTON_ID,
-                    Some(TITLE_PANEL_ID),
-                    [0.0, -50.0],
-                    [200.0, 48.0],
-                ),
-                centered_rect(
-                    DISABLED_BUTTON_ID,
-                    Some(TITLE_PANEL_ID),
-                    [0.0, -110.0],
-                    [200.0, 48.0],
-                ),
-                centered_rect(
-                    RESULTS_PANEL_ID,
-                    Some(CANVAS_ID),
-                    [0.0, 0.0],
-                    [440.0, 320.0],
-                ),
-                centered_rect(
-                    RETRY_BUTTON_ID,
-                    Some(RESULTS_PANEL_ID),
-                    [-100.0, -70.0],
-                    [180.0, 44.0],
-                ),
-                centered_rect(
-                    ARENA_SELECT_BUTTON_ID,
-                    Some(RESULTS_PANEL_ID),
-                    [100.0, -70.0],
-                    [180.0, 44.0],
-                ),
-            ],
+            rect_transforms: sample_rect_transforms(),
             elements: vec![
-                UiElementComponent::Image(UiImageComponent {
-                    entity: TITLE_PANEL_ID,
-                    enabled: true,
-                    color: [0.08, 0.1, 0.16, 0.88],
-                    sprite_guid: None,
-                    draw_mode: SpriteDrawMode::Simple,
-                    sprite_border: [0.0; 4],
-                }),
-                UiElementComponent::Image(UiImageComponent {
-                    entity: PLAY_BUTTON_ID,
-                    enabled: true,
-                    color: [0.2, 0.65, 0.32, 1.0],
-                    sprite_guid: None,
-                    draw_mode: SpriteDrawMode::Simple,
-                    sprite_border: [0.0; 4],
-                }),
-                UiElementComponent::Button(UiButtonComponent {
-                    entity: PLAY_BUTTON_ID,
-                    target_graphic: Some(PLAY_BUTTON_ID),
-                    interactable: true,
-                }),
+                simple_image_element(TITLE_PANEL_ID, true, [0.08, 0.1, 0.16, 0.88]),
+                simple_image_element(PLAY_BUTTON_ID, true, [0.2, 0.65, 0.32, 1.0]),
+                button_element(PLAY_BUTTON_ID, true),
                 UiElementComponent::Text(UiTextComponent {
                     entity: PLAY_BUTTON_ID,
                     enabled: true,
@@ -1948,66 +2026,15 @@ mod tests {
                     font_size: 22.0,
                     color: [1.0, 1.0, 1.0, 1.0],
                 }),
-                UiElementComponent::Image(UiImageComponent {
-                    entity: QUIT_BUTTON_ID,
-                    enabled: true,
-                    color: [0.55, 0.2, 0.22, 1.0],
-                    sprite_guid: None,
-                    draw_mode: SpriteDrawMode::Simple,
-                    sprite_border: [0.0; 4],
-                }),
-                UiElementComponent::Button(UiButtonComponent {
-                    entity: QUIT_BUTTON_ID,
-                    target_graphic: Some(QUIT_BUTTON_ID),
-                    interactable: true,
-                }),
-                UiElementComponent::Image(UiImageComponent {
-                    entity: DISABLED_BUTTON_ID,
-                    enabled: true,
-                    color: [0.3, 0.3, 0.3, 1.0],
-                    sprite_guid: None,
-                    draw_mode: SpriteDrawMode::Simple,
-                    sprite_border: [0.0; 4],
-                }),
-                UiElementComponent::Button(UiButtonComponent {
-                    entity: DISABLED_BUTTON_ID,
-                    target_graphic: Some(DISABLED_BUTTON_ID),
-                    interactable: false,
-                }),
-                UiElementComponent::Image(UiImageComponent {
-                    entity: RESULTS_PANEL_ID,
-                    enabled: false,
-                    color: [0.08, 0.1, 0.16, 0.92],
-                    sprite_guid: None,
-                    draw_mode: SpriteDrawMode::Simple,
-                    sprite_border: [0.0; 4],
-                }),
-                UiElementComponent::Image(UiImageComponent {
-                    entity: RETRY_BUTTON_ID,
-                    enabled: true,
-                    color: [0.2, 0.65, 0.32, 1.0],
-                    sprite_guid: None,
-                    draw_mode: SpriteDrawMode::Simple,
-                    sprite_border: [0.0; 4],
-                }),
-                UiElementComponent::Button(UiButtonComponent {
-                    entity: RETRY_BUTTON_ID,
-                    target_graphic: Some(RETRY_BUTTON_ID),
-                    interactable: true,
-                }),
-                UiElementComponent::Image(UiImageComponent {
-                    entity: ARENA_SELECT_BUTTON_ID,
-                    enabled: true,
-                    color: [0.22, 0.45, 0.72, 1.0],
-                    sprite_guid: None,
-                    draw_mode: SpriteDrawMode::Simple,
-                    sprite_border: [0.0; 4],
-                }),
-                UiElementComponent::Button(UiButtonComponent {
-                    entity: ARENA_SELECT_BUTTON_ID,
-                    target_graphic: Some(ARENA_SELECT_BUTTON_ID),
-                    interactable: true,
-                }),
+                simple_image_element(QUIT_BUTTON_ID, true, [0.55, 0.2, 0.22, 1.0]),
+                button_element(QUIT_BUTTON_ID, true),
+                simple_image_element(DISABLED_BUTTON_ID, true, [0.3, 0.3, 0.3, 1.0]),
+                button_element(DISABLED_BUTTON_ID, false),
+                simple_image_element(RESULTS_PANEL_ID, false, [0.08, 0.1, 0.16, 0.92]),
+                simple_image_element(RETRY_BUTTON_ID, true, [0.2, 0.65, 0.32, 1.0]),
+                button_element(RETRY_BUTTON_ID, true),
+                simple_image_element(ARENA_SELECT_BUTTON_ID, true, [0.22, 0.45, 0.72, 1.0]),
+                button_element(ARENA_SELECT_BUTTON_ID, true),
             ],
             layout_groups: Vec::new(),
             content_size_fitters: Vec::new(),
@@ -2031,6 +2058,47 @@ mod tests {
             vec![RETRY_BUTTON_ID, ARENA_SELECT_BUTTON_ID]
         );
         assert_eq!(canvas.focused_button(SCREEN), Some(RETRY_BUTTON_ID));
+    }
+
+    fn assert_results_panel_navigation(canvas: &mut CanvasState, input: &mut InputState) {
+        canvas.set_element_enabled(TITLE_PANEL_ID, false);
+        canvas.set_element_enabled(RESULTS_PANEL_ID, true);
+        assert_eq!(canvas.focused_button(SCREEN), Some(RETRY_BUTTON_ID));
+
+        input.queue_key_event(KEY_RIGHT_ARROW, true);
+        input.begin_frame(1.0 / 60.0);
+        canvas.handle_focus(input, SCREEN);
+        assert_eq!(canvas.focused_button(SCREEN), Some(ARENA_SELECT_BUTTON_ID));
+        input.queue_key_event(KEY_RIGHT_ARROW, false);
+        input.begin_frame(1.0 / 60.0);
+
+        input.queue_key_event(KEY_LEFT_ARROW, true);
+        input.begin_frame(1.0 / 60.0);
+        canvas.handle_focus(input, SCREEN);
+        assert_eq!(canvas.focused_button(SCREEN), Some(RETRY_BUTTON_ID));
+        input.queue_key_event(KEY_LEFT_ARROW, false);
+        input.begin_frame(1.0 / 60.0);
+
+        input.set_gamepad_button(GAMEPAD_BUTTON_DPAD_RIGHT, true);
+        input.begin_frame(1.0 / 60.0);
+        canvas.handle_focus(input, SCREEN);
+        assert_eq!(canvas.focused_button(SCREEN), Some(ARENA_SELECT_BUTTON_ID));
+        input.set_gamepad_button(GAMEPAD_BUTTON_DPAD_RIGHT, false);
+        input.begin_frame(1.0 / 60.0);
+        canvas.handle_focus(input, SCREEN);
+
+        input.set_gamepad_axis(GAMEPAD_AXIS_LEFT_X, -0.85);
+        input.begin_frame(1.0 / 60.0);
+        canvas.handle_focus(input, SCREEN);
+        assert_eq!(canvas.focused_button(SCREEN), Some(RETRY_BUTTON_ID));
+        input.set_gamepad_axis(GAMEPAD_AXIS_LEFT_X, 0.0);
+        input.begin_frame(1.0 / 60.0);
+        canvas.handle_focus(input, SCREEN);
+
+        input.set_gamepad_button(GAMEPAD_BUTTON_DPAD_UP, true);
+        input.begin_frame(1.0 / 60.0);
+        canvas.handle_focus(input, SCREEN);
+        assert_eq!(canvas.focused_button(SCREEN), Some(ARENA_SELECT_BUTTON_ID));
     }
 
     #[test]
@@ -2085,44 +2153,7 @@ mod tests {
         input.queue_key_event(KEY_LEFT_SHIFT, false);
         input.begin_frame(1.0 / 60.0);
 
-        canvas.set_element_enabled(TITLE_PANEL_ID, false);
-        canvas.set_element_enabled(RESULTS_PANEL_ID, true);
-        assert_eq!(canvas.focused_button(SCREEN), Some(RETRY_BUTTON_ID));
-
-        input.queue_key_event(KEY_RIGHT_ARROW, true);
-        input.begin_frame(1.0 / 60.0);
-        canvas.handle_focus(&input, SCREEN);
-        assert_eq!(canvas.focused_button(SCREEN), Some(ARENA_SELECT_BUTTON_ID));
-        input.queue_key_event(KEY_RIGHT_ARROW, false);
-        input.begin_frame(1.0 / 60.0);
-
-        input.queue_key_event(KEY_LEFT_ARROW, true);
-        input.begin_frame(1.0 / 60.0);
-        canvas.handle_focus(&input, SCREEN);
-        assert_eq!(canvas.focused_button(SCREEN), Some(RETRY_BUTTON_ID));
-        input.queue_key_event(KEY_LEFT_ARROW, false);
-        input.begin_frame(1.0 / 60.0);
-
-        input.set_gamepad_button(GAMEPAD_BUTTON_DPAD_RIGHT, true);
-        input.begin_frame(1.0 / 60.0);
-        canvas.handle_focus(&input, SCREEN);
-        assert_eq!(canvas.focused_button(SCREEN), Some(ARENA_SELECT_BUTTON_ID));
-        input.set_gamepad_button(GAMEPAD_BUTTON_DPAD_RIGHT, false);
-        input.begin_frame(1.0 / 60.0);
-        canvas.handle_focus(&input, SCREEN);
-
-        input.set_gamepad_axis(GAMEPAD_AXIS_LEFT_X, -0.85);
-        input.begin_frame(1.0 / 60.0);
-        canvas.handle_focus(&input, SCREEN);
-        assert_eq!(canvas.focused_button(SCREEN), Some(RETRY_BUTTON_ID));
-        input.set_gamepad_axis(GAMEPAD_AXIS_LEFT_X, 0.0);
-        input.begin_frame(1.0 / 60.0);
-        canvas.handle_focus(&input, SCREEN);
-
-        input.set_gamepad_button(GAMEPAD_BUTTON_DPAD_UP, true);
-        input.begin_frame(1.0 / 60.0);
-        canvas.handle_focus(&input, SCREEN);
-        assert_eq!(canvas.focused_button(SCREEN), Some(ARENA_SELECT_BUTTON_ID));
+        assert_results_panel_navigation(&mut canvas, &mut input);
     }
 
     #[test]
@@ -2231,8 +2262,7 @@ mod tests {
             assert_eq!(ui_text.clip_rect, None);
         }
 
-        let mut overrides = HashMap::new();
-        overrides.insert(
+        let overrides = HashMap::from([(
             PLAY_BUTTON_ID,
             TextOverride {
                 text: "START GAME NOW".to_string(),
@@ -2245,7 +2275,7 @@ mod tests {
                     line_spacing: 1.25,
                 },
             },
-        );
+        )]);
         let overridden_items = canvas.draw_items_with(SCREEN, &overrides);
         let play_item = overridden_items.iter().find(|item| item.text.is_some());
         assert!(play_item.is_some());
@@ -2269,15 +2299,14 @@ mod tests {
         composite_ui(&mut target, &overridden_items, 1, Some(&mut painter));
     }
 
-    #[test]
-    fn vertical_and_horizontal_layout_groups_with_content_size_fitter_resolve_unity_child_rects() {
-        let panel_id = EntityId::new(200);
-        let row_id = EntityId::new(210);
-        let icon_id = EntityId::new(211);
-        let label_id = EntityId::new(212);
-        let footer_id = EntityId::new(220);
-
-        let binding = UiBinding {
+    fn layout_group_test_binding(
+        panel_id: EntityId,
+        row_id: EntityId,
+        icon_id: EntityId,
+        label_id: EntityId,
+        footer_id: EntityId,
+    ) -> UiBinding {
+        UiBinding {
             canvases: vec![CanvasComponent {
                 entity: CANVAS_ID,
                 render_mode: CanvasRenderMode::ScreenSpaceOverlay,
@@ -2301,22 +2330,8 @@ mod tests {
                 centered_rect(footer_id, Some(panel_id), [0.0, 0.0], [100.0, 24.0]),
             ],
             elements: vec![
-                UiElementComponent::Image(UiImageComponent {
-                    entity: panel_id,
-                    enabled: true,
-                    color: [0.1, 0.1, 0.1, 1.0],
-                    sprite_guid: None,
-                    draw_mode: SpriteDrawMode::Simple,
-                    sprite_border: [0.0; 4],
-                }),
-                UiElementComponent::Image(UiImageComponent {
-                    entity: icon_id,
-                    enabled: true,
-                    color: [1.0, 0.0, 0.0, 1.0],
-                    sprite_guid: None,
-                    draw_mode: SpriteDrawMode::Simple,
-                    sprite_border: [0.0; 4],
-                }),
+                simple_image_element(panel_id, true, [0.1, 0.1, 0.1, 1.0]),
+                simple_image_element(icon_id, true, [1.0, 0.0, 0.0, 1.0]),
                 UiElementComponent::Text(UiTextComponent {
                     entity: label_id,
                     enabled: true,
@@ -2324,59 +2339,109 @@ mod tests {
                     font_size: 20.0,
                     color: [1.0, 1.0, 1.0, 1.0],
                 }),
-                UiElementComponent::Image(UiImageComponent {
-                    entity: footer_id,
-                    enabled: true,
-                    color: [0.0, 0.5, 1.0, 1.0],
-                    sprite_guid: None,
-                    draw_mode: SpriteDrawMode::Simple,
-                    sprite_border: [0.0; 4],
-                }),
+                simple_image_element(footer_id, true, [0.0, 0.5, 1.0, 1.0]),
             ],
-            layout_groups: vec![
-                UiLayoutGroupComponent {
-                    entity: panel_id,
-                    axis: LayoutGroupAxis::Vertical,
-                    padding: UiPadding {
-                        left: 10,
-                        right: 14,
-                        top: 8,
-                        bottom: 12,
-                    },
-                    spacing: 6.0,
-                    child_alignment: 1,
-                    child_control_width: true,
-                    child_control_height: true,
-                    child_force_expand_width: true,
-                    child_force_expand_height: false,
-                    enabled: true,
-                },
-                UiLayoutGroupComponent {
-                    entity: row_id,
-                    axis: LayoutGroupAxis::Horizontal,
-                    padding: UiPadding {
-                        left: 4,
-                        right: 4,
-                        top: 2,
-                        bottom: 2,
-                    },
-                    spacing: 8.0,
-                    child_alignment: 3,
-                    child_control_width: true,
-                    child_control_height: false,
-                    child_force_expand_width: false,
-                    child_force_expand_height: false,
-                    enabled: true,
-                },
-            ],
+            layout_groups: layout_group_test_groups(panel_id, row_id),
             content_size_fitters: vec![UiContentSizeFitterComponent {
                 entity: panel_id,
                 horizontal_fit: ContentSizeFitMode::PreferredSize,
                 vertical_fit: ContentSizeFitMode::PreferredSize,
                 enabled: true,
             }],
-        };
+        }
+    }
 
+    fn layout_group_test_groups(
+        panel_id: EntityId,
+        row_id: EntityId,
+    ) -> Vec<UiLayoutGroupComponent> {
+        vec![
+            UiLayoutGroupComponent {
+                entity: panel_id,
+                axis: LayoutGroupAxis::Vertical,
+                padding: UiPadding {
+                    left: 10,
+                    right: 14,
+                    top: 8,
+                    bottom: 12,
+                },
+                spacing: 6.0,
+                child_alignment: 1,
+                child_control_width: true,
+                child_control_height: true,
+                child_force_expand_width: true,
+                child_force_expand_height: false,
+                enabled: true,
+            },
+            UiLayoutGroupComponent {
+                entity: row_id,
+                axis: LayoutGroupAxis::Horizontal,
+                padding: UiPadding {
+                    left: 4,
+                    right: 4,
+                    top: 2,
+                    bottom: 2,
+                },
+                spacing: 8.0,
+                child_alignment: 3,
+                child_control_width: true,
+                child_control_height: false,
+                child_force_expand_width: false,
+                child_force_expand_height: false,
+                enabled: true,
+            },
+        ]
+    }
+
+    fn assert_layout_group_overrides(
+        canvas: &CanvasState,
+        panel_id: EntityId,
+        expected_panel_h: f32,
+    ) {
+        canvas.set_layout_group(UiLayoutGroupComponent {
+            entity: panel_id,
+            axis: LayoutGroupAxis::Vertical,
+            padding: UiPadding {
+                left: 10,
+                right: 14,
+                top: 8,
+                bottom: 12,
+            },
+            spacing: 20.0,
+            child_alignment: 1,
+            child_control_width: false,
+            child_control_height: true,
+            child_force_expand_width: false,
+            child_force_expand_height: false,
+            enabled: true,
+        });
+        let (updated_panel, _) = canvas
+            .element_rect(panel_id, SCREEN)
+            .unwrap_or(([0.0; 4], 1.0));
+        assert!((updated_panel[3] - (expected_panel_h + 14.0)).abs() < 0.01);
+
+        canvas.set_content_size_fitter(UiContentSizeFitterComponent {
+            entity: panel_id,
+            horizontal_fit: ContentSizeFitMode::Unconstrained,
+            vertical_fit: ContentSizeFitMode::Unconstrained,
+            enabled: true,
+        });
+        let (unconstrained_panel, _) = canvas
+            .element_rect(panel_id, SCREEN)
+            .unwrap_or(([0.0; 4], 1.0));
+        assert!((unconstrained_panel[2] - 10.0).abs() < 0.01);
+        assert!((unconstrained_panel[3] - 10.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn vertical_and_horizontal_layout_groups_with_content_size_fitter_resolve_unity_child_rects() {
+        let panel_id = EntityId::new(200);
+        let row_id = EntityId::new(210);
+        let icon_id = EntityId::new(211);
+        let label_id = EntityId::new(212);
+        let footer_id = EntityId::new(220);
+
+        let binding = layout_group_test_binding(panel_id, row_id, icon_id, label_id, footer_id);
         let canvas = CanvasState::new(binding);
         let (label_rect, _) = canvas
             .element_rect(label_id, SCREEN)
@@ -2419,39 +2484,40 @@ mod tests {
         assert!((footer_rect[2] - (expected_panel_w - 24.0)).abs() < 0.01);
         assert!((footer_rect[3] - 24.0).abs() < 0.01);
 
-        canvas.set_layout_group(UiLayoutGroupComponent {
-            entity: panel_id,
-            axis: LayoutGroupAxis::Vertical,
-            padding: UiPadding {
-                left: 10,
-                right: 14,
-                top: 8,
-                bottom: 12,
-            },
-            spacing: 20.0,
-            child_alignment: 1,
-            child_control_width: false,
-            child_control_height: true,
-            child_force_expand_width: false,
-            child_force_expand_height: false,
-            enabled: true,
-        });
-        let (updated_panel, _) = canvas
-            .element_rect(panel_id, SCREEN)
-            .unwrap_or(([0.0; 4], 1.0));
-        assert!((updated_panel[3] - (expected_panel_h + 14.0)).abs() < 0.01);
+        assert_layout_group_overrides(&canvas, panel_id, expected_panel_h);
+    }
 
-        canvas.set_content_size_fitter(UiContentSizeFitterComponent {
-            entity: panel_id,
-            horizontal_fit: ContentSizeFitMode::Unconstrained,
-            vertical_fit: ContentSizeFitMode::Unconstrained,
-            enabled: true,
-        });
-        let (unconstrained_panel, _) = canvas
-            .element_rect(panel_id, SCREEN)
-            .unwrap_or(([0.0; 4], 1.0));
-        assert!((unconstrained_panel[2] - 10.0).abs() < 0.01);
-        assert!((unconstrained_panel[3] - 10.0).abs() < 0.01);
+    fn assert_abi_layout_group_and_fitter() {
+        let handle = crate::unitas_runtime_new();
+        assert_ne!(handle, 0);
+        let packed_padding = 6u64 | (8u64 << 16) | (10u64 << 32) | (12u64 << 48);
+        let obj_id = crate::unitas_runtime_object_create(handle, 0, 0);
+        assert_ne!(obj_id, 0);
+        assert_eq!(
+            crate::unitas_runtime_ui_layout_group_set(
+                handle,
+                obj_id,
+                1,
+                packed_padding,
+                4.0,
+                1,
+                1 | 2 | 4 | 16,
+            ),
+            0
+        );
+        assert_eq!(
+            crate::unitas_runtime_ui_layout_group_set(handle, obj_id, 9, packed_padding, 4.0, 1, 0),
+            -2
+        );
+        assert_eq!(
+            crate::unitas_runtime_ui_content_size_fitter_set(handle, obj_id, 2, 1, 1),
+            0
+        );
+        assert_eq!(
+            crate::unitas_runtime_ui_content_size_fitter_set(handle, obj_id, 9, 1, 1),
+            -2
+        );
+        assert_eq!(crate::unitas_runtime_destroy(handle), 0);
     }
 
     #[test]
@@ -2493,36 +2559,6 @@ mod tests {
             ContentSizeFitMode::Unconstrained,
             false,
         ));
-
-        let handle = crate::unitas_runtime_new();
-        assert_ne!(handle, 0);
-        let packed_padding = 6u64 | (8u64 << 16) | (10u64 << 32) | (12u64 << 48);
-        let obj_id = crate::unitas_runtime_object_create(handle, 0, 0);
-        assert_ne!(obj_id, 0);
-        assert_eq!(
-            crate::unitas_runtime_ui_layout_group_set(
-                handle,
-                obj_id,
-                1,
-                packed_padding,
-                4.0,
-                1,
-                1 | 2 | 4 | 16,
-            ),
-            0
-        );
-        assert_eq!(
-            crate::unitas_runtime_ui_layout_group_set(handle, obj_id, 9, packed_padding, 4.0, 1, 0),
-            -2
-        );
-        assert_eq!(
-            crate::unitas_runtime_ui_content_size_fitter_set(handle, obj_id, 2, 1, 1),
-            0
-        );
-        assert_eq!(
-            crate::unitas_runtime_ui_content_size_fitter_set(handle, obj_id, 9, 1, 1),
-            -2
-        );
-        assert_eq!(crate::unitas_runtime_destroy(handle), 0);
+        assert_abi_layout_group_and_fitter();
     }
 }

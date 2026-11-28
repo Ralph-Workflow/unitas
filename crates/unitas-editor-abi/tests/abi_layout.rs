@@ -9,7 +9,7 @@
 //! and therefore agree by name rather than by memory layout.
 
 use std::mem::{align_of, size_of};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use serde_json::{Value, json};
@@ -115,18 +115,7 @@ fn editor_abi_run_shell_dispatches_reverse_callback_and_renders_offscreen_captur
     ));
     let _ = std::fs::remove_file(&capture_path);
     let shell_ptr = allocate_c_string(&shell_project.to_string_lossy());
-    let options = json!({
-        "targetProjectPath": shell_project.to_string_lossy(),
-        "headless": true,
-        "maxFrames": 3,
-        "width": 320,
-        "height": 180,
-        "captureOut": capture_path.to_string_lossy(),
-        "events": [
-            {"type": "init"},
-            {"type": "select", "index": 0}
-        ]
-    });
+    let options = shell_options(&shell_project, &capture_path);
     let options_ptr = allocate_c_string(&options.to_string());
     let result_ptr = unitas_editor_run_shell(shell_ptr, options_ptr, Some(test_shell_callback));
     free_c_string(shell_ptr);
@@ -143,6 +132,32 @@ fn editor_abi_run_shell_dispatches_reverse_callback_and_renders_offscreen_captur
     let texts = payload["canvasTexts"]
         .as_array()
         .ok_or("missing canvasTexts array")?;
+    assert_shell_canvas_texts(texts);
+    assert_shell_workspace_state(&payload);
+    assert!(capture_path.is_file());
+    let bmp_bytes = std::fs::read(&capture_path)?;
+    assert!(bmp_bytes.len() > 54);
+    assert_eq!(&bmp_bytes[0..2], b"BM");
+    let _ = std::fs::remove_file(&capture_path);
+    Ok(())
+}
+
+fn shell_options(shell_project: &Path, capture_path: &Path) -> Value {
+    json!({
+        "targetProjectPath": shell_project.to_string_lossy(),
+        "headless": true,
+        "maxFrames": 3,
+        "width": 320,
+        "height": 180,
+        "captureOut": capture_path.to_string_lossy(),
+        "events": [
+            {"type": "init"},
+            {"type": "select", "index": 0}
+        ]
+    })
+}
+
+fn assert_shell_canvas_texts(texts: &[Value]) {
     assert!(texts.iter().any(|t| {
         t.as_str()
             .is_some_and(|s| s.contains("unitas Editor — select"))
@@ -163,6 +178,9 @@ fn editor_abi_run_shell_dispatches_reverse_callback_and_renders_offscreen_captur
             .iter()
             .any(|t| { t.as_str() == Some("> m_LocalPosition = {x: 0, y: 1, z: -10}") })
     );
+}
+
+fn assert_shell_workspace_state(payload: &Value) {
     assert_eq!(
         payload["lastWorkspaceState"]["hierarchyRows"],
         json!(["> Main Camera (100)", "  PlayerBall (131)"])
@@ -171,12 +189,6 @@ fn editor_abi_run_shell_dispatches_reverse_callback_and_renders_offscreen_captur
         payload["lastWorkspaceState"]["propertyRows"],
         json!(["[Transform]", "> m_LocalPosition = {x: 0, y: 1, z: -10}"])
     );
-    assert!(capture_path.is_file());
-    let bmp_bytes = std::fs::read(&capture_path)?;
-    assert!(bmp_bytes.len() > 54);
-    assert_eq!(&bmp_bytes[0..2], b"BM");
-    let _ = std::fs::remove_file(&capture_path);
-    Ok(())
 }
 
 extern "C" fn shrinking_rows_callback(event_ptr: usize) -> usize {

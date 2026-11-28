@@ -83,6 +83,37 @@ fn read_f32_le(bytes: &[u8], index: usize) -> f32 {
     f32::from_le_bytes(chunk)
 }
 
+fn assert_light_2d_abi_state(handle: u64, light: u64) -> Result<(), Box<dyn std::error::Error>> {
+    let buffer = unitas_runtime_path_buffer(handle, 128);
+    assert_ne!(buffer, 0);
+    assert_eq!(
+        unitas_runtime_render_light2d_get_state(handle, light, buffer as *mut f32),
+        0
+    );
+
+    let mut raw = [0u8; 56];
+    test_read_path_buffer(handle, &mut raw)?;
+    for (idx, expected) in [
+        (0, 2.0),
+        (1, 0.25),
+        (2, 0.5),
+        (3, 0.75),
+        (4, 2.5),
+        (5, 4.0),
+        (6, -5.0),
+        (7, 0.6),
+        (8, 0.8),
+        (9, 0.5),
+        (10, 3.5),
+        (11, 15.0),
+        (12, 45.0),
+        (13, 0.0),
+    ] {
+        assert!((read_f32_le(&raw, idx) - expected).abs() < 1e-6);
+    }
+    Ok(())
+}
+
 #[test]
 fn light_2d_abi_roundtrip_and_invalid_argument_handling() -> Result<(), Box<dyn std::error::Error>>
 {
@@ -132,29 +163,7 @@ fn light_2d_abi_roundtrip_and_invalid_argument_handling() -> Result<(), Box<dyn 
         0
     );
 
-    let buffer = unitas_runtime_path_buffer(handle, 128);
-    assert_ne!(buffer, 0);
-    assert_eq!(
-        unitas_runtime_render_light2d_get_state(handle, light, buffer as *mut f32),
-        0
-    );
-
-    let mut raw = [0u8; 56];
-    test_read_path_buffer(handle, &mut raw)?;
-    assert!((read_f32_le(&raw, 0) - 2.0).abs() < 1e-6);
-    assert!((read_f32_le(&raw, 1) - 0.25).abs() < 1e-6);
-    assert!((read_f32_le(&raw, 2) - 0.5).abs() < 1e-6);
-    assert!((read_f32_le(&raw, 3) - 0.75).abs() < 1e-6);
-    assert!((read_f32_le(&raw, 4) - 2.5).abs() < 1e-6);
-    assert!((read_f32_le(&raw, 5) - 4.0).abs() < 1e-6);
-    assert!((read_f32_le(&raw, 6) - (-5.0)).abs() < 1e-6);
-    assert!((read_f32_le(&raw, 7) - 0.6).abs() < 1e-6);
-    assert!((read_f32_le(&raw, 8) - 0.8).abs() < 1e-6);
-    assert!((read_f32_le(&raw, 9) - 0.5).abs() < 1e-6);
-    assert!((read_f32_le(&raw, 10) - 3.5).abs() < 1e-6);
-    assert!((read_f32_le(&raw, 11) - 15.0).abs() < 1e-6);
-    assert!((read_f32_le(&raw, 12) - 45.0).abs() < 1e-6);
-    assert!((read_f32_le(&raw, 13) - 0.0).abs() < 1e-6);
+    assert_light_2d_abi_state(handle, light)?;
 
     assert_eq!(unitas_runtime_render_light2d_set_kind(handle, light, 9), -2);
     assert_eq!(
@@ -167,16 +176,11 @@ fn light_2d_abi_roundtrip_and_invalid_argument_handling() -> Result<(), Box<dyn 
     Ok(())
 }
 
-#[test]
-fn light_2d_extraction_uses_entity_world_transform_and_brightens_captured_sprite()
--> Result<(), Box<dyn std::error::Error>> {
-    let dir = std::env::temp_dir().join(format!(
-        "unitas_runtime_light_2d_capture_{}",
-        std::process::id()
-    ));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir)?;
-
+fn load_light_2d_capture_runtime(
+    dir: &Path,
+) -> Result<Runtime, Box<dyn std::error::Error>> {
+    let _ = std::fs::remove_dir_all(dir);
+    std::fs::create_dir_all(dir)?;
     let texture = dir.join("sprite.tga");
     write_test_tga(&texture, 100, 100, [255, 255, 255])?;
     std::fs::write(
@@ -185,9 +189,19 @@ fn light_2d_extraction_uses_entity_world_transform_and_brightens_captured_sprite
     )?;
     let scene_path = dir.join("Light2DScene.unity");
     std::fs::write(&scene_path, SCENE_YAML)?;
-
     let mut runtime = Runtime::new()?;
     runtime.load_scene(&scene_path)?;
+    Ok(runtime)
+}
+
+#[test]
+fn light_2d_extraction_uses_entity_world_transform_and_brightens_captured_sprite()
+-> Result<(), Box<dyn std::error::Error>> {
+    let dir = std::env::temp_dir().join(format!(
+        "unitas_runtime_light_2d_capture_{}",
+        std::process::id()
+    ));
+    let mut runtime = load_light_2d_capture_runtime(&dir)?;
 
     let unlit_frame = runtime.capture_scene_frame(64, 64)?;
     let unlit_center = unlit_frame.image.get_pixel(32, 32);

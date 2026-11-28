@@ -159,29 +159,7 @@ fn entity_handle(runtime: &Runtime, name: &str) -> Result<u64, Box<dyn Error>> {
     Err(String::from("entity not found in scene graph").into())
 }
 
-#[test]
-fn the_sample_scene_registers_the_ball_speed_trail() -> Result<(), Box<dyn Error>> {
-    let path = match sample_scene_path() {
-        Some(path) => path,
-        None => {
-            eprintln!(
-                "the sample scene is absent at {SAMPLE_SCENE_RELATIVE}: the scene effects \
-                 fixture covers the same trail registration"
-            );
-            return Ok(());
-        }
-    };
-    let mut runtime = Runtime::new()?;
-    runtime.load_scene(&path)?;
-
-    let ball = EntityId::new(entity_handle(&runtime, BALL_NAME)?);
-    let trail_entity = runtime
-        .trails()
-        .trail_entities()
-        .into_iter()
-        .find(|entity| runtime.trails().trail(*entity).is_some())
-        .ok_or("the sample scene registers no trail renderer")?;
-
+fn assert_valid_trail_settings(runtime: &Runtime, trail_entity: EntityId) -> Result<(), Box<dyn Error>> {
     let settings = runtime
         .trails()
         .trail(trail_entity)
@@ -199,9 +177,30 @@ fn the_sample_scene_registers_the_ball_speed_trail() -> Result<(), Box<dyn Error
         settings.min_vertex_distance > 0.0,
         "the ball trail must space its points: {settings:?}"
     );
+    Ok(())
+}
 
-    // The marble only leaves a ribbon once it is fast enough, so the trail
-    // records points as the ball travels and the draw list exposes them.
+#[test]
+fn the_sample_scene_registers_the_ball_speed_trail() -> Result<(), Box<dyn Error>> {
+    let Some(path) = sample_scene_path() else {
+        eprintln!(
+            "the sample scene is absent at {SAMPLE_SCENE_RELATIVE}: the scene effects \
+             fixture covers the same trail registration"
+        );
+        return Ok(());
+    };
+    let mut runtime = Runtime::new()?;
+    runtime.load_scene(&path)?;
+
+    let ball = EntityId::new(entity_handle(&runtime, BALL_NAME)?);
+    let trail_entity = runtime
+        .trails()
+        .trail_entities()
+        .into_iter()
+        .find(|entity| runtime.trails().trail(*entity).is_some())
+        .ok_or("the sample scene registers no trail renderer")?;
+    assert_valid_trail_settings(&runtime, trail_entity)?;
+
     runtime.set_body_velocity(ball, [12.0, 0.0, 0.0])?;
     for _ in 0..30 {
         runtime.tick(0.02)?;
@@ -211,9 +210,6 @@ fn the_sample_scene_registers_the_ball_speed_trail() -> Result<(), Box<dyn Error
         .trails()
         .points(trail_entity)
         .ok_or("the sample scene registers no trail renderer")?;
-    eprintln!("DIAG trail points: {}", points.len());
-    eprintln!("DIAG ball position: {:?}", runtime.body_position(ball));
-    eprintln!("DIAG trail entity: {trail_entity:?}");
     assert!(
         !points.is_empty(),
         "the moving ball must leave ribbon points in its trail"

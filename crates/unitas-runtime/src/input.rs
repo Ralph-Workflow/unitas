@@ -190,110 +190,60 @@ pub fn parse_button_token(name: &str) -> Option<ButtonSource> {
     }
 }
 
+fn button_axis_config(
+    name: &str,
+    neg: &str,
+    pos: &str,
+    alt_neg: &str,
+    alt_pos: &str,
+    gravity_sens: f64,
+    snap: bool,
+) -> AxisConfig {
+    AxisConfig {
+        name: String::from(name),
+        negative_button: String::from(neg),
+        positive_button: String::from(pos),
+        alt_negative_button: String::from(alt_neg),
+        alt_positive_button: String::from(alt_pos),
+        gravity: gravity_sens,
+        dead: 0.001,
+        sensitivity: gravity_sens,
+        snap,
+        invert: false,
+        axis_type: 0,
+        axis: 0,
+    }
+}
+
+fn mouse_delta_axis_config(name: &str, axis: u32) -> AxisConfig {
+    AxisConfig {
+        name: String::from(name),
+        negative_button: String::new(),
+        positive_button: String::new(),
+        alt_negative_button: String::new(),
+        alt_positive_button: String::new(),
+        gravity: 0.0,
+        dead: 0.0,
+        sensitivity: 0.1,
+        snap: false,
+        invert: false,
+        axis_type: 1,
+        axis,
+    }
+}
+
 pub fn default_axis_configs() -> Vec<AxisConfig> {
     vec![
-        AxisConfig {
-            name: String::from("Horizontal"),
-            negative_button: String::from("left"),
-            positive_button: String::from("right"),
-            alt_negative_button: String::from("a"),
-            alt_positive_button: String::from("d"),
-            gravity: 3.0,
-            dead: 0.001,
-            sensitivity: 3.0,
-            snap: true,
-            invert: false,
-            axis_type: 0,
-            axis: 0,
-        },
-        AxisConfig {
-            name: String::from("Vertical"),
-            negative_button: String::from("down"),
-            positive_button: String::from("up"),
-            alt_negative_button: String::from("s"),
-            alt_positive_button: String::from("w"),
-            gravity: 3.0,
-            dead: 0.001,
-            sensitivity: 3.0,
-            snap: false,
-            invert: false,
-            axis_type: 0,
-            axis: 0,
-        },
-        AxisConfig {
-            name: String::from("Fire1"),
-            negative_button: String::new(),
-            positive_button: String::from("left ctrl"),
-            alt_negative_button: String::new(),
-            alt_positive_button: String::from("mouse 0"),
-            gravity: 1000.0,
-            dead: 0.001,
-            sensitivity: 1000.0,
-            snap: false,
-            invert: false,
-            axis_type: 0,
-            axis: 0,
-        },
-        AxisConfig {
-            name: String::from("Jump"),
-            negative_button: String::new(),
-            positive_button: String::from("space"),
-            alt_negative_button: String::new(),
-            alt_positive_button: String::new(),
-            gravity: 1000.0,
-            dead: 0.001,
-            sensitivity: 1000.0,
-            snap: false,
-            invert: false,
-            axis_type: 0,
-            axis: 0,
-        },
-        AxisConfig {
-            name: String::from("Mouse X"),
-            negative_button: String::new(),
-            positive_button: String::new(),
-            alt_negative_button: String::new(),
-            alt_positive_button: String::new(),
-            gravity: 0.0,
-            dead: 0.0,
-            sensitivity: 0.1,
-            snap: false,
-            invert: false,
-            axis_type: 1,
-            axis: 0,
-        },
-        AxisConfig {
-            name: String::from("Mouse Y"),
-            negative_button: String::new(),
-            positive_button: String::new(),
-            alt_negative_button: String::new(),
-            alt_positive_button: String::new(),
-            gravity: 0.0,
-            dead: 0.0,
-            sensitivity: 0.1,
-            snap: false,
-            invert: false,
-            axis_type: 1,
-            axis: 1,
-        },
-        AxisConfig {
-            name: String::from("Mouse ScrollWheel"),
-            negative_button: String::new(),
-            positive_button: String::new(),
-            alt_negative_button: String::new(),
-            alt_positive_button: String::new(),
-            gravity: 0.0,
-            dead: 0.0,
-            sensitivity: 0.1,
-            snap: false,
-            invert: false,
-            axis_type: 1,
-            axis: 2,
-        },
+        button_axis_config("Horizontal", "left", "right", "a", "d", 3.0, true),
+        button_axis_config("Vertical", "down", "up", "s", "w", 3.0, false),
+        button_axis_config("Fire1", "", "left ctrl", "", "mouse 0", 1000.0, false),
+        button_axis_config("Jump", "", "space", "", "", 1000.0, false),
+        mouse_delta_axis_config("Mouse X", 0),
+        mouse_delta_axis_config("Mouse Y", 1),
+        mouse_delta_axis_config("Mouse ScrollWheel", 2),
     ]
 }
 
-/// One frame of pointer state.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct PointerFrame {
     pub position: (f32, f32),
@@ -705,37 +655,27 @@ impl InputState {
     }
 
     fn update_axes(&mut self, dt: f64) {
-        let keys_down = &self.keys_down;
-        let mouse_down = &self.mouse_down;
+        let held = HeldButtons {
+            keys: &self.keys_down,
+            mouse: &self.mouse_down,
+            gamepad: &self.gamepad_buttons_down,
+        };
         let keys_pressed = &self.keys_pressed;
         let mouse_pressed = &self.mouse_pressed;
         let keys_released = &self.keys_released;
         let mouse_released = &self.mouse_released;
-        let gamepad_down = &self.gamepad_buttons_down;
         let gamepad_pressed = &self.gamepad_buttons_pressed;
         let gamepad_released = &self.gamepad_buttons_released;
         let gamepad_axes = self.gamepad_axes;
-        let pointer_dx = self.pointer_dx;
-        let pointer_dy = self.pointer_dy;
-        let scroll_y = self.scroll_y;
+        let deltas = (self.pointer_dx, self.pointer_dy, self.scroll_y);
 
         for (name, entries) in &mut self.axes {
-            let mut any_button_source_down = false;
-            let mut any_button_source_pressed = false;
-            let mut any_button_source_released = false;
             let injected = self.injected_axes.get(name).copied();
-
-            let gamepad_button = gamepad_button_for_name(name);
-            if gamepad_button.is_some_and(|button| gamepad_down.contains(&button)) {
-                any_button_source_down = true;
-            }
-            if gamepad_button.is_some_and(|button| gamepad_pressed.contains(&button)) {
-                any_button_source_pressed = true;
-            }
-            if gamepad_button.is_some_and(|button| gamepad_released.contains(&button)) {
-                any_button_source_released = true;
-            }
-            let analog = gamepad_axis_value(&gamepad_axes, gamepad_down, name);
+            let gb = gamepad_button_for_name(name);
+            let mut down = gb.is_some_and(|b| held.gamepad.contains(&b));
+            let mut pressed = gb.is_some_and(|b| gamepad_pressed.contains(&b));
+            let mut released = gb.is_some_and(|b| gamepad_released.contains(&b));
+            let analog = gamepad_axis_value(&gamepad_axes, held.gamepad, name);
 
             for entry in entries.iter_mut() {
                 for src in entry
@@ -743,49 +683,21 @@ impl InputState {
                     .iter()
                     .chain(entry.negative_sources.iter())
                 {
-                    if is_source_in(src, keys_down, mouse_down, gamepad_down) {
-                        any_button_source_down = true;
-                    }
-                    if is_source_in(src, keys_pressed, mouse_pressed, gamepad_pressed) {
-                        any_button_source_pressed = true;
-                    }
-                    if is_source_in(src, keys_released, mouse_released, gamepad_released) {
-                        any_button_source_released = true;
-                    }
+                    down |= is_source_in(src, held.keys, held.mouse, held.gamepad);
+                    pressed |= is_source_in(src, keys_pressed, mouse_pressed, gamepad_pressed);
+                    released |= is_source_in(src, keys_released, mouse_released, gamepad_released);
                 }
-
-                if let Some(injected_value) = injected {
-                    // An injected device axis replaces the button-derived value and
-                    // stays frame-rate independent.
-                    let sign = if entry.config.invert { -1.0 } else { 1.0 };
-                    let value = injected_value * sign;
-                    entry.raw = value;
-                    let dead = entry.config.dead.max(0.0);
-                    entry.smoothed = if value.abs() <= dead { 0.0 } else { value };
-                    continue;
-                }
-
-                match entry.config.axis_type {
-                    0 => {
-                        update_digital_axis(entry, dt, analog, keys_down, mouse_down, gamepad_down);
-                    }
-                    1 => update_delta_axis(entry, pointer_dx, pointer_dy, scroll_y),
-                    _ => {
-                        entry.raw = 0.0;
-                        entry.smoothed = 0.0;
-                    }
-                }
+                apply_axis_entry_value(entry, dt, injected, analog, deltas, &held);
             }
 
             let was_down = self.prev_buttons_down.get(name).copied().unwrap_or(false);
-            if !was_down && (any_button_source_down || any_button_source_pressed) {
+            if !was_down && (down || pressed) {
                 self.buttons_pressed.insert(name.clone());
             }
-            if !any_button_source_down && (was_down || any_button_source_released) {
+            if !down && (was_down || released) {
                 self.buttons_released.insert(name.clone());
             }
-            self.prev_buttons_down
-                .insert(name.clone(), any_button_source_down);
+            self.prev_buttons_down.insert(name.clone(), down);
         }
     }
 
@@ -840,7 +752,6 @@ impl InputState {
         )
     }
 
-    /// The pointer state of the current frame.
     pub fn pointer_frame(&self) -> PointerFrame {
         PointerFrame {
             position: (self.pointer_x as f32, self.pointer_y as f32),
@@ -912,6 +823,38 @@ impl FocusPause {
         if self.restore_time_scale.is_none() {
             self.restore_time_scale = Some(runtime.time_scale());
             runtime.set_time_scale(0.0);
+        }
+    }
+}
+
+struct HeldButtons<'a> {
+    keys: &'a HashSet<u32>,
+    mouse: &'a HashSet<u32>,
+    gamepad: &'a HashSet<u32>,
+}
+
+fn apply_axis_entry_value(
+    entry: &mut AxisEntry,
+    dt: f64,
+    injected: Option<f64>,
+    analog: f64,
+    deltas: (f64, f64, f64),
+    held: &HeldButtons<'_>,
+) {
+    if let Some(injected_value) = injected {
+        let sign = if entry.config.invert { -1.0 } else { 1.0 };
+        let value = injected_value * sign;
+        entry.raw = value;
+        let dead = entry.config.dead.max(0.0);
+        entry.smoothed = if value.abs() <= dead { 0.0 } else { value };
+        return;
+    }
+    match entry.config.axis_type {
+        0 => update_digital_axis(entry, dt, analog, held.keys, held.mouse, held.gamepad),
+        1 => update_delta_axis(entry, deltas.0, deltas.1, deltas.2),
+        _ => {
+            entry.raw = 0.0;
+            entry.smoothed = 0.0;
         }
     }
 }

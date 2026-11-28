@@ -56,6 +56,34 @@ fn image(draw_mode: SpriteDrawMode, border: [f32; 4]) -> UiImageComponent {
     }
 }
 
+fn expected_sliced_rects() -> Vec<[f32; 4]> {
+    vec![
+        [10.0, 540.0, 8.0, 8.0],
+        [18.0, 540.0, 84.0, 8.0],
+        [102.0, 540.0, 8.0, 8.0],
+        [10.0, 548.0, 8.0, 24.0],
+        [18.0, 548.0, 84.0, 24.0],
+        [102.0, 548.0, 8.0, 24.0],
+        [10.0, 572.0, 8.0, 8.0],
+        [18.0, 572.0, 84.0, 8.0],
+        [102.0, 572.0, 8.0, 8.0],
+    ]
+}
+
+fn expected_sliced_uvs(quarter: f32) -> Vec<[f32; 4]> {
+    vec![
+        [0.0, 0.0, quarter, quarter],
+        [quarter, 0.0, 1.0 - quarter, quarter],
+        [1.0 - quarter, 0.0, 1.0, quarter],
+        [0.0, quarter, quarter, 1.0 - quarter],
+        [quarter, quarter, 1.0 - quarter, 1.0 - quarter],
+        [1.0 - quarter, quarter, 1.0, 1.0 - quarter],
+        [0.0, 1.0 - quarter, quarter, 1.0],
+        [quarter, 1.0 - quarter, 1.0 - quarter, 1.0],
+        [1.0 - quarter, 1.0 - quarter, 1.0, 1.0],
+    ]
+}
+
 #[test]
 fn sliced_image_with_an_eight_pixel_border_draws_nine_quads_with_the_border_uvs() {
     let mut sprite = Rgba8::new(32, 32);
@@ -79,33 +107,12 @@ fn sliced_image_with_an_eight_pixel_border_draws_nine_quads_with_the_border_uvs(
 
     assert_eq!(
         rects,
-        vec![
-            [10.0, 540.0, 8.0, 8.0],
-            [18.0, 540.0, 84.0, 8.0],
-            [102.0, 540.0, 8.0, 8.0],
-            [10.0, 548.0, 8.0, 24.0],
-            [18.0, 548.0, 84.0, 24.0],
-            [102.0, 548.0, 8.0, 24.0],
-            [10.0, 572.0, 8.0, 8.0],
-            [18.0, 572.0, 84.0, 8.0],
-            [102.0, 572.0, 8.0, 8.0],
-        ],
+        expected_sliced_rects(),
         "the corners keep the border size and the edges and centre stretch"
     );
-    let quarter = 8.0 / 32.0;
     assert_eq!(
         uvs,
-        vec![
-            [0.0, 0.0, quarter, quarter],
-            [quarter, 0.0, 1.0 - quarter, quarter],
-            [1.0 - quarter, 0.0, 1.0, quarter],
-            [0.0, quarter, quarter, 1.0 - quarter],
-            [quarter, quarter, 1.0 - quarter, 1.0 - quarter],
-            [1.0 - quarter, quarter, 1.0, 1.0 - quarter],
-            [0.0, 1.0 - quarter, quarter, 1.0],
-            [quarter, 1.0 - quarter, 1.0 - quarter, 1.0],
-            [1.0 - quarter, 1.0 - quarter, 1.0, 1.0],
-        ],
+        expected_sliced_uvs(8.0 / 32.0),
         "the sprite uv region is split by the border"
     );
     assert!(

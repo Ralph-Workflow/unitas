@@ -16,9 +16,7 @@ const REST_TOLERANCE: f64 = 5e-2;
 const TICK_DELTA: f64 = 0.02;
 const TICK_COUNT: usize = 60;
 
-fn scene_yaml() -> String {
-    String::from(
-        r"%YAML 1.1
+const KINEMATIC_PLATFORM_YAML: &str = r"%YAML 1.1
 %TAG !u! tag:unity3d.com,2011:
 --- !u!1 &100
 GameObject:
@@ -50,7 +48,9 @@ BoxCollider:
   m_IsTrigger: 0
   m_Size: {x: 4, y: 0.5, z: 4}
   m_Center: {x: 0, y: 0, z: 0}
---- !u!1 &200
+";
+
+const DYNAMIC_MARBLE_YAML: &str = r"--- !u!1 &200
 GameObject:
   m_Component:
   - component: {fileID: 201}
@@ -80,8 +80,10 @@ SphereCollider:
   m_IsTrigger: 0
   m_Radius: 0.5
   m_Center: {x: 0, y: 0, z: 0}
-",
-    )
+";
+
+fn scene_yaml() -> String {
+    format!("{KINEMATIC_PLATFORM_YAML}{DYNAMIC_MARBLE_YAML}")
 }
 
 fn write_scene(name: &str) -> Result<(PathBuf, PathBuf), Box<dyn Error>> {

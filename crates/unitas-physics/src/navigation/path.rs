@@ -144,42 +144,18 @@ impl NavMesh {
         area_mask: u32,
         area_cost_overrides: &BTreeMap<u32, f64>,
     ) -> PathQueryResult {
-        let Some(start_polygon) = self.polygon_at(start) else {
-            return PathQueryResult {
-                status: PathQueryStatus::Invalid,
-                corners: Vec::new(),
-                unreachable_reason: Some(UnreachableReason::StartNotOnNavMesh),
-                link_traversals: Vec::new(),
-                polygons: Vec::new(),
-            };
+        let Some(start_polygon) = self
+            .polygon_at(start)
+            .filter(|&poly| area_matches_mask(self.polygons[poly].area, area_mask))
+        else {
+            return invalid_path_result(UnreachableReason::StartNotOnNavMesh);
         };
-        if !area_matches_mask(self.polygons[start_polygon].area, area_mask) {
-            return PathQueryResult {
-                status: PathQueryStatus::Invalid,
-                corners: Vec::new(),
-                unreachable_reason: Some(UnreachableReason::StartNotOnNavMesh),
-                link_traversals: Vec::new(),
-                polygons: Vec::new(),
-            };
-        }
-        let Some(goal_polygon) = self.polygon_at(goal) else {
-            return PathQueryResult {
-                status: PathQueryStatus::Invalid,
-                corners: Vec::new(),
-                unreachable_reason: Some(UnreachableReason::GoalNotOnNavMesh),
-                link_traversals: Vec::new(),
-                polygons: Vec::new(),
-            };
+        let Some(goal_polygon) = self
+            .polygon_at(goal)
+            .filter(|&poly| area_matches_mask(self.polygons[poly].area, area_mask))
+        else {
+            return invalid_path_result(UnreachableReason::GoalNotOnNavMesh);
         };
-        if !area_matches_mask(self.polygons[goal_polygon].area, area_mask) {
-            return PathQueryResult {
-                status: PathQueryStatus::Invalid,
-                corners: Vec::new(),
-                unreachable_reason: Some(UnreachableReason::GoalNotOnNavMesh),
-                link_traversals: Vec::new(),
-                polygons: Vec::new(),
-            };
-        }
         if start_polygon == goal_polygon {
             return PathQueryResult {
                 status: PathQueryStatus::Complete,
@@ -228,18 +204,15 @@ impl NavMesh {
         let mut open = BinaryHeap::new();
         let mut order = 0u32;
         let min_cost = self.effective_min_area_cost(area_cost_overrides);
-
         cost_so_far[start_polygon] = 0.0;
+        let mut closest_distance = self.heuristic(start_polygon, goal, min_cost);
+        let mut closest = start_polygon;
         open.push(OpenEntry {
-            priority: self.heuristic(start_polygon, goal, min_cost),
+            priority: closest_distance,
             polygon: start_polygon,
             order,
         });
         order += 1;
-
-        let mut closest = start_polygon;
-        let mut closest_distance = self.heuristic(start_polygon, goal, min_cost);
-
         while let Some(entry) = open.pop() {
             let current = entry.polygon;
             if closed[current] {
@@ -247,20 +220,11 @@ impl NavMesh {
             }
             closed[current] = true;
             if current == goal_polygon {
-                let (corners, link_traversals, polygons) =
-                    self.build_corners(start, goal, goal_polygon, &came_from);
-                return PathQueryResult {
-                    status: PathQueryStatus::Complete,
-                    corners,
-                    unreachable_reason: None,
-                    link_traversals,
-                    polygons,
-                };
+                return self.build_complete_result(start, goal, goal_polygon, &came_from);
             }
             let remaining = self.heuristic(current, goal, min_cost);
             if remaining < closest_distance {
-                closest_distance = remaining;
-                closest = current;
+                (closest_distance, closest) = (remaining, current);
             }
             for (next, kind) in self.successors(current, area_mask) {
                 if closed[next] {
@@ -283,9 +247,36 @@ impl NavMesh {
                 }
             }
         }
+        self.build_partial_result(start, goal, closest, &came_from)
+    }
 
+    fn build_complete_result(
+        &self,
+        start: [f64; 3],
+        goal: [f64; 3],
+        goal_polygon: usize,
+        came_from: &[Option<PathStep>],
+    ) -> PathQueryResult {
+        let (corners, link_traversals, polygons) =
+            self.build_corners(start, goal, goal_polygon, came_from);
+        PathQueryResult {
+            status: PathQueryStatus::Complete,
+            corners,
+            unreachable_reason: None,
+            link_traversals,
+            polygons,
+        }
+    }
+
+    fn build_partial_result(
+        &self,
+        start: [f64; 3],
+        goal: [f64; 3],
+        closest: usize,
+        came_from: &[Option<PathStep>],
+    ) -> PathQueryResult {
         let (mut corners, link_traversals, polygons) =
-            self.build_corners(start, goal, closest, &came_from);
+            self.build_corners(start, goal, closest, came_from);
         corners.pop();
         corners.push(self.polygons[closest].centroid);
         PathQueryResult {
@@ -430,5 +421,15 @@ impl NavMesh {
         }
         corners.push(goal);
         (corners, link_traversals, polygons)
+    }
+}
+
+fn invalid_path_result(reason: UnreachableReason) -> PathQueryResult {
+    PathQueryResult {
+        status: PathQueryStatus::Invalid,
+        corners: Vec::new(),
+        unreachable_reason: Some(reason),
+        link_traversals: Vec::new(),
+        polygons: Vec::new(),
     }
 }

@@ -307,45 +307,9 @@ impl ArticulationBody {
             .rotation(joint.parent)
             .ok_or(ArticulationError::MissingBody(joint.parent))?;
 
-        let drive = joint.drive;
-        let error = drive.target - runtime.value;
-        let acceleration = drive.stiffness * error - drive.damping * runtime.velocity;
-        let mut velocity = runtime.velocity + acceleration * delta_seconds;
-        let mut value = runtime.value + velocity * delta_seconds;
-        if value < joint.limits.lower {
-            value = joint.limits.lower;
-            velocity = 0.0;
-        } else if value > joint.limits.upper {
-            value = joint.limits.upper;
-            velocity = 0.0;
-        }
-
-        let axis = normalized_axis(joint.axis);
-        let (relative_rotation, child_anchor_local) = match joint.kind {
-            JointKind::Revolute => {
-                let turn = axis_angle(axis, value - runtime.rest_angle);
-                (
-                    multiply_rotation(turn, runtime.rest_relative),
-                    add(
-                        joint.anchor,
-                        rotate_vector(turn, subtract(runtime.anchor_rest, joint.anchor)),
-                    ),
-                )
-            }
-            JointKind::Prismatic => (
-                runtime.rest_relative,
-                add(add(joint.anchor, scale(axis, value)), runtime.perpendicular),
-            ),
-        };
-        let child_rotation = multiply_rotation(parent_rotation, relative_rotation);
-        let child_anchor_world = add(
-            parent_position,
-            rotate_vector(parent_rotation, child_anchor_local),
-        );
-        let child_position = subtract(
-            child_anchor_world,
-            rotate_vector(child_rotation, joint.child_anchor),
-        );
+        let (value, velocity) = advance_joint_drive(&joint, &runtime, delta_seconds);
+        let (child_position, child_rotation) =
+            compute_driven_child_pose(&joint, &runtime, parent_position, parent_rotation, value);
         world
             .set_position(joint.child, child_position)
             .map_err(|_| ArticulationError::MissingBody(joint.child))?;
@@ -356,6 +320,62 @@ impl ArticulationBody {
         self.runtime[index].velocity = velocity;
         Ok(())
     }
+}
+
+fn advance_joint_drive(
+    joint: &ArticulationJoint,
+    runtime: &JointRuntime,
+    delta_seconds: f64,
+) -> (f64, f64) {
+    let drive = joint.drive;
+    let error = drive.target - runtime.value;
+    let acceleration = drive.stiffness * error - drive.damping * runtime.velocity;
+    let mut velocity = runtime.velocity + acceleration * delta_seconds;
+    let mut value = runtime.value + velocity * delta_seconds;
+    if value < joint.limits.lower {
+        value = joint.limits.lower;
+        velocity = 0.0;
+    } else if value > joint.limits.upper {
+        value = joint.limits.upper;
+        velocity = 0.0;
+    }
+    (value, velocity)
+}
+
+fn compute_driven_child_pose(
+    joint: &ArticulationJoint,
+    runtime: &JointRuntime,
+    parent_position: [f64; 3],
+    parent_rotation: [f64; 4],
+    value: f64,
+) -> ([f64; 3], [f64; 4]) {
+    let axis = normalized_axis(joint.axis);
+    let (relative_rotation, child_anchor_local) = match joint.kind {
+        JointKind::Revolute => {
+            let turn = axis_angle(axis, value - runtime.rest_angle);
+            (
+                multiply_rotation(turn, runtime.rest_relative),
+                add(
+                    joint.anchor,
+                    rotate_vector(turn, subtract(runtime.anchor_rest, joint.anchor)),
+                ),
+            )
+        }
+        JointKind::Prismatic => (
+            runtime.rest_relative,
+            add(add(joint.anchor, scale(axis, value)), runtime.perpendicular),
+        ),
+    };
+    let child_rotation = multiply_rotation(parent_rotation, relative_rotation);
+    let child_anchor_world = add(
+        parent_position,
+        rotate_vector(parent_rotation, child_anchor_local),
+    );
+    let child_position = subtract(
+        child_anchor_world,
+        rotate_vector(child_rotation, joint.child_anchor),
+    );
+    (child_position, child_rotation)
 }
 
 fn dependency_order(joints: &[ArticulationJoint]) -> Result<Vec<usize>, ArticulationError> {

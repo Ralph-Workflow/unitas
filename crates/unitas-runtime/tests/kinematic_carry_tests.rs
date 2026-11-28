@@ -59,6 +59,25 @@ fn speed(runtime: &Runtime, entity: EntityId) -> Result<f64, Box<dyn Error>> {
     Ok((velocity[0] * velocity[0] + velocity[1] * velocity[1] + velocity[2] * velocity[2]).sqrt())
 }
 
+fn step_rotating_platform(runtime: &mut Runtime, platform: EntityId, frame: usize) -> TestResult {
+    let time = FRAME_DELTA * frame as f64;
+    let angle = ROTATE_DEGREES_PER_SECOND * FRAME_DELTA * frame as f64;
+    let half = (angle.to_radians() * 0.5).sin();
+    let cos = (angle.to_radians() * 0.5).cos();
+    {
+        let graph = runtime
+            .scene_graph_mut()
+            .ok_or("runtime exposes no mutable scene graph")?;
+        let transform = graph
+            .transform_mut(platform)
+            .ok_or("platform has no transform")?;
+        transform.rotation = [0.0, half as f32, 0.0, cos as f32];
+        transform.translation[1] = 0.25 + (BOB_HEIGHT * (time * BOB_SPEED).sin()) as f32;
+    }
+    runtime.tick(FRAME_DELTA)?;
+    Ok(())
+}
+
 #[test]
 fn rotating_platform_carries_the_resting_marble() -> TestResult {
     let mut runtime = Runtime::new()?;
@@ -82,21 +101,7 @@ fn rotating_platform_carries_the_resting_marble() -> TestResult {
     let platform_start = body_position(&runtime, platform)?;
 
     for frame in 1..=FRAMES {
-        let time = FRAME_DELTA * frame as f64;
-        let angle = ROTATE_DEGREES_PER_SECOND * FRAME_DELTA * frame as f64;
-        let half = (angle.to_radians() * 0.5).sin();
-        let cos = (angle.to_radians() * 0.5).cos();
-        {
-            let graph = runtime
-                .scene_graph_mut()
-                .ok_or("runtime exposes no mutable scene graph")?;
-            let transform = graph
-                .transform_mut(platform)
-                .ok_or("platform has no transform")?;
-            transform.rotation = [0.0, half as f32, 0.0, cos as f32];
-            transform.translation[1] = 0.25 + (BOB_HEIGHT * (time * BOB_SPEED).sin()) as f32;
-        }
-        runtime.tick(FRAME_DELTA)?;
+        step_rotating_platform(&mut runtime, platform, frame)?;
     }
 
     let end = body_position(&runtime, marble)?;

@@ -189,55 +189,15 @@ impl MuscleChannel {
     pub const fn default_limit(self) -> MuscleLimit {
         match self {
             Self::SpineFrontBack | Self::SpineLeftRight | Self::SpineTwistLeftRight => {
-                MuscleLimit {
-                    min_degrees: -40.0,
-                    max_degrees: 40.0,
-                    min: -1.0,
-                    max: 1.0,
-                }
+                muscle_limit(-40.0, 40.0)
             }
-            Self::NeckNodDownUp | Self::NeckTurnLeftRight => MuscleLimit {
-                min_degrees: -45.0,
-                max_degrees: 45.0,
-                min: -1.0,
-                max: 1.0,
-            },
-            Self::LeftArmDownUp | Self::RightArmDownUp => MuscleLimit {
-                min_degrees: -60.0,
-                max_degrees: 100.0,
-                min: -1.0,
-                max: 1.0,
-            },
-            Self::LeftArmFrontBack | Self::RightArmFrontBack => MuscleLimit {
-                min_degrees: -70.0,
-                max_degrees: 70.0,
-                min: -1.0,
-                max: 1.0,
-            },
-            Self::LeftForearmStretch | Self::RightForearmStretch => MuscleLimit {
-                min_degrees: -80.0,
-                max_degrees: 80.0,
-                min: -1.0,
-                max: 1.0,
-            },
-            Self::LeftLegFrontBack | Self::RightLegFrontBack => MuscleLimit {
-                min_degrees: -90.0,
-                max_degrees: 50.0,
-                min: -1.0,
-                max: 1.0,
-            },
-            Self::LeftLegInOut | Self::RightLegInOut => MuscleLimit {
-                min_degrees: -60.0,
-                max_degrees: 60.0,
-                min: -1.0,
-                max: 1.0,
-            },
-            Self::LeftKneeStretch | Self::RightKneeStretch => MuscleLimit {
-                min_degrees: -80.0,
-                max_degrees: 80.0,
-                min: -1.0,
-                max: 1.0,
-            },
+            Self::NeckNodDownUp | Self::NeckTurnLeftRight => muscle_limit(-45.0, 45.0),
+            Self::LeftArmDownUp | Self::RightArmDownUp => muscle_limit(-60.0, 100.0),
+            Self::LeftArmFrontBack | Self::RightArmFrontBack => muscle_limit(-70.0, 70.0),
+            Self::LeftForearmStretch | Self::RightForearmStretch => muscle_limit(-80.0, 80.0),
+            Self::LeftLegFrontBack | Self::RightLegFrontBack => muscle_limit(-90.0, 50.0),
+            Self::LeftLegInOut | Self::RightLegInOut => muscle_limit(-60.0, 60.0),
+            Self::LeftKneeStretch | Self::RightKneeStretch => muscle_limit(-80.0, 80.0),
         }
     }
 
@@ -821,6 +781,15 @@ pub fn retarget(
     let mut handler = HumanPoseHandler::new(target_avatar.clone());
     handler.set_human_pose(clip_pose);
     handler.human_pose().clone()
+}
+
+const fn muscle_limit(min_degrees: f32, max_degrees: f32) -> MuscleLimit {
+    MuscleLimit {
+        min_degrees,
+        max_degrees,
+        min: -1.0,
+        max: 1.0,
+    }
 }
 
 fn conjugate_rotation(q: [f32; 4]) -> [f32; 4] {

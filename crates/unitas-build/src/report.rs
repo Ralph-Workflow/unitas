@@ -21,12 +21,12 @@ pub(crate) mod report_json;
 
 use report_json::{
     get_field, get_optional_contributors, get_optional_desktop_packaging, get_optional_licensing,
-    get_optional_path, get_optional_startup_time, get_optional_string,
-    get_optional_target_availability, get_required_bool, get_required_category_sizes,
-    get_required_compatibility_findings, get_required_contributors, get_required_diagnostics,
-    get_required_str, get_required_string_list, get_required_u64, parse_build_mode,
-    parse_build_target, parse_target_arch, push_escaped_json_str, push_indent, push_kv_bool,
-    push_kv_category_sizes, push_kv_compatibility_findings, push_kv_contributors,
+    get_optional_path, get_optional_startup_time, get_optional_string, get_optional_string_list,
+    get_optional_string_or_default, get_optional_target_availability, get_required_bool,
+    get_required_category_sizes, get_required_compatibility_findings, get_required_contributors,
+    get_required_diagnostics, get_required_str, get_required_string_list, get_required_u64,
+    parse_build_mode, parse_build_target, parse_target_arch, push_escaped_json_str, push_indent,
+    push_kv_bool, push_kv_category_sizes, push_kv_compatibility_findings, push_kv_contributors,
     push_kv_desktop_packaging, push_kv_diagnostics, push_kv_licensing, push_kv_opt_path,
     push_kv_opt_str, push_kv_startup_time, push_kv_str, push_kv_string_array,
     push_kv_target_availability, push_kv_u64, push_trailing, JsonParser,
@@ -699,104 +699,9 @@ impl BuildReport {
 
     pub fn to_json(&self) -> String {
         let mut out = String::from("{\n");
-        push_kv_str(&mut out, 2, "target", &self.target.identifier(), true);
-        push_kv_str(
-            &mut out,
-            2,
-            "architecture",
-            self.architecture.as_str(),
-            true,
-        );
-        push_kv_str(
-            &mut out,
-            2,
-            "configuration",
-            self.configuration.as_str(),
-            true,
-        );
-        push_kv_str(&mut out, 2, "company_name", &self.company_name, true);
-        push_kv_str(&mut out, 2, "product_name", &self.product_name, true);
-        push_kv_str(
-            &mut out,
-            2,
-            "application_identifier",
-            &self.application_identifier,
-            true,
-        );
-        push_kv_str(&mut out, 2, "version", &self.version, true);
-        push_kv_str(
-            &mut out,
-            2,
-            "build_identifier",
-            &self.build_identifier,
-            true,
-        );
-        push_kv_string_array(&mut out, 2, "included_scenes", &self.included_scenes, true);
-        push_kv_string_array(&mut out, 2, "assets", &self.assets, true);
-        push_kv_str(&mut out, 2, "outcome", self.outcome.as_str(), true);
-        push_kv_u64(&mut out, 2, "elapsed_ms", self.elapsed_ms, true);
-        push_kv_diagnostics(&mut out, 2, "errors", &self.errors, true);
-        push_kv_diagnostics(&mut out, 2, "warnings", &self.warnings, true);
-        push_kv_opt_path(
-            &mut out,
-            2,
-            "output_location",
-            self.output_location.as_deref(),
-            true,
-        );
-        push_kv_opt_path(
-            &mut out,
-            2,
-            "launch_artifact",
-            self.launch_artifact.as_deref(),
-            true,
-        );
-        push_kv_u64(&mut out, 2, "total_size_bytes", self.total_size_bytes, true);
-        push_kv_category_sizes(&mut out, 2, "category_sizes", &self.category_sizes, true);
-        push_kv_contributors(
-            &mut out,
-            2,
-            "major_contributors",
-            &self.major_contributors,
-            true,
-        );
-        push_kv_bool(
-            &mut out,
-            2,
-            "development_diagnostics_included",
-            self.development_diagnostics_included,
-            true,
-        );
-        push_kv_string_array(
-            &mut out,
-            2,
-            "unsupported_behaviors",
-            &self.unsupported_behaviors,
-            true,
-        );
-        push_kv_compatibility_findings(
-            &mut out,
-            2,
-            "compatibility_findings",
-            &self.compatibility_findings,
-            true,
-        );
-        push_kv_contributors(&mut out, 2, "managed_payload", &self.managed_payload, true);
-        push_kv_startup_time(&mut out, 2, "startup_time", &self.startup_time, true);
-        push_kv_target_availability(
-            &mut out,
-            2,
-            "target_availability",
-            &self.target_availability,
-            true,
-        );
-        push_kv_desktop_packaging(
-            &mut out,
-            2,
-            "desktop_packaging",
-            &self.desktop_packaging,
-            true,
-        );
+        push_report_identity(&mut out, self);
+        push_report_artifacts(&mut out, self);
+        push_report_findings(&mut out, self);
         push_kv_licensing(&mut out, 2, "licensing", self.licensing.as_ref(), false);
         out.push_str("}\n");
         out
@@ -805,85 +710,36 @@ impl BuildReport {
     pub fn from_json(json: &str) -> Result<Self, ReportParseError> {
         let root = JsonParser::parse(json)?;
         let obj = root.as_object("root")?;
-
-        let target_str = get_required_str(obj, "target")?;
-        let architecture_str = get_required_str(obj, "architecture")?;
-        let architecture = parse_target_arch(architecture_str)?;
-        let target = parse_build_target(target_str, architecture)?;
-
-        let configuration_str = get_required_str(obj, "configuration")?;
-        let configuration = parse_build_mode(configuration_str)?;
-
-        let company_name = get_required_str(obj, "company_name")?.to_string();
-        let product_name = get_required_str(obj, "product_name")?.to_string();
-        let application_identifier = get_required_str(obj, "application_identifier")?.to_string();
-        let version = get_required_str(obj, "version")?.to_string();
-        let build_identifier = match obj.get("build_identifier") {
-            None | Some(JsonValue::Null) => String::new(),
-            Some(value) => value.as_str("build_identifier")?.to_string(),
-        };
-        let included_scenes = get_required_string_list(obj, "included_scenes")?;
-        let assets = match obj.get("assets") {
-            None | Some(JsonValue::Null) => Vec::new(),
-            Some(value) => value
-                .as_array("assets")?
-                .iter()
-                .map(|item| item.as_str("assets").map(str::to_string))
-                .collect::<Result<Vec<String>, ReportParseError>>()?,
-        };
-
-        let outcome_str = get_required_str(obj, "outcome")?;
-        let outcome = BuildOutcome::from_name(outcome_str).ok_or_else(|| {
-            ReportParseError::new(format!("unrecognized build outcome '{outcome_str}'"))
-        })?;
-
-        let elapsed_ms = get_required_u64(obj, "elapsed_ms")?;
-        let errors = get_required_diagnostics(obj, "errors")?;
-        let warnings = get_required_diagnostics(obj, "warnings")?;
-        let output_location = get_optional_path(obj, "output_location")?;
-        let launch_artifact = get_optional_path(obj, "launch_artifact")?;
-        let total_size_bytes = get_required_u64(obj, "total_size_bytes")?;
-        let category_sizes = get_required_category_sizes(obj, "category_sizes")?;
-        let major_contributors = get_required_contributors(obj, "major_contributors")?;
-        let managed_payload = get_optional_contributors(obj, "managed_payload")?;
-        let development_diagnostics_included =
-            get_required_bool(obj, "development_diagnostics_included")?;
-        let unsupported_behaviors = get_required_string_list(obj, "unsupported_behaviors")?;
-        let compatibility_findings =
-            get_required_compatibility_findings(obj, "compatibility_findings")?;
-        let licensing = get_optional_licensing(obj)?;
-        let startup_time = get_optional_startup_time(obj)?;
-        let target_availability = get_optional_target_availability(obj)?;
-        let desktop_packaging = get_optional_desktop_packaging(obj)?;
-
+        let identity = ReportIdentity::from_json_object(obj)?;
+        let artifacts = ReportArtifacts::from_json_object(obj)?;
         Ok(Self {
-            target,
-            architecture,
-            configuration,
-            company_name,
-            product_name,
-            application_identifier,
-            version,
-            build_identifier,
-            assets,
-            included_scenes,
-            outcome,
-            elapsed_ms,
-            errors,
-            warnings,
-            output_location,
-            launch_artifact,
-            total_size_bytes,
-            category_sizes,
-            major_contributors,
-            managed_payload,
-            development_diagnostics_included,
-            unsupported_behaviors,
-            compatibility_findings,
-            licensing,
-            startup_time,
-            target_availability,
-            desktop_packaging,
+            target: identity.target,
+            architecture: identity.architecture,
+            configuration: identity.configuration,
+            company_name: identity.company_name,
+            product_name: identity.product_name,
+            application_identifier: identity.application_identifier,
+            version: identity.version,
+            build_identifier: identity.build_identifier,
+            assets: identity.assets,
+            included_scenes: identity.included_scenes,
+            outcome: identity.outcome,
+            elapsed_ms: identity.elapsed_ms,
+            errors: artifacts.errors,
+            warnings: artifacts.warnings,
+            output_location: artifacts.output_location,
+            launch_artifact: artifacts.launch_artifact,
+            total_size_bytes: artifacts.total_size_bytes,
+            category_sizes: artifacts.category_sizes,
+            major_contributors: artifacts.major_contributors,
+            managed_payload: artifacts.managed_payload,
+            development_diagnostics_included: artifacts.development_diagnostics_included,
+            unsupported_behaviors: artifacts.unsupported_behaviors,
+            compatibility_findings: artifacts.compatibility_findings,
+            licensing: artifacts.licensing,
+            startup_time: artifacts.startup_time,
+            target_availability: artifacts.target_availability,
+            desktop_packaging: artifacts.desktop_packaging,
         })
     }
 
@@ -906,6 +762,196 @@ pub struct RejectedBundleReportEntry {
     pub reason: String,
 }
 
+fn push_report_identity(out: &mut String, report: &BuildReport) {
+    push_kv_str(out, 2, "target", &report.target.identifier(), true);
+    push_kv_str(out, 2, "architecture", report.architecture.as_str(), true);
+    push_kv_str(out, 2, "configuration", report.configuration.as_str(), true);
+    push_kv_str(out, 2, "company_name", &report.company_name, true);
+    push_kv_str(out, 2, "product_name", &report.product_name, true);
+    push_kv_str(
+        out,
+        2,
+        "application_identifier",
+        &report.application_identifier,
+        true,
+    );
+    push_kv_str(out, 2, "version", &report.version, true);
+    push_kv_str(out, 2, "build_identifier", &report.build_identifier, true);
+    push_kv_string_array(out, 2, "included_scenes", &report.included_scenes, true);
+    push_kv_string_array(out, 2, "assets", &report.assets, true);
+    push_kv_str(out, 2, "outcome", report.outcome.as_str(), true);
+    push_kv_u64(out, 2, "elapsed_ms", report.elapsed_ms, true);
+}
+
+fn push_report_artifacts(out: &mut String, report: &BuildReport) {
+    push_kv_diagnostics(out, 2, "errors", &report.errors, true);
+    push_kv_diagnostics(out, 2, "warnings", &report.warnings, true);
+    push_kv_opt_path(
+        out,
+        2,
+        "output_location",
+        report.output_location.as_deref(),
+        true,
+    );
+    push_kv_opt_path(
+        out,
+        2,
+        "launch_artifact",
+        report.launch_artifact.as_deref(),
+        true,
+    );
+    push_kv_u64(out, 2, "total_size_bytes", report.total_size_bytes, true);
+    push_kv_category_sizes(out, 2, "category_sizes", &report.category_sizes, true);
+    push_kv_contributors(
+        out,
+        2,
+        "major_contributors",
+        &report.major_contributors,
+        true,
+    );
+    push_kv_bool(
+        out,
+        2,
+        "development_diagnostics_included",
+        report.development_diagnostics_included,
+        true,
+    );
+}
+
+fn push_report_findings(out: &mut String, report: &BuildReport) {
+    push_kv_string_array(
+        out,
+        2,
+        "unsupported_behaviors",
+        &report.unsupported_behaviors,
+        true,
+    );
+    push_kv_compatibility_findings(
+        out,
+        2,
+        "compatibility_findings",
+        &report.compatibility_findings,
+        true,
+    );
+    push_kv_contributors(out, 2, "managed_payload", &report.managed_payload, true);
+    push_kv_startup_time(out, 2, "startup_time", &report.startup_time, true);
+    push_kv_target_availability(
+        out,
+        2,
+        "target_availability",
+        &report.target_availability,
+        true,
+    );
+    push_kv_desktop_packaging(out, 2, "desktop_packaging", &report.desktop_packaging, true);
+}
+
+struct ReportIdentity {
+    target: BuildTarget,
+    architecture: TargetArch,
+    configuration: BuildMode,
+    company_name: String,
+    product_name: String,
+    application_identifier: String,
+    version: String,
+    build_identifier: String,
+    assets: Vec<String>,
+    included_scenes: Vec<String>,
+    outcome: BuildOutcome,
+    elapsed_ms: u64,
+}
+
+impl ReportIdentity {
+    fn from_json_object(obj: &BTreeMap<String, JsonValue>) -> Result<Self, ReportParseError> {
+        let target_str = get_required_str(obj, "target")?;
+        let architecture_str = get_required_str(obj, "architecture")?;
+        let architecture = parse_target_arch(architecture_str)?;
+        let target = parse_build_target(target_str, architecture)?;
+        let configuration = parse_build_mode(get_required_str(obj, "configuration")?)?;
+        let company_name = get_required_str(obj, "company_name")?.to_string();
+        let product_name = get_required_str(obj, "product_name")?.to_string();
+        let application_identifier = get_required_str(obj, "application_identifier")?.to_string();
+        let version = get_required_str(obj, "version")?.to_string();
+        let build_identifier = get_optional_string_or_default(obj, "build_identifier")?;
+        let included_scenes = get_required_string_list(obj, "included_scenes")?;
+        let assets = get_optional_string_list(obj, "assets")?;
+        let outcome_str = get_required_str(obj, "outcome")?;
+        let outcome = BuildOutcome::from_name(outcome_str).ok_or_else(|| {
+            ReportParseError::new(format!("unrecognized build outcome '{outcome_str}'"))
+        })?;
+        let elapsed_ms = get_required_u64(obj, "elapsed_ms")?;
+        Ok(Self {
+            target,
+            architecture,
+            configuration,
+            company_name,
+            product_name,
+            application_identifier,
+            version,
+            build_identifier,
+            assets,
+            included_scenes,
+            outcome,
+            elapsed_ms,
+        })
+    }
+}
+
+struct ReportArtifacts {
+    errors: Vec<BuildDiagnostic>,
+    warnings: Vec<BuildDiagnostic>,
+    output_location: Option<PathBuf>,
+    launch_artifact: Option<PathBuf>,
+    total_size_bytes: u64,
+    category_sizes: Vec<SizeCategoryEntry>,
+    major_contributors: Vec<SizeContributor>,
+    managed_payload: Vec<SizeContributor>,
+    development_diagnostics_included: bool,
+    unsupported_behaviors: Vec<String>,
+    compatibility_findings: Vec<CompatibilityFinding>,
+    licensing: Option<LicensingRecord>,
+    startup_time: StartupMeasurement,
+    target_availability: Vec<TargetAvailability>,
+    desktop_packaging: Vec<DesktopPackageOutcome>,
+}
+
+impl ReportArtifacts {
+    fn from_json_object(obj: &BTreeMap<String, JsonValue>) -> Result<Self, ReportParseError> {
+        let errors = get_required_diagnostics(obj, "errors")?;
+        let warnings = get_required_diagnostics(obj, "warnings")?;
+        let output_location = get_optional_path(obj, "output_location")?;
+        let launch_artifact = get_optional_path(obj, "launch_artifact")?;
+        let total_size_bytes = get_required_u64(obj, "total_size_bytes")?;
+        let category_sizes = get_required_category_sizes(obj, "category_sizes")?;
+        let major_contributors = get_required_contributors(obj, "major_contributors")?;
+        let managed_payload = get_optional_contributors(obj, "managed_payload")?;
+        let development_diagnostics_included =
+            get_required_bool(obj, "development_diagnostics_included")?;
+        let unsupported_behaviors = get_required_string_list(obj, "unsupported_behaviors")?;
+        let compatibility_findings =
+            get_required_compatibility_findings(obj, "compatibility_findings")?;
+        let licensing = get_optional_licensing(obj)?;
+        let startup_time = get_optional_startup_time(obj)?;
+        let target_availability = get_optional_target_availability(obj)?;
+        let desktop_packaging = get_optional_desktop_packaging(obj)?;
+        Ok(Self {
+            errors,
+            warnings,
+            output_location,
+            launch_artifact,
+            total_size_bytes,
+            category_sizes,
+            major_contributors,
+            managed_payload,
+            development_diagnostics_included,
+            unsupported_behaviors,
+            compatibility_findings,
+            licensing,
+            startup_time,
+            target_availability,
+            desktop_packaging,
+        })
+    }
+}
 impl RejectedBundleReportEntry {
     pub fn from_rejected_bundle(rejected: &RejectedContentBundle) -> Self {
         Self {
@@ -996,18 +1042,7 @@ impl ContentBuildReport {
             .iter()
             .map(BuildDiagnostic::from_rejected_content_bundle)
             .collect();
-        let mut compatibility_findings = Vec::new();
-        for rejected in &result.rejected_bundles {
-            if matches!(
-                &rejected.reason,
-                ContentRejectionReason::UnityBuiltArchive { .. }
-            ) {
-                let source_path = rejected.source_path.to_string_lossy().into_owned();
-                if let Some(finding) = CompatibilityFinding::unity_built_content(&source_path) {
-                    compatibility_findings.push(finding);
-                }
-            }
-        }
+        let compatibility_findings = unity_built_compatibility_findings(result);
 
         Self {
             mode,
@@ -1033,72 +1068,8 @@ impl ContentBuildReport {
 
     pub fn to_json(&self) -> String {
         let mut out = String::from("{\n");
-        push_kv_str(&mut out, 2, "mode", self.mode.as_str(), true);
-        push_kv_str(&mut out, 2, "catalog_id", &self.catalog_id, true);
-        push_kv_opt_str(
-            &mut out,
-            2,
-            "profile_name",
-            self.profile_name.as_deref(),
-            true,
-        );
-        push_kv_str(&mut out, 2, "unitas_version", &self.unitas_version, true);
-        push_kv_str(
-            &mut out,
-            2,
-            "player_compatibility_version",
-            &self.player_compatibility_version,
-            true,
-        );
-        push_kv_string_array(
-            &mut out,
-            2,
-            "compatible_player_versions",
-            &self.compatible_player_versions,
-            true,
-        );
-        push_kv_str(&mut out, 2, "target", &self.target.identifier(), true);
-        push_kv_str(
-            &mut out,
-            2,
-            "architecture",
-            self.architecture.as_str(),
-            true,
-        );
-        push_kv_str(&mut out, 2, "outcome", self.outcome.as_str(), true);
-        push_kv_u64(&mut out, 2, "elapsed_ms", self.elapsed_ms, true);
-        push_kv_opt_path(
-            &mut out,
-            2,
-            "catalog_path",
-            self.catalog_path.as_deref(),
-            true,
-        );
-        push_kv_str(&mut out, 2, "catalog_hash", &self.catalog_hash, true);
-        push_kv_content_bundles(&mut out, 2, "bundles", &self.bundles, true);
-        push_kv_string_array(&mut out, 2, "emitted_bundles", &self.emitted_bundles, true);
-        push_kv_string_array(
-            &mut out,
-            2,
-            "unchanged_bundles",
-            &self.unchanged_bundles,
-            true,
-        );
-        push_kv_rejected_bundles(
-            &mut out,
-            2,
-            "rejected_bundles",
-            &self.rejected_bundles,
-            true,
-        );
-        push_kv_diagnostics(&mut out, 2, "errors", &self.errors, true);
-        push_kv_compatibility_findings(
-            &mut out,
-            2,
-            "compatibility_findings",
-            &self.compatibility_findings,
-            false,
-        );
+        push_content_report_identity(&mut out, self);
+        push_content_report_payload(&mut out, self);
         out.push_str("}\n");
         out
     }
@@ -1106,11 +1077,7 @@ impl ContentBuildReport {
     pub fn from_json(json: &str) -> Result<Self, ReportParseError> {
         let root = JsonParser::parse(json)?;
         let obj = root.as_object("root")?;
-
-        let mode_str = get_required_str(obj, "mode")?;
-        let mode = ContentBuildMode::from_name(mode_str).ok_or_else(|| {
-            ReportParseError::new(format!("unrecognized content build mode '{mode_str}'"))
-        })?;
+        let mode = parse_content_build_mode(obj)?;
         let catalog_id = get_required_str(obj, "catalog_id")?.to_string();
         let profile_name = get_optional_string(obj, "profile_name")?;
         let unitas_version = get_required_str(obj, "unitas_version")?.to_string();
@@ -1122,10 +1089,7 @@ impl ContentBuildReport {
         let architecture_str = get_required_str(obj, "architecture")?;
         let architecture = parse_target_arch(architecture_str)?;
         let target = parse_build_target(target_str, architecture)?;
-        let outcome_str = get_required_str(obj, "outcome")?;
-        let outcome = BuildOutcome::from_name(outcome_str).ok_or_else(|| {
-            ReportParseError::new(format!("unrecognized build outcome '{outcome_str}'"))
-        })?;
+        let outcome = parse_build_outcome(obj)?;
         let elapsed_ms = get_required_u64(obj, "elapsed_ms")?;
         let catalog_path = get_optional_path(obj, "catalog_path")?;
         let catalog_hash = get_required_str(obj, "catalog_hash")?.to_string();
@@ -1158,6 +1122,80 @@ impl ContentBuildReport {
             compatibility_findings,
         })
     }
+}
+fn unity_built_compatibility_findings(result: &ContentBuildResult) -> Vec<CompatibilityFinding> {
+    let mut compatibility_findings = Vec::new();
+    for rejected in &result.rejected_bundles {
+        if matches!(
+            &rejected.reason,
+            ContentRejectionReason::UnityBuiltArchive { .. }
+        ) {
+            let source_path = rejected.source_path.to_string_lossy().into_owned();
+            if let Some(finding) = CompatibilityFinding::unity_built_content(&source_path) {
+                compatibility_findings.push(finding);
+            }
+        }
+    }
+    compatibility_findings
+}
+
+fn parse_content_build_mode(
+    obj: &BTreeMap<String, JsonValue>,
+) -> Result<ContentBuildMode, ReportParseError> {
+    let mode_str = get_required_str(obj, "mode")?;
+    ContentBuildMode::from_name(mode_str).ok_or_else(|| {
+        ReportParseError::new(format!("unrecognized content build mode '{mode_str}'"))
+    })
+}
+
+fn parse_build_outcome(
+    obj: &BTreeMap<String, JsonValue>,
+) -> Result<BuildOutcome, ReportParseError> {
+    let outcome_str = get_required_str(obj, "outcome")?;
+    BuildOutcome::from_name(outcome_str)
+        .ok_or_else(|| ReportParseError::new(format!("unrecognized build outcome '{outcome_str}'")))
+}
+
+fn push_content_report_identity(out: &mut String, report: &ContentBuildReport) {
+    push_kv_str(out, 2, "mode", report.mode.as_str(), true);
+    push_kv_str(out, 2, "catalog_id", &report.catalog_id, true);
+    push_kv_opt_str(out, 2, "profile_name", report.profile_name.as_deref(), true);
+    push_kv_str(out, 2, "unitas_version", &report.unitas_version, true);
+    push_kv_str(
+        out,
+        2,
+        "player_compatibility_version",
+        &report.player_compatibility_version,
+        true,
+    );
+    push_kv_string_array(
+        out,
+        2,
+        "compatible_player_versions",
+        &report.compatible_player_versions,
+        true,
+    );
+    push_kv_str(out, 2, "target", &report.target.identifier(), true);
+    push_kv_str(out, 2, "architecture", report.architecture.as_str(), true);
+    push_kv_str(out, 2, "outcome", report.outcome.as_str(), true);
+    push_kv_u64(out, 2, "elapsed_ms", report.elapsed_ms, true);
+}
+
+fn push_content_report_payload(out: &mut String, report: &ContentBuildReport) {
+    push_kv_opt_path(out, 2, "catalog_path", report.catalog_path.as_deref(), true);
+    push_kv_str(out, 2, "catalog_hash", &report.catalog_hash, true);
+    push_kv_content_bundles(out, 2, "bundles", &report.bundles, true);
+    push_kv_string_array(out, 2, "emitted_bundles", &report.emitted_bundles, true);
+    push_kv_string_array(out, 2, "unchanged_bundles", &report.unchanged_bundles, true);
+    push_kv_rejected_bundles(out, 2, "rejected_bundles", &report.rejected_bundles, true);
+    push_kv_diagnostics(out, 2, "errors", &report.errors, true);
+    push_kv_compatibility_findings(
+        out,
+        2,
+        "compatibility_findings",
+        &report.compatibility_findings,
+        false,
+    );
 }
 
 fn push_kv_content_bundles(
@@ -1339,6 +1377,24 @@ mod tests {
     #[test]
     fn succeeded_report_contains_all_spec_fields_and_round_trips_json(
     ) -> Result<(), Box<dyn std::error::Error>> {
+        let (report, category_sizes, warning) = sample_succeeded_report();
+        assert_succeeded_report_identity(&report, &warning);
+        assert_succeeded_report_payload(&report, &category_sizes);
+
+        let json = report.to_json();
+        for required_key in required_report_json_keys() {
+            assert!(
+                json.contains(required_key),
+                "missing key {required_key} in JSON"
+            );
+        }
+
+        let round_tripped = BuildReport::from_json(&json)?;
+        assert_eq!(round_tripped, report);
+        Ok(())
+    }
+
+    fn sample_succeeded_report() -> (BuildReport, Vec<SizeCategoryEntry>, BuildDiagnostic) {
         let config = sample_config().with_development_build(true);
         let category_sizes = vec![
             SizeCategoryEntry::new("scenes", 4096),
@@ -1357,7 +1413,6 @@ mod tests {
             "meta file contains custom \"userData\" not used by desktop target",
             Some("remove unused userData if not needed".to_string()),
         );
-
         let report = BuildReport::succeeded(
             &config,
             1350,
@@ -1371,7 +1426,10 @@ mod tests {
         .with_unsupported_behaviors(vec![
             "mobile.orientation_lock is ignored on desktop targets".to_string(),
         ]);
+        (report, category_sizes, warning)
+    }
 
+    fn assert_succeeded_report_identity(report: &BuildReport, warning: &BuildDiagnostic) {
         assert_eq!(report.target, BuildTarget::MACOS_ARM64);
         assert_eq!(report.architecture, TargetArch::Arm64);
         assert_eq!(report.configuration, BuildMode::Development);
@@ -1389,7 +1447,10 @@ mod tests {
         assert_eq!(report.outcome, BuildOutcome::Succeeded);
         assert_eq!(report.elapsed_ms, 1350);
         assert!(report.errors.is_empty());
-        assert_eq!(report.warnings, vec![warning]);
+        assert_eq!(report.warnings, vec![warning.clone()]);
+    }
+
+    fn assert_succeeded_report_payload(report: &BuildReport, category_sizes: &[SizeCategoryEntry]) {
         assert_eq!(
             report.output_location,
             Some(PathBuf::from("/tmp/unitas-builds/SpaceRunner"))
@@ -1399,7 +1460,7 @@ mod tests {
             Some(PathBuf::from("/tmp/unitas-builds/SpaceRunner/SpaceRunner"))
         );
         assert_eq!(report.total_size_bytes, 13056);
-        assert_eq!(report.category_sizes, category_sizes);
+        assert_eq!(report.category_sizes.as_slice(), category_sizes);
         assert_eq!(report.major_contributors.len(), 3);
         assert_eq!(report.major_contributors[0].path, "SpaceRunner");
         assert_eq!(
@@ -1415,9 +1476,10 @@ mod tests {
             report.unsupported_behaviors,
             vec!["mobile.orientation_lock is ignored on desktop targets".to_string()]
         );
+    }
 
-        let json = report.to_json();
-        for required_key in [
+    fn required_report_json_keys() -> Vec<&'static str> {
+        vec![
             "\"target\"",
             "\"architecture\"",
             "\"configuration\"",
@@ -1439,41 +1501,14 @@ mod tests {
             "\"major_contributors\"",
             "\"development_diagnostics_included\"",
             "\"unsupported_behaviors\"",
-        ] {
-            assert!(
-                json.contains(required_key),
-                "missing key {required_key} in JSON"
-            );
-        }
-
-        let round_tripped = BuildReport::from_json(&json)?;
-        assert_eq!(round_tripped, report);
-        Ok(())
+        ]
     }
 
     #[test]
     fn succeeded_report_stamps_build_identifier_and_assets_from_the_staged_manifest(
     ) -> Result<(), Box<dyn std::error::Error>> {
-        let output_dir = std::env::temp_dir().join(format!(
-            "unitas-build-report-tests/stamped_report_{}",
-            std::process::id()
-        ));
-        if output_dir.exists() {
-            std::fs::remove_dir_all(&output_dir)?;
-        }
-        std::fs::create_dir_all(&output_dir)?;
-        let scene = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("tests")
-            .join("fixtures")
-            .join("scene_alpha.unity");
-        let config = BuildConfiguration::new(
-            vec![scene],
-            "Unitas",
-            "StampedGame",
-            "com.unitas.stamped",
-            "1.0.0",
-            BuildTarget::MACOS_ARM64,
-        );
+        let output_dir = stamped_report_output_dir()?;
+        let config = stamped_report_config();
         let staged = stage_bundle_for_host(&config, &output_dir, Some(BuildTarget::MACOS_ARM64))?;
 
         let report = BuildReport::succeeded(
@@ -1513,6 +1548,33 @@ mod tests {
         assert_eq!(round_tripped, report);
         let _ = std::fs::remove_dir_all(&output_dir);
         Ok(())
+    }
+
+    fn stamped_report_output_dir() -> Result<PathBuf, Box<dyn std::error::Error>> {
+        let output_dir = std::env::temp_dir().join(format!(
+            "unitas-build-report-tests/stamped_report_{}",
+            std::process::id()
+        ));
+        if output_dir.exists() {
+            std::fs::remove_dir_all(&output_dir)?;
+        }
+        std::fs::create_dir_all(&output_dir)?;
+        Ok(output_dir)
+    }
+
+    fn stamped_report_config() -> BuildConfiguration {
+        let scene = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests")
+            .join("fixtures")
+            .join("scene_alpha.unity");
+        BuildConfiguration::new(
+            vec![scene],
+            "Unitas",
+            "StampedGame",
+            "com.unitas.stamped",
+            "1.0.0",
+            BuildTarget::MACOS_ARM64,
+        )
     }
 
     #[test]

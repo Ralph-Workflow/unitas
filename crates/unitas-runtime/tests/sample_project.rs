@@ -113,6 +113,37 @@ fn scene_project_settings_carry_the_loader_values() -> TestResult {
     Ok(())
 }
 
+const EXPECTED_SAMPLE_ROOTS: &[&str] = &[
+    "Main Camera",
+    "Directional Light",
+    "Arena",
+    "Pickups",
+    "PlayerBall",
+    "CollectBurst",
+    "LandingDust",
+    "ArenaProp",
+    "CollectChime",
+    "BoostPad",
+    "HudCanvas",
+    "ScoreLabel",
+    "ComboLabel",
+    "TimerLabel",
+    "TitlePanel",
+    "TitleText",
+    "PlayButton",
+    "QuitButton",
+    "ResultsPanel",
+    "ResultsTitle",
+    "ResultsTime",
+    "ResultsScore",
+    "RetryButton",
+    "ArenaSelectButton",
+    "PausePanel",
+    "PauseTitle",
+    "PauseStatus",
+    "ResumeButton",
+];
+
 #[test]
 fn scene_hierarchy_matches_the_expected_tree() -> TestResult {
     let runtime = loaded_scene()?;
@@ -126,42 +157,7 @@ fn scene_hierarchy_matches_the_expected_tree() -> TestResult {
         .iter()
         .filter_map(|id| graph.entity(*id).map(|entity| entity.name.as_str()))
         .collect();
-    assert_eq!(
-        root_names,
-        vec![
-            "Main Camera",
-            "Directional Light",
-            "Arena",
-            "Pickups",
-            "PlayerBall",
-            "CollectBurst",
-            "LandingDust",
-            "ArenaProp",
-            "CollectChime",
-            "BoostPad",
-            // The uGUI hierarchy hangs off RectTransforms, not Transforms, so
-            // the scene graph carries the canvas objects as roots of their
-            // own while the canvas binding keeps their real hierarchy.
-            "HudCanvas",
-            "ScoreLabel",
-            "ComboLabel",
-            "TimerLabel",
-            "TitlePanel",
-            "TitleText",
-            "PlayButton",
-            "QuitButton",
-            "ResultsPanel",
-            "ResultsTitle",
-            "ResultsTime",
-            "ResultsScore",
-            "RetryButton",
-            "ArenaSelectButton",
-            "PausePanel",
-            "PauseTitle",
-            "PauseStatus",
-            "ResumeButton"
-        ]
-    );
+    assert_eq!(root_names, EXPECTED_SAMPLE_ROOTS);
 
     let arena = entity_named(graph, "Arena")?;
     assert_eq!(

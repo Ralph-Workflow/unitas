@@ -102,6 +102,38 @@ fn build_humanoid_clip() -> AnimationClip {
     )
 }
 
+fn assert_matching_muscles(short_pose: &HumanPose, tall_pose: &HumanPose) {
+    for channel in MuscleChannel::ALL {
+        let short_muscle = short_pose.muscle(channel);
+        let tall_muscle = tall_pose.muscle(channel);
+        assert!(
+            (short_muscle - tall_muscle).abs() < 1e-6,
+            "ANI-002 outcome 31: muscle {channel:?} differed: {short_muscle} vs {tall_muscle}"
+        );
+    }
+}
+
+fn find_bone<'a>(
+    bones: &'a [BoneTransform],
+    bone: HumanBone,
+    missing: &'static str,
+) -> Result<&'a BoneTransform, Box<dyn Error>> {
+    Ok(bones.iter().find(|b| b.bone == bone).ok_or(missing)?)
+}
+
+fn assert_roundtrip_pose(short_pose: &HumanPose) -> Result<(), Box<dyn Error>> {
+    let mut roundtrip_handler =
+        HumanPoseHandler::new(build_proportioned_avatar("Roundtrip", 1.4, 40.0, 100.0));
+    roundtrip_handler.set_human_pose(short_pose);
+    for channel in MuscleChannel::ALL {
+        assert!(
+            (roundtrip_handler.human_pose().muscle(channel) - short_pose.muscle(channel)).abs()
+                < 1e-5
+        );
+    }
+    Ok(())
+}
+
 #[test]
 fn ani_002_outcome_31_humanoid_clip_on_two_differently_proportioned_avatars_yields_equal_muscles(
 ) -> Result<(), Box<dyn Error>> {
@@ -120,14 +152,7 @@ fn ani_002_outcome_31_humanoid_clip_on_two_differently_proportioned_avatars_yiel
     let short_pose = short_handler.human_pose();
     let tall_pose = tall_handler.human_pose();
 
-    for channel in MuscleChannel::ALL {
-        let short_muscle = short_pose.muscle(channel);
-        let tall_muscle = tall_pose.muscle(channel);
-        assert!(
-            (short_muscle - tall_muscle).abs() < 1e-6,
-            "ANI-002 outcome 31: muscle {channel:?} differed: {short_muscle} vs {tall_muscle}"
-        );
-    }
+    assert_matching_muscles(short_pose, tall_pose);
 
     assert!((short_pose.muscle(MuscleChannel::SpineFrontBack) - 0.25).abs() < 1e-5);
     assert!((short_pose.muscle(MuscleChannel::LeftArmDownUp) - 0.4).abs() < 1e-5);
@@ -136,39 +161,20 @@ fn ani_002_outcome_31_humanoid_clip_on_two_differently_proportioned_avatars_yiel
     let short_bones = short_handler.bone_transforms();
     let tall_bones = tall_handler.bone_transforms();
 
-    let short_spine: &BoneTransform = short_bones
-        .iter()
-        .find(|b| b.bone == HumanBone::Spine)
-        .ok_or("missing short spine")?;
-    let tall_spine: &BoneTransform = tall_bones
-        .iter()
-        .find(|b| b.bone == HumanBone::Spine)
-        .ok_or("missing tall spine")?;
+    let short_spine = find_bone(short_bones, HumanBone::Spine, "missing short spine")?;
+    let tall_spine = find_bone(tall_bones, HumanBone::Spine, "missing tall spine")?;
 
     assert_eq!(short_spine.rotation, tall_spine.rotation);
     assert!((short_spine.translation[1] - 0.45).abs() < 1e-5);
     assert!((tall_spine.translation[1] - 0.45 * 1.8).abs() < 1e-5);
 
-    let short_hips = short_bones
-        .iter()
-        .find(|b| b.bone == HumanBone::Hips)
-        .ok_or("missing short hips")?;
-    let tall_hips = tall_bones
-        .iter()
-        .find(|b| b.bone == HumanBone::Hips)
-        .ok_or("missing tall hips")?;
+    let short_hips = find_bone(short_bones, HumanBone::Hips, "missing short hips")?;
+    let tall_hips = find_bone(tall_bones, HumanBone::Hips, "missing tall hips")?;
     assert!((short_hips.translation[1] - 1.1).abs() < 1e-5);
     assert!((tall_hips.translation[1] - 1.1 * 1.8).abs() < 1e-5);
 
-    let mut roundtrip_handler =
-        HumanPoseHandler::new(build_proportioned_avatar("Roundtrip", 1.4, 40.0, 100.0));
-    roundtrip_handler.set_human_pose(short_pose);
-    for channel in MuscleChannel::ALL {
-        assert!(
-            (roundtrip_handler.human_pose().muscle(channel) - short_pose.muscle(channel)).abs()
-                < 1e-5
-        );
-    }
+    assert_roundtrip_pose(short_pose)?;
+
     Ok(())
 }
 
@@ -302,10 +308,8 @@ fn invalid_avatar_definition_reports_missing_required_bones_and_duplicate_paths(
     )));
 }
 
-#[test]
-fn pose_to_muscles_retarget_and_muscles_to_pose_roundtrip_across_different_avatars(
-) -> Result<(), Box<dyn Error>> {
-    let source_avatar: Avatar = build_proportioned_avatar("SourceAvatar", 1.0, 40.0, 100.0)
+fn build_source_avatar() -> Avatar {
+    build_proportioned_avatar("SourceAvatar", 1.0, 40.0, 100.0)
         .with_bone(
             HumanoidBoneMapping::new(HumanoidBone::LeftShoulder, "Root/Hips/Spine/LeftShoulder")
                 .with_bind_translation([-0.1, 0.3, 0.0]),
@@ -313,8 +317,11 @@ fn pose_to_muscles_retarget_and_muscles_to_pose_roundtrip_across_different_avata
         .with_bone(
             HumanoidBoneMapping::new(HumanoidBone::RightShoulder, "Root/Hips/Spine/RightShoulder")
                 .with_bind_translation([0.1, 0.3, 0.0]),
-        );
-    let target_avatar: Avatar = build_proportioned_avatar("TargetAvatar", 2.0, 40.0, 100.0)
+        )
+}
+
+fn build_target_avatar() -> Avatar {
+    build_proportioned_avatar("TargetAvatar", 2.0, 40.0, 100.0)
         .with_bone(
             HumanoidBoneMapping::new(HumanoidBone::LeftShoulder, "Root/Hips/Spine/LeftShoulder")
                 .with_bind_translation([-0.2, 0.6, 0.0]),
@@ -322,7 +329,25 @@ fn pose_to_muscles_retarget_and_muscles_to_pose_roundtrip_across_different_avata
         .with_bone(
             HumanoidBoneMapping::new(HumanoidBone::RightShoulder, "Root/Hips/Spine/RightShoulder")
                 .with_bind_translation([0.2, 0.6, 0.0]),
-        );
+        )
+}
+
+fn find_hips_transform<'a>(
+    transforms: &'a [(String, Transform)],
+    missing: &'static str,
+) -> Result<&'a Transform, Box<dyn Error>> {
+    Ok(transforms
+        .iter()
+        .find(|(path, _)| path == "Root/Hips")
+        .map(|(_, tr)| tr)
+        .ok_or(missing)?)
+}
+
+#[test]
+fn pose_to_muscles_retarget_and_muscles_to_pose_roundtrip_across_different_avatars(
+) -> Result<(), Box<dyn Error>> {
+    let source_avatar: Avatar = build_source_avatar();
+    let target_avatar: Avatar = build_target_avatar();
 
     let clip = build_humanoid_clip();
     let clip_pose: HumanoidPose = sample_humanoid_clip(&clip, 0.5);
@@ -351,16 +376,10 @@ fn pose_to_muscles_retarget_and_muscles_to_pose_roundtrip_across_different_avata
     }
 
     let target_local_transforms = muscles_to_pose(&target_avatar, &retargeted_pose);
-    let source_hips = source_local_transforms
-        .iter()
-        .find(|(path, _)| path == "Root/Hips")
-        .map(|(_, tr)| tr)
-        .ok_or("missing source hips transform")?;
-    let target_hips = target_local_transforms
-        .iter()
-        .find(|(path, _)| path == "Root/Hips")
-        .map(|(_, tr)| tr)
-        .ok_or("missing target hips transform")?;
+    let source_hips =
+        find_hips_transform(&source_local_transforms, "missing source hips transform")?;
+    let target_hips =
+        find_hips_transform(&target_local_transforms, "missing target hips transform")?;
 
     assert!((source_hips.translation[1] - 1.1).abs() < 1e-4);
     assert!((target_hips.translation[1] - 2.2).abs() < 1e-4);

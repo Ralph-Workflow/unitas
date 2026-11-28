@@ -394,8 +394,12 @@ impl NavMeshAgent {
         }
 
         let previous = self.next_position;
-        let mut budget = self.speed * delta_seconds;
-        let mut current = previous;
+        let current = self.advance_along_corners(previous, self.speed * delta_seconds);
+        self.apply_agent_displacement(previous, current, delta_seconds);
+    }
+
+    fn advance_along_corners(&mut self, start: [f64; 3], mut budget: f64) -> [f64; 3] {
+        let mut current = start;
         while budget > 0.0 && self.corner_index < self.corners.len() {
             if let Some(traversal) = self
                 .link_traversals
@@ -413,18 +417,13 @@ impl NavMeshAgent {
             let target = self.corners[self.corner_index];
             let offset = subtract(target, current);
             let length = vector_length(offset);
-            if length <= POSITION_EPSILON {
-                let reached_index = self.corner_index;
-                self.corner_index += 1;
-                self.after_corner_reached(reached_index);
-                if self.waiting_on_off_mesh_link {
-                    break;
-                }
-                continue;
-            }
             if length <= budget {
-                current = target;
-                budget -= length;
+                current = if length <= POSITION_EPSILON {
+                    current
+                } else {
+                    target
+                };
+                budget = (budget - length).max(0.0);
                 let reached_index = self.corner_index;
                 self.corner_index += 1;
                 self.after_corner_reached(reached_index);
@@ -443,7 +442,15 @@ impl NavMeshAgent {
                 budget = 0.0;
             }
         }
+        current
+    }
 
+    fn apply_agent_displacement(
+        &mut self,
+        previous: [f64; 3],
+        current: [f64; 3],
+        delta_seconds: f64,
+    ) {
         self.next_position = current;
         let displacement = subtract(current, previous);
         self.velocity = [
@@ -479,82 +486,13 @@ impl NavMeshAgent {
         let count = agents.len();
         for i in 0..count {
             for j in (i + 1)..count {
-                let pos_i = agents[i].next_position;
-                let pos_j = agents[j].next_position;
-                let min_dist = agents[i].radius.max(0.0) + agents[j].radius.max(0.0);
-                if min_dist <= POSITION_EPSILON {
-                    continue;
-                }
-                let mut diff = [pos_j[0] - pos_i[0], 0.0, pos_j[2] - pos_i[2]];
-                let mut dist = vector_length(diff);
-                if dist >= min_dist {
-                    continue;
-                }
-                if dist <= POSITION_EPSILON {
-                    let travel_i = subtract(pos_i, previous_positions[i]);
-                    let len_i = (travel_i[0] * travel_i[0] + travel_i[2] * travel_i[2]).sqrt();
-                    diff = if len_i > POSITION_EPSILON {
-                        [-travel_i[2] / len_i, 0.0, travel_i[0] / len_i]
-                    } else {
-                        [0.0, 0.0, 1.0]
-                    };
-                    dist = 0.0;
-                } else {
-                    diff = [diff[0] / dist, 0.0, diff[2] / dist];
-                }
-                let overlap = min_dist - dist;
-                let prio_i = agents[i].avoidance_priority;
-                let prio_j = agents[j].avoidance_priority;
-                let (weight_i, weight_j) = match prio_i.cmp(&prio_j) {
-                    Ordering::Less => (0.0, 1.0),
-                    Ordering::Greater => (1.0, 0.0),
-                    Ordering::Equal => (0.5, 0.5),
-                };
-
-                let lateral = [-diff[2], 0.0, diff[0]];
-                let vel_i = subtract(pos_i, previous_positions[i]);
-                let vel_j = subtract(pos_j, previous_positions[j]);
-                let head_on = dot(vel_i, diff) > 0.0 && dot(vel_j, diff) < 0.0;
-                let push_dir = if head_on {
-                    [
-                        diff[0] * 0.6 + lateral[0] * 0.8,
-                        0.0,
-                        diff[2] * 0.6 + lateral[2] * 0.8,
-                    ]
-                } else {
-                    diff
-                };
-                let push_len = vector_length(push_dir).max(POSITION_EPSILON);
-                let unit_push = [push_dir[0] / push_len, 0.0, push_dir[2] / push_len];
-
-                if weight_i > 0.0 {
-                    let candidate_i = [
-                        agents[i].next_position[0] - unit_push[0] * overlap * weight_i,
-                        agents[i].next_position[1],
-                        agents[i].next_position[2] - unit_push[2] * overlap * weight_i,
-                    ];
-                    apply_avoidance_displacement(
-                        &mut agents[i],
-                        navmesh,
-                        previous_positions[i],
-                        candidate_i,
-                        delta_seconds,
-                    );
-                }
-                if weight_j > 0.0 {
-                    let candidate_j = [
-                        agents[j].next_position[0] + unit_push[0] * overlap * weight_j,
-                        agents[j].next_position[1],
-                        agents[j].next_position[2] + unit_push[2] * overlap * weight_j,
-                    ];
-                    apply_avoidance_displacement(
-                        &mut agents[j],
-                        navmesh,
-                        previous_positions[j],
-                        candidate_j,
-                        delta_seconds,
-                    );
-                }
+                resolve_agent_pair_avoidance(
+                    agents,
+                    navmesh,
+                    &previous_positions,
+                    (i, j),
+                    delta_seconds,
+                );
             }
         }
     }
@@ -580,6 +518,109 @@ impl NavMeshAgent {
             }
         }
     }
+}
+
+fn resolve_agent_pair_avoidance(
+    agents: &mut [NavMeshAgent],
+    navmesh: &NavMesh,
+    previous_positions: &[[f64; 3]],
+    pair: (usize, usize),
+    delta_seconds: f64,
+) {
+    let (i, j) = pair;
+    let pos_i = agents[i].next_position;
+    let pos_j = agents[j].next_position;
+    let min_dist = agents[i].radius.max(0.0) + agents[j].radius.max(0.0);
+    if min_dist <= POSITION_EPSILON {
+        return;
+    }
+    let Some((overlap, unit_push)) = compute_avoidance_push(
+        (pos_i, previous_positions[i]),
+        (pos_j, previous_positions[j]),
+        min_dist,
+    ) else {
+        return;
+    };
+    let (weight_i, weight_j) = match agents[i]
+        .avoidance_priority
+        .cmp(&agents[j].avoidance_priority)
+    {
+        Ordering::Less => (0.0, 1.0),
+        Ordering::Greater => (1.0, 0.0),
+        Ordering::Equal => (0.5, 0.5),
+    };
+    if weight_i > 0.0 {
+        let candidate_i = [
+            pos_i[0] - unit_push[0] * overlap * weight_i,
+            pos_i[1],
+            pos_i[2] - unit_push[2] * overlap * weight_i,
+        ];
+        apply_avoidance_displacement(
+            &mut agents[i],
+            navmesh,
+            previous_positions[i],
+            candidate_i,
+            delta_seconds,
+        );
+    }
+    if weight_j > 0.0 {
+        let candidate_j = [
+            pos_j[0] + unit_push[0] * overlap * weight_j,
+            pos_j[1],
+            pos_j[2] + unit_push[2] * overlap * weight_j,
+        ];
+        apply_avoidance_displacement(
+            &mut agents[j],
+            navmesh,
+            previous_positions[j],
+            candidate_j,
+            delta_seconds,
+        );
+    }
+}
+
+fn compute_avoidance_push(
+    agent_i: ([f64; 3], [f64; 3]),
+    agent_j: ([f64; 3], [f64; 3]),
+    min_dist: f64,
+) -> Option<(f64, [f64; 3])> {
+    let (pos_i, prev_i) = agent_i;
+    let (pos_j, prev_j) = agent_j;
+    let mut diff = [pos_j[0] - pos_i[0], 0.0, pos_j[2] - pos_i[2]];
+    let mut dist = vector_length(diff);
+    if dist >= min_dist {
+        return None;
+    }
+    if dist <= POSITION_EPSILON {
+        let travel_i = subtract(pos_i, prev_i);
+        let len_i = (travel_i[0] * travel_i[0] + travel_i[2] * travel_i[2]).sqrt();
+        diff = if len_i > POSITION_EPSILON {
+            [-travel_i[2] / len_i, 0.0, travel_i[0] / len_i]
+        } else {
+            [0.0, 0.0, 1.0]
+        };
+        dist = 0.0;
+    } else {
+        diff = [diff[0] / dist, 0.0, diff[2] / dist];
+    }
+    let lateral = [-diff[2], 0.0, diff[0]];
+    let vel_i = subtract(pos_i, prev_i);
+    let vel_j = subtract(pos_j, prev_j);
+    let head_on = dot(vel_i, diff) > 0.0 && dot(vel_j, diff) < 0.0;
+    let push_dir = if head_on {
+        [
+            diff[0] * 0.6 + lateral[0] * 0.8,
+            0.0,
+            diff[2] * 0.6 + lateral[2] * 0.8,
+        ]
+    } else {
+        diff
+    };
+    let push_len = vector_length(push_dir).max(POSITION_EPSILON);
+    Some((
+        min_dist - dist,
+        [push_dir[0] / push_len, 0.0, push_dir[2] / push_len],
+    ))
 }
 
 fn apply_avoidance_displacement(

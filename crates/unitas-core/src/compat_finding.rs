@@ -179,10 +179,7 @@ pub(super) fn sanitize_content_identity(content: &ContentIdentity) -> ContentIde
     }
 }
 
-pub(super) fn validate_finding_input(
-    input: FindingInput,
-    existing: &[Finding],
-) -> Result<Finding, FindingSubmissionError> {
+fn validate_finding_header(input: &FindingInput) -> Result<String, FindingSubmissionError> {
     let feature_id = input.feature_id.trim().to_string();
     if feature_id.is_empty() {
         return Err(FindingSubmissionError::EmptyFeatureId);
@@ -197,10 +194,20 @@ pub(super) fn validate_finding_input(
             submitted: input.tier,
         });
     }
+    Ok(feature_id)
+}
+
+fn validate_finding_content(
+    input: &FindingInput,
+) -> Result<ContentIdentity, FindingSubmissionError> {
     let content = sanitize_content_identity(&input.content);
     if !content.names_content() {
         return Err(FindingSubmissionError::MissingContentIdentity);
     }
+    Ok(content)
+}
+
+fn validate_finding_text(input: &FindingInput) -> Result<(String, String), FindingSubmissionError> {
     let behavior = input.behavior.trim().to_string();
     if behavior.is_empty() {
         return Err(FindingSubmissionError::EmptyBehavior);
@@ -209,41 +216,46 @@ pub(super) fn validate_finding_input(
     if observable_consequence.is_empty() {
         return Err(FindingSubmissionError::EmptyObservableConsequence);
     }
-    let relied_upon_unity_differences: Vec<String> = input
-        .relied_upon_unity_differences
-        .into_iter()
-        .map(|diff| diff.trim().to_string())
-        .filter(|diff| !diff.is_empty())
-        .collect();
-    if matches!(input.tier, Tier::Exact | Tier::Semantic)
-        && input.state == CompatibilityState::Supported
+    Ok((behavior, observable_consequence))
+}
+
+fn validate_finding_consistency(
+    tier: Tier,
+    state: CompatibilityState,
+    feature_id: &str,
+    behavior: &str,
+    observable_consequence: &str,
+    relied_upon_unity_differences: &[String],
+) -> Result<(), FindingSubmissionError> {
+    if matches!(tier, Tier::Exact | Tier::Semantic)
+        && state == CompatibilityState::Supported
         && !relied_upon_unity_differences.is_empty()
     {
         return Err(
             FindingSubmissionError::SupportedFindingClaimsUnityDifference {
-                feature_id,
-                tier: input.tier,
+                feature_id: feature_id.to_string(),
+                tier,
             },
         );
     }
-    if input.tier == Tier::Familiar
+    if tier == Tier::Familiar
         && matches!(
-            input.state,
+            state,
             CompatibilityState::PartiallySupported | CompatibilityState::Unsupported
         )
         && relied_upon_unity_differences.is_empty()
     {
         return Err(FindingSubmissionError::MissingReliedUponUnityDifference {
-            feature_id,
-            tier: input.tier,
-            state: input.state,
+            feature_id: feature_id.to_string(),
+            tier,
+            state,
         });
     }
     let lower_consequence = observable_consequence.to_ascii_lowercase();
     let lower_behavior = behavior.to_ascii_lowercase();
-    if input.tier == Tier::Native
+    if tier == Tier::Native
         && matches!(
-            input.state,
+            state,
             CompatibilityState::PartiallySupported | CompatibilityState::Unsupported
         )
         && ((lower_consequence.contains("pixel") && lower_consequence.contains("unity screenshot"))
@@ -251,10 +263,36 @@ pub(super) fn validate_finding_input(
     {
         return Err(
             FindingSubmissionError::UnityScreenshotPixelDifferenceIsNotCompatibilityFailure {
-                feature_id,
+                feature_id: feature_id.to_string(),
             },
         );
     }
+    Ok(())
+}
+
+pub(super) fn validate_finding_input(
+    input: FindingInput,
+    existing: &[Finding],
+) -> Result<Finding, FindingSubmissionError> {
+    let feature_id = validate_finding_header(&input)?;
+    let content = validate_finding_content(&input)?;
+    let (behavior, observable_consequence) = validate_finding_text(&input)?;
+    let tier = input.tier;
+    let state = input.state;
+    let relied_upon_unity_differences: Vec<String> = input
+        .relied_upon_unity_differences
+        .into_iter()
+        .map(|diff| diff.trim().to_string())
+        .filter(|diff| !diff.is_empty())
+        .collect();
+    validate_finding_consistency(
+        tier,
+        state,
+        &feature_id,
+        &behavior,
+        &observable_consequence,
+        &relied_upon_unity_differences,
+    )?;
     let is_duplicate = existing.iter().any(|item| {
         item.feature_id == feature_id && sanitize_content_identity(&item.content) == content
     });
@@ -266,8 +304,8 @@ pub(super) fn validate_finding_input(
     }
     Ok(Finding {
         feature_id,
-        tier: input.tier,
-        state: input.state,
+        tier,
+        state,
         content,
         behavior,
         relied_upon_unity_differences,

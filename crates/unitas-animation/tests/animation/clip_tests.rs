@@ -1,7 +1,7 @@
 use unitas_animation::curve::{AssetReference, ObjectReferenceCurve, ObjectReferenceKey};
 use unitas_animation::{
-    AnimatedValue, AnimationClip, AnimationEvent, CurveBinding, CurveBindingTarget, FloatCurve,
-    Keyframe, PropertyCurve, WrapMode,
+    AnimatedValue, AnimationClip, AnimationEvent, ClipSample, CurveBinding, CurveBindingTarget,
+    FloatCurve, Keyframe, PropertyCurve, TransformChannel, TransformProperty, WrapMode,
 };
 
 const CLIP_OBJECT_GUID_A: u128 = 0x0123_4567_89ab_cdef_0123_4567_89ab_cdef;
@@ -9,6 +9,76 @@ const CLIP_OBJECT_GUID_B: u128 = 0xfedc_ba98_7654_3210_fedc_ba98_7654_3210;
 
 fn make_linear_float_curve(t0: f32, v0: f32, t1: f32, v1: f32) -> FloatCurve {
     FloatCurve::new(vec![Keyframe::linear(t0, v0), Keyframe::linear(t1, v1)])
+}
+
+type TransformPropertyCase = (&'static str, Option<(TransformProperty, TransformChannel)>);
+
+fn transform_position_cases() -> Vec<TransformPropertyCase> {
+    vec![
+        (
+            "localPosition",
+            Some((TransformProperty::LocalPosition, TransformChannel::All)),
+        ),
+        (
+            "m_LocalPosition.x",
+            Some((TransformProperty::LocalPosition, TransformChannel::X)),
+        ),
+        (
+            "localPosition.y",
+            Some((TransformProperty::LocalPosition, TransformChannel::Y)),
+        ),
+        (
+            "position.z",
+            Some((TransformProperty::LocalPosition, TransformChannel::Z)),
+        ),
+    ]
+}
+
+fn transform_rotation_cases() -> Vec<TransformPropertyCase> {
+    vec![
+        (
+            "localRotation",
+            Some((TransformProperty::LocalRotation, TransformChannel::All)),
+        ),
+        (
+            "localRotation.x",
+            Some((TransformProperty::LocalRotation, TransformChannel::X)),
+        ),
+        (
+            "localRotation.y",
+            Some((TransformProperty::LocalRotation, TransformChannel::Y)),
+        ),
+        (
+            "localRotation.z",
+            Some((TransformProperty::LocalRotation, TransformChannel::Z)),
+        ),
+        (
+            "m_LocalRotation.w",
+            Some((TransformProperty::LocalRotation, TransformChannel::W)),
+        ),
+    ]
+}
+
+fn transform_scale_cases() -> Vec<TransformPropertyCase> {
+    vec![
+        (
+            "localScale",
+            Some((TransformProperty::LocalScale, TransformChannel::All)),
+        ),
+        (
+            "localScale.x",
+            Some((TransformProperty::LocalScale, TransformChannel::X)),
+        ),
+        (
+            "localScale.y",
+            Some((TransformProperty::LocalScale, TransformChannel::Y)),
+        ),
+        (
+            "scale.z",
+            Some((TransformProperty::LocalScale, TransformChannel::Z)),
+        ),
+        ("unknownProp", None),
+    ]
 }
 
 #[test]
@@ -297,62 +367,9 @@ fn whole_property_and_per_channel_bindings_coexist_and_carry_parsed_targets() {
 
 #[test]
 fn transform_property_and_channel_parsing_covers_all_transform_paths() {
-    use unitas_animation::{TransformChannel, TransformProperty};
-    let cases = [
-        (
-            "localPosition",
-            Some((TransformProperty::LocalPosition, TransformChannel::All)),
-        ),
-        (
-            "m_LocalPosition.x",
-            Some((TransformProperty::LocalPosition, TransformChannel::X)),
-        ),
-        (
-            "localPosition.y",
-            Some((TransformProperty::LocalPosition, TransformChannel::Y)),
-        ),
-        (
-            "position.z",
-            Some((TransformProperty::LocalPosition, TransformChannel::Z)),
-        ),
-        (
-            "localRotation",
-            Some((TransformProperty::LocalRotation, TransformChannel::All)),
-        ),
-        (
-            "localRotation.x",
-            Some((TransformProperty::LocalRotation, TransformChannel::X)),
-        ),
-        (
-            "localRotation.y",
-            Some((TransformProperty::LocalRotation, TransformChannel::Y)),
-        ),
-        (
-            "localRotation.z",
-            Some((TransformProperty::LocalRotation, TransformChannel::Z)),
-        ),
-        (
-            "m_LocalRotation.w",
-            Some((TransformProperty::LocalRotation, TransformChannel::W)),
-        ),
-        (
-            "localScale",
-            Some((TransformProperty::LocalScale, TransformChannel::All)),
-        ),
-        (
-            "localScale.x",
-            Some((TransformProperty::LocalScale, TransformChannel::X)),
-        ),
-        (
-            "localScale.y",
-            Some((TransformProperty::LocalScale, TransformChannel::Y)),
-        ),
-        (
-            "scale.z",
-            Some((TransformProperty::LocalScale, TransformChannel::Z)),
-        ),
-        ("unknownProp", None),
-    ];
+    let mut cases = transform_position_cases();
+    cases.extend(transform_rotation_cases());
+    cases.extend(transform_scale_cases());
     for (prop, expected) in cases {
         let target = CurveBindingTarget::transform("", prop);
         assert_eq!(target.parse_transform_property(), expected);
@@ -478,9 +495,8 @@ fn ani_001_outcome_27_reverse_playback_and_preview_play_mode_player_parity() {
     );
 }
 
-#[test]
-fn clip_object_reference_curve_steps_like_a_float_curve_across_the_loop_boundary() {
-    let float_clip = AnimationClip::new(
+fn make_stepped_float_loop_clip() -> AnimationClip {
+    AnimationClip::new(
         "FloatLoop",
         2.0,
         60.0,
@@ -493,8 +509,11 @@ fn clip_object_reference_curve_steps_like_a_float_curve_across_the_loop_boundary
             ]),
         )],
         Vec::new(),
-    );
-    let object_clip = AnimationClip::new(
+    )
+}
+
+fn make_object_reference_loop_clip() -> AnimationClip {
+    AnimationClip::new(
         "SpriteLoop",
         2.0,
         60.0,
@@ -507,7 +526,20 @@ fn clip_object_reference_curve_steps_like_a_float_curve_across_the_loop_boundary
             ])),
         )],
         Vec::new(),
+    )
+}
+
+fn assert_object_reference_value(sample: &ClipSample, expected: AssetReference) {
+    assert_eq!(
+        sample.bindings[0].value,
+        AnimatedValue::ObjectReference(expected)
     );
+}
+
+#[test]
+fn clip_object_reference_curve_steps_like_a_float_curve_across_the_loop_boundary() {
+    let float_clip = make_stepped_float_loop_clip();
+    let object_clip = make_object_reference_loop_clip();
 
     let float_at = |time: f32| float_clip.sample(time, time);
     let object_at = |time: f32| object_clip.sample(time, time);
@@ -516,33 +548,33 @@ fn clip_object_reference_curve_steps_like_a_float_curve_across_the_loop_boundary
     let object_start = object_at(0.0);
     assert!((float_start.wrapped_time - object_start.wrapped_time).abs() < 1e-6);
     assert_eq!(float_start.bindings[0].value, AnimatedValue::Float(1.0));
-    assert_eq!(
-        object_start.bindings[0].value,
-        AnimatedValue::ObjectReference(AssetReference::new(CLIP_OBJECT_GUID_A, 21300000))
+    assert_object_reference_value(
+        &object_start,
+        AssetReference::new(CLIP_OBJECT_GUID_A, 21300000),
     );
 
     let float_mid = float_at(0.5);
     let object_mid = object_at(0.5);
     assert_eq!(float_mid.bindings[0].value, AnimatedValue::Float(1.0));
-    assert_eq!(
-        object_mid.bindings[0].value,
-        AnimatedValue::ObjectReference(AssetReference::new(CLIP_OBJECT_GUID_A, 21300000))
+    assert_object_reference_value(
+        &object_mid,
+        AssetReference::new(CLIP_OBJECT_GUID_A, 21300000),
     );
 
     let float_switch = float_at(1.0);
     let object_switch = object_at(1.0);
     assert_eq!(float_switch.bindings[0].value, AnimatedValue::Float(2.0));
-    assert_eq!(
-        object_switch.bindings[0].value,
-        AnimatedValue::ObjectReference(AssetReference::new(CLIP_OBJECT_GUID_B, 21300001))
+    assert_object_reference_value(
+        &object_switch,
+        AssetReference::new(CLIP_OBJECT_GUID_B, 21300001),
     );
 
     let float_hold = float_at(1.5);
     let object_hold = object_at(1.5);
     assert_eq!(float_hold.bindings[0].value, AnimatedValue::Float(2.0));
-    assert_eq!(
-        object_hold.bindings[0].value,
-        AnimatedValue::ObjectReference(AssetReference::new(CLIP_OBJECT_GUID_B, 21300001))
+    assert_object_reference_value(
+        &object_hold,
+        AssetReference::new(CLIP_OBJECT_GUID_B, 21300001),
     );
 
     let float_wrapped = float_at(2.0);
@@ -550,9 +582,9 @@ fn clip_object_reference_curve_steps_like_a_float_curve_across_the_loop_boundary
     assert!((float_wrapped.wrapped_time - object_wrapped.wrapped_time).abs() < 1e-6);
     assert!((object_wrapped.wrapped_time - 0.0).abs() < 1e-6);
     assert_eq!(float_wrapped.bindings[0].value, AnimatedValue::Float(1.0));
-    assert_eq!(
-        object_wrapped.bindings[0].value,
-        AnimatedValue::ObjectReference(AssetReference::new(CLIP_OBJECT_GUID_A, 21300000))
+    assert_object_reference_value(
+        &object_wrapped,
+        AssetReference::new(CLIP_OBJECT_GUID_A, 21300000),
     );
 }
 

@@ -73,6 +73,16 @@ fn managed_entry<'a>(
 fn packaged_app_contains_managed_payload_and_build_report() -> TestResult {
     let output_dir = test_output_dir("managed_payload")?;
     let staged = stage_roll_a_ball_bundle_for_host(&output_dir, None)?;
+    assert_staged_manifest_and_payload(&output_dir, &staged)?;
+    assert_managed_build_report(&staged)?;
+    let _ = fs::remove_dir_all(&output_dir);
+    Ok(())
+}
+
+fn assert_staged_manifest_and_payload(
+    output_dir: &Path,
+    staged: &unitas_build::StagedBundle,
+) -> TestResult {
     let manifest = &staged.manifest;
 
     assert_eq!(manifest.format_version, BUNDLE_MANIFEST_FORMAT_VERSION);
@@ -90,8 +100,6 @@ fn packaged_app_contains_managed_payload_and_build_report() -> TestResult {
     assert_eq!(reparsed.build_identifier, manifest.build_identifier);
     assert_eq!(reparsed.script_host, ScriptHost::CoreClr);
 
-    // The game assembly is compiled from the sample's scripts at build time;
-    // without the bridge tooling the stage degrades to a clear diagnostic.
     let game_entry = managed_entry(manifest, MANAGED_GAME_ASSEMBLY_FILENAME);
     match game_entry {
         Some(entry) => {
@@ -108,28 +116,36 @@ fn packaged_app_contains_managed_payload_and_build_report() -> TestResult {
         ),
     }
 
-    // The Unitas.PlayerHost payload is fixed by contract. W2 builds it in
-    // parallel; until its outputs exist every missing file must be named in
-    // the staging diagnostics instead of failing the build.
+    let host_payload_staged = assert_host_payload_or_diagnostics(manifest, &staged.diagnostics);
+    assert_application_bundle_resources(output_dir, staged, game_entry, host_payload_staged);
+    Ok(())
+}
+
+fn assert_host_payload_or_diagnostics(manifest: &BundleManifest, diagnostics: &[String]) -> bool {
     let mut host_payload_staged = true;
     for filename in PLAYER_HOST_PAYLOAD_FILENAMES {
         if managed_entry(manifest, filename).is_none() {
             host_payload_staged = false;
             assert!(
-                staged
-                    .diagnostics
+                diagnostics
                     .iter()
                     .any(|diagnostic| diagnostic.contains(filename)),
-                "missing payload '{filename}' without a diagnostic: {:?}",
-                staged.diagnostics
+                "missing payload '{filename}' without a diagnostic: {diagnostics:?}"
             );
         }
     }
+    host_payload_staged
+}
 
-    // The packaged application bundle carries the staged Managed/ payload.
+fn assert_application_bundle_resources(
+    output_dir: &Path,
+    staged: &unitas_build::StagedBundle,
+    game_entry: Option<&BundleManifestEntry>,
+    host_payload_staged: bool,
+) {
     let (bundle_root, resources_root) = match staged.application_bundle_path.as_deref() {
         Some(app_path) => (app_path, app_path.join("Contents").join("Resources")),
-        None => (output_dir.as_path(), output_dir.clone()),
+        None => (output_dir, output_dir.to_path_buf()),
     };
     if let Some(entry) = game_entry {
         assert!(resources_root.join(&entry.staged_path).is_file());
@@ -146,9 +162,10 @@ fn packaged_app_contains_managed_payload_and_build_report() -> TestResult {
         bundle_root.join("Contents").join("Info.plist").is_file()
             || output_dir.join("bundle.manifest").is_file()
     );
+}
 
-    // A build report lists the scenes, the payload sizes, and the build
-    // identifier, and round-trips through JSON.
+fn assert_managed_build_report(staged: &unitas_build::StagedBundle) -> TestResult {
+    let manifest = &staged.manifest;
     let config = sample_config()?;
     let managed_payload: Vec<SizeContributor> = manifest
         .entries
@@ -216,7 +233,6 @@ fn packaged_app_contains_managed_payload_and_build_report() -> TestResult {
     assert_eq!(parsed.build_identifier, report.build_identifier);
     assert_eq!(parsed.managed_payload, report.managed_payload);
 
-    // Reports written before the new fields existed still parse.
     let legacy_json = json.replacen(
         &format!("  \"build_identifier\": \"{}\",\n", report.build_identifier),
         "",
@@ -224,7 +240,5 @@ fn packaged_app_contains_managed_payload_and_build_report() -> TestResult {
     );
     let legacy = BuildReport::from_json(&legacy_json)?;
     assert!(legacy.build_identifier.is_empty());
-
-    let _ = fs::remove_dir_all(&output_dir);
     Ok(())
 }

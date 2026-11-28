@@ -127,22 +127,13 @@ impl Runtime {
         Ok(())
     }
 
-    pub fn set_runtime_object_transform(
+    fn update_scene_object_transform(
         &mut self,
         entity: EntityId,
         position: [f64; 3],
         rotation: [f64; 4],
         scale: [f64; 3],
-    ) -> Result<(), RuntimeError> {
-        if entity.as_u64() == 0
-            || !position.iter().all(|v| v.is_finite())
-            || !rotation.iter().all(|v| v.is_finite())
-            || !scale.iter().all(|v| v.is_finite())
-        {
-            return Err(RuntimeError::EntityNotFound(entity));
-        }
-        let mut found_offset: Option<[f32; 3]> = None;
-        let mut updated = false;
+    ) -> Option<[f32; 3]> {
         for scene in &mut self.scenes {
             if !scene.graph.contains(entity) {
                 continue;
@@ -175,19 +166,35 @@ impl Runtime {
                 transform.rotation = local_rotation;
                 transform.scale = local_scale;
             }
-            found_offset = scene
+            let found_offset = scene
                 .body_offsets
                 .iter()
                 .find(|(id, _)| *id == entity)
-                .map(|(_, offset)| *offset);
-            updated = true;
-            break;
+                .map_or([0.0; 3], |(_, offset)| *offset);
+            return Some(found_offset);
         }
-        if !updated {
+        None
+    }
+
+    pub fn set_runtime_object_transform(
+        &mut self,
+        entity: EntityId,
+        position: [f64; 3],
+        rotation: [f64; 4],
+        scale: [f64; 3],
+    ) -> Result<(), RuntimeError> {
+        if entity.as_u64() == 0
+            || !position.iter().all(|v| v.is_finite())
+            || !rotation.iter().all(|v| v.is_finite())
+            || !scale.iter().all(|v| v.is_finite())
+        {
             return Err(RuntimeError::EntityNotFound(entity));
         }
+        let Some(offset) = self.update_scene_object_transform(entity, position, rotation, scale)
+        else {
+            return Err(RuntimeError::EntityNotFound(entity));
+        };
         if self.physics.world_3d().position(entity).is_some() {
-            let offset = found_offset.unwrap_or([0.0; 3]);
             let body_pos = [
                 position[0] + f64::from(offset[0]),
                 position[1] + f64::from(offset[1]),
@@ -217,6 +224,29 @@ impl Runtime {
         Ok(())
     }
 
+    fn find_entity_world_transform(
+        &self,
+        entity: EntityId,
+    ) -> Option<(usize, unitas_core::Transform)> {
+        self.scenes
+            .iter()
+            .enumerate()
+            .find_map(|(idx, scene)| scene.graph.world_transform(entity).map(|tf| (idx, tf)))
+    }
+
+    fn record_scene_body_offset(&mut self, scene_idx: usize, entity: EntityId) {
+        if let Some(scene) = self.scenes.get_mut(scene_idx) {
+            if !scene.bodies.contains(&entity) {
+                scene.bodies.push(entity);
+            }
+            if let Some(entry) = scene.body_offsets.iter_mut().find(|(id, _)| *id == entity) {
+                entry.1 = [0.0; 3];
+            } else {
+                scene.body_offsets.push((entity, [0.0; 3]));
+            }
+        }
+    }
+
     pub fn create_runtime_body(
         &mut self,
         entity: EntityId,
@@ -239,16 +269,7 @@ impl Runtime {
             },
             _ => return Err(RuntimeError::Physics(PhysicsError::InvalidBody(entity))),
         };
-        let mut world_tf = None;
-        let mut scene_index = None;
-        for (idx, scene) in self.scenes.iter().enumerate() {
-            if let Some(tf) = scene.graph.world_transform(entity) {
-                world_tf = Some(tf);
-                scene_index = Some(idx);
-                break;
-            }
-        }
-        let Some(world_tf) = world_tf else {
+        let Some((scene_idx, world_tf)) = self.find_entity_world_transform(entity) else {
             return Err(RuntimeError::EntityNotFound(entity));
         };
         let norm_rot = normalize_rotation(world_tf.rotation);
@@ -279,18 +300,7 @@ impl Runtime {
         self.physics
             .world_3d_mut()
             .add_body_with_default_material(entity, desc)?;
-        if let Some(idx) = scene_index
-            && let Some(scene) = self.scenes.get_mut(idx)
-        {
-            if !scene.bodies.contains(&entity) {
-                scene.bodies.push(entity);
-            }
-            if let Some(entry) = scene.body_offsets.iter_mut().find(|(id, _)| *id == entity) {
-                entry.1 = [0.0; 3];
-            } else {
-                scene.body_offsets.push((entity, [0.0; 3]));
-            }
-        }
+        self.record_scene_body_offset(scene_idx, entity);
         let _ = IDENTITY_ROTATION;
         Ok(())
     }

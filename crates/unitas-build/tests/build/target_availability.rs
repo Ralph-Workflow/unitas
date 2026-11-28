@@ -56,6 +56,21 @@ fn build_report_carries_build_identifier_licensing_record_and_startup_time() -> 
         .ok_or("the build report carries no licensing record")?;
     assert!(!licensing.governing_license.is_empty());
     assert!(!licensing.license_texts.is_empty());
+    assert_startup_time_record(&staged, &report)?;
+
+    let json = report.to_json();
+    assert!(json.contains("\"startup_time\""));
+    assert!(json.contains("\"target_availability\""));
+    let parsed = BuildReport::from_json(&json)?;
+    assert_eq!(parsed, report);
+    std::fs::remove_dir_all(&workspace)?;
+    Ok(())
+}
+
+fn assert_startup_time_record(
+    staged: &unitas_build::StagedBundle,
+    report: &BuildReport,
+) -> TestResult {
     assert!(
         !report.startup_time.basis.is_empty(),
         "the build report carries no startup measurement basis"
@@ -94,13 +109,6 @@ fn build_report_carries_build_identifier_licensing_record_and_startup_time() -> 
             "a packaged player on this host is launchable, so the build measured its startup: {reason}"
         );
     }
-
-    let json = report.to_json();
-    assert!(json.contains("\"startup_time\""));
-    assert!(json.contains("\"target_availability\""));
-    let parsed = BuildReport::from_json(&json)?;
-    assert_eq!(parsed, report);
-    std::fs::remove_dir_all(&workspace)?;
     Ok(())
 }
 
@@ -233,30 +241,7 @@ fn desktop_packaging_outcome_builds_supported_target_and_records_externally_unav
     assert_eq!(results.len(), 3);
 
     for outcome in &results {
-        if outcome.is_packaged() {
-            assert_eq!(outcome.state, "packaged");
-            assert!(outcome.app_path.as_ref().is_some_and(|p| p.is_dir()));
-            assert!(outcome
-                .launch_artifact
-                .as_ref()
-                .is_some_and(|p| p.is_file()));
-            assert!(outcome.unavailable.is_none());
-        } else {
-            assert_eq!(outcome.state, "externally_unavailable");
-            let unavailable = outcome
-                .unavailable
-                .as_ref()
-                .ok_or("externally unavailable target must record precise cause")?;
-            assert!(!unavailable.tool.is_empty());
-            assert!(!unavailable.required_range.is_empty());
-            assert!(!unavailable.resolving_action.is_empty());
-            assert!(outcome.app_path.is_none());
-            assert!(outcome.launch_artifact.is_none());
-        }
-        assert!(outcome.build_report_path.is_file());
-        let target_report = BuildReport::read_from_file(&outcome.build_report_path)?;
-        assert_eq!(target_report.target, outcome.target);
-        assert_eq!(target_report.desktop_packaging.len(), 3);
+        assert_desktop_packaging_outcome(outcome)?;
     }
 
     let (_, host_report) = match unitas_build::build_project_for_host(
@@ -278,41 +263,41 @@ fn desktop_packaging_outcome_builds_supported_target_and_records_externally_unav
     Ok(())
 }
 
+fn assert_desktop_packaging_outcome(
+    outcome: &unitas_build::package::DesktopPackageOutcome,
+) -> TestResult {
+    if outcome.is_packaged() {
+        assert_eq!(outcome.state, "packaged");
+        assert!(outcome.app_path.as_ref().is_some_and(|p| p.is_dir()));
+        assert!(outcome
+            .launch_artifact
+            .as_ref()
+            .is_some_and(|p| p.is_file()));
+        assert!(outcome.unavailable.is_none());
+    } else {
+        assert_eq!(outcome.state, "externally_unavailable");
+        let unavailable = outcome
+            .unavailable
+            .as_ref()
+            .ok_or("externally unavailable target must record precise cause")?;
+        assert!(!unavailable.tool.is_empty());
+        assert!(!unavailable.required_range.is_empty());
+        assert!(!unavailable.resolving_action.is_empty());
+        assert!(outcome.app_path.is_none());
+        assert!(outcome.launch_artifact.is_none());
+    }
+    assert!(outcome.build_report_path.is_file());
+    let target_report = BuildReport::read_from_file(&outcome.build_report_path)?;
+    assert_eq!(target_report.target, outcome.target);
+    assert_eq!(target_report.desktop_packaging.len(), 3);
+    Ok(())
+}
+
 #[test]
 fn web_target_probes_emcc_and_wasm32_and_reports_externally_unavailable_when_emcc_is_missing(
 ) -> TestResult {
-    assert_eq!(BuildTarget::WEB_WASM32.os(), TargetOs::Web);
-    assert_eq!(BuildTarget::WEB_WASM32.arch(), TargetArch::Wasm32);
-    assert_eq!(BuildTarget::WEB_WASM32.identifier(), "web-wasm32");
-    assert_eq!(
-        BuildTarget::WEB_WASM32.rust_triple(),
-        "wasm32-unknown-unknown"
-    );
-    assert_eq!(BuildTarget::WEB_WASM32.primary_linker(), "emcc");
-    assert_eq!(
-        BuildTarget::from_env("web", "wasm32"),
-        Some(BuildTarget::WEB_WASM32)
-    );
-    assert_eq!(
-        BuildTarget::from_env("webgl", "wasm32"),
-        Some(BuildTarget::WEB_WASM32)
-    );
-
-    let web_toolchain = required_toolchain(BuildTarget::WEB_WASM32);
-    let web_tools: Vec<&str> = web_toolchain
-        .requirements
-        .iter()
-        .map(|req| req.tool.as_str())
-        .collect();
-    assert!(web_tools.contains(&"emcc"));
-    assert!(web_tools.contains(&"rustc"));
-    assert!(web_toolchain
-        .resolving_action
-        .contains("rustup target add wasm32-unknown-unknown"));
-    assert!(web_toolchain.resolving_action.contains("emsdk"));
-
-    let targets = packaging_targets();
-    assert!(targets.contains(&BuildTarget::WEB_WASM32));
+    assert_web_target_properties();
+    assert_web_toolchain_requirements();
 
     let availability = probe_target_availability(BuildTarget::WEB_WASM32);
     let emcc_probe = availability
@@ -339,6 +324,54 @@ fn web_target_probes_emcc_and_wasm32_and_reports_externally_unavailable_when_emc
         assert!(unavailable.resolving_action.contains("emsdk"));
     }
 
+    assert_web_attempt_outcome(emcc_probe.present)?;
+
+    let gaps: &[WebRuntimeCompileGap] = web_runtime_wasm32_gaps();
+    assert!(
+        gaps.is_empty(),
+        "the wasm32 runtime compiles cleanly (cargo check -p unitas-runtime --target wasm32-unknown-unknown), so no wasm32 compile gap may remain recorded: {gaps:?}"
+    );
+    Ok(())
+}
+
+fn assert_web_target_properties() {
+    assert_eq!(BuildTarget::WEB_WASM32.os(), TargetOs::Web);
+    assert_eq!(BuildTarget::WEB_WASM32.arch(), TargetArch::Wasm32);
+    assert_eq!(BuildTarget::WEB_WASM32.identifier(), "web-wasm32");
+    assert_eq!(
+        BuildTarget::WEB_WASM32.rust_triple(),
+        "wasm32-unknown-unknown"
+    );
+    assert_eq!(BuildTarget::WEB_WASM32.primary_linker(), "emcc");
+    assert_eq!(
+        BuildTarget::from_env("web", "wasm32"),
+        Some(BuildTarget::WEB_WASM32)
+    );
+    assert_eq!(
+        BuildTarget::from_env("webgl", "wasm32"),
+        Some(BuildTarget::WEB_WASM32)
+    );
+}
+
+fn assert_web_toolchain_requirements() {
+    let web_toolchain = required_toolchain(BuildTarget::WEB_WASM32);
+    let web_tools: Vec<&str> = web_toolchain
+        .requirements
+        .iter()
+        .map(|req| req.tool.as_str())
+        .collect();
+    assert!(web_tools.contains(&"emcc"));
+    assert!(web_tools.contains(&"rustc"));
+    assert!(web_toolchain
+        .resolving_action
+        .contains("rustup target add wasm32-unknown-unknown"));
+    assert!(web_toolchain.resolving_action.contains("emsdk"));
+
+    let targets = packaging_targets();
+    assert!(targets.contains(&BuildTarget::WEB_WASM32));
+}
+
+fn assert_web_attempt_outcome(emcc_present: bool) -> TestResult {
     let workspace = std::env::temp_dir().join(format!(
         "unitas_build_web_target_outcome_{}",
         std::process::id()
@@ -348,7 +381,7 @@ fn web_target_probes_emcc_and_wasm32_and_reports_externally_unavailable_when_emc
     let mut web_config = host_config();
     web_config.target = BuildTarget::WEB_WASM32;
     let outcome = attempt_desktop_target(&web_config, BuildTarget::WEB_WASM32, &workspace)?;
-    if !emcc_probe.present {
+    if !emcc_present {
         assert_eq!(outcome.state, "externally_unavailable");
         let unavailable = outcome
             .unavailable
@@ -363,11 +396,5 @@ fn web_target_probes_emcc_and_wasm32_and_reports_externally_unavailable_when_emc
         assert!(report_text.contains("toolchain.missing_toolchain"));
     }
     std::fs::remove_dir_all(&workspace)?;
-
-    let gaps: &[WebRuntimeCompileGap] = web_runtime_wasm32_gaps();
-    assert!(
-        gaps.is_empty(),
-        "the wasm32 runtime compiles cleanly (cargo check -p unitas-runtime --target wasm32-unknown-unknown), so no wasm32 compile gap may remain recorded: {gaps:?}"
-    );
     Ok(())
 }

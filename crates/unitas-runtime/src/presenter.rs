@@ -1260,35 +1260,50 @@ impl<'a> GpuFramePresenter<'a> {
             return;
         }
         self.overlay_drawn = !overlay_items.is_empty() && self.renderer.has_overlay_fonts();
-        if self.capture_every_frame {
-            let (camera, view, background) =
-                resolve_camera_and_view(&self.camera_binding, runtime, width, height);
-            let instances = collect_gpu_material_instances_from(&self.meshes, runtime);
-            self.renderer.set_scene_lighting(&lights, ambient);
-            self.renderer.set_lights_2d(&lights_2d);
-            match self.renderer.render_offscreen_materials_rgba_with_overlay(
-                &instances,
-                RenderScene {
-                    camera: &camera,
-                    view,
-                    light: &self.light,
-                    background,
-                },
-                (width, height),
-                &[],
-            ) {
-                Ok(rgba) => {
-                    self.last_captured_frame = Some(Image::from_rgba8(
-                        runtime.composite_canvas_rgba(rgba, width, height),
-                    ));
-                }
-                Err(error) => {
-                    self.last_error = Some(WindowError::Render(error.to_string()));
-                    return;
-                }
-            }
+        if self.capture_every_frame
+            && !self.capture_presented_frame(runtime, width, height, &lights, ambient, &lights_2d)
+        {
+            return;
         }
         self.frames_presented = frame.frame_index;
+    }
+
+    fn capture_presented_frame(
+        &mut self,
+        runtime: &Runtime,
+        width: u32,
+        height: u32,
+        lights: &[GpuLight],
+        ambient: [f32; 3],
+        lights_2d: &[Light2D],
+    ) -> bool {
+        let (camera, view, background) =
+            resolve_camera_and_view(&self.camera_binding, runtime, width, height);
+        let instances = collect_gpu_material_instances_from(&self.meshes, runtime);
+        self.renderer.set_scene_lighting(lights, ambient);
+        self.renderer.set_lights_2d(lights_2d);
+        match self.renderer.render_offscreen_materials_rgba_with_overlay(
+            &instances,
+            RenderScene {
+                camera: &camera,
+                view,
+                light: &self.light,
+                background,
+            },
+            (width, height),
+            &[],
+        ) {
+            Ok(rgba) => {
+                self.last_captured_frame = Some(Image::from_rgba8(
+                    runtime.composite_canvas_rgba(rgba, width, height),
+                ));
+                true
+            }
+            Err(error) => {
+                self.last_error = Some(WindowError::Render(error.to_string()));
+                false
+            }
+        }
     }
 
     fn current_overlay(&self) -> Vec<TextOverlayItem> {
@@ -1455,33 +1470,9 @@ mod tests {
         rects: usize,
     }
 
-    #[test]
-    fn windowed_present_carries_the_canvas_the_capture_path_composes() {
-        let Ok(mut runtime) = Runtime::new() else {
-            return;
-        };
-        let scene_path = Path::new("../../samples/roll-a-ball/Assets/Scenes/RollABall.unity");
-        let Ok(_) = runtime.load_scene(scene_path) else {
-            return;
-        };
-        let width = 800u32;
-        let height = 600u32;
-        let items = runtime.ui_draw_items_for([width as f32, height as f32]);
-        assert!(
-            !items.is_empty(),
-            "the scene has no canvas content to present"
-        );
-        let expected_texts: Vec<String> = items
-            .iter()
-            .filter_map(|item| item.text.as_ref().map(|text| text.text.clone()))
-            .collect();
-        let expected_rects = items.iter().filter(|item| item.text.is_none()).count();
-        let Ok(renderer) = Renderer::new() else {
-            return;
-        };
-        let renderer = Arc::new(renderer);
-        let mut presenter = GpuFramePresenter::new(Arc::clone(&renderer));
-        presenter.bind_scene(&runtime);
+    fn attach_presented_canvas_sink(
+        presenter: &mut GpuFramePresenter<'_>,
+    ) -> Arc<Mutex<Option<PresentedCanvas>>> {
         let captured: Arc<Mutex<Option<PresentedCanvas>>> = Arc::new(Mutex::new(None));
         let sink = Arc::clone(&captured);
         presenter.surface_render = Some(Box::new(move |_renderer, frame| {
@@ -1497,18 +1488,44 @@ mod tests {
             });
             Ok(())
         }));
-        presenter.present_window_frame(
-            &runtime,
-            &FrameInfo {
-                frame_index: 1,
-                width,
-                height,
-                delta_seconds: 1.0 / 60.0,
-            },
+        captured
+    }
+
+    #[test]
+    fn windowed_present_carries_the_canvas_the_capture_path_composes() {
+        let Ok(mut runtime) = Runtime::new() else {
+            return;
+        };
+        let scene_path = Path::new("../../samples/roll-a-ball/Assets/Scenes/RollABall.unity");
+        let Ok(_) = runtime.load_scene(scene_path) else {
+            return;
+        };
+        let (width, height) = (800u32, 600u32);
+        let items = runtime.ui_draw_items_for([width as f32, height as f32]);
+        assert!(
+            !items.is_empty(),
+            "the scene has no canvas content to present"
         );
-        let presented = match captured.lock().ok().and_then(|guard| guard.clone()) {
-            Some(presented) => presented,
-            None => return,
+        let expected_texts: Vec<String> = items
+            .iter()
+            .filter_map(|item| item.text.as_ref().map(|text| text.text.clone()))
+            .collect();
+        let expected_rects = items.iter().filter(|item| item.text.is_none()).count();
+        let Ok(renderer) = Renderer::new() else {
+            return;
+        };
+        let mut presenter = GpuFramePresenter::new(Arc::new(renderer));
+        presenter.bind_scene(&runtime);
+        let captured = attach_presented_canvas_sink(&mut presenter);
+        let info = FrameInfo {
+            frame_index: 1,
+            width,
+            height,
+            delta_seconds: 1.0 / 60.0,
+        };
+        presenter.present_window_frame(&runtime, &info);
+        let Some(presented) = captured.lock().ok().and_then(|guard| guard.clone()) else {
+            return;
         };
         assert_eq!(
             presented.texts, expected_texts,
@@ -1686,14 +1703,15 @@ mod tests {
         };
         let mut presenter = GpuFramePresenter::new(Arc::new(renderer));
         presenter.bind_scene(&runtime);
+        let expect_shadow = |enabled, soft, resolution_index, distance| ShadowSettings {
+            enabled,
+            soft,
+            resolution_index,
+            distance,
+        };
         assert_eq!(
             presenter.shadow_settings(),
-            ShadowSettings {
-                enabled: true,
-                soft: true,
-                resolution_index: 2,
-                distance: 50.0,
-            }
+            expect_shadow(true, true, 2, 50.0)
         );
         assert_eq!(presenter.v_sync_count(), 2);
 
@@ -1701,12 +1719,7 @@ mod tests {
         assert_eq!(runtime.quality_settings().current_quality, 0);
         assert_eq!(
             presenter.shadow_settings(),
-            ShadowSettings {
-                enabled: false,
-                soft: false,
-                resolution_index: 0,
-                distance: 40.0,
-            }
+            expect_shadow(false, false, 0, 40.0)
         );
         assert_eq!(presenter.v_sync_count(), 0);
 
@@ -1714,12 +1727,7 @@ mod tests {
         assert_eq!(runtime.quality_settings().current_quality, 1);
         assert_eq!(
             presenter.shadow_settings(),
-            ShadowSettings {
-                enabled: true,
-                soft: false,
-                resolution_index: 1,
-                distance: 70.0,
-            }
+            expect_shadow(true, false, 1, 70.0)
         );
         assert_eq!(presenter.v_sync_count(), 1);
 
@@ -1823,23 +1831,13 @@ mod tests {
         assert_eq!(super::unitas_runtime_display_quit_requested(), 0);
     }
 
-    #[test]
-    fn canvas_elements_maps_sprites_alignment_wrap_and_clip_rect_one_to_one() {
+    fn write_hud_canvas_scene(dir: &Path, sprite_guid: &str) -> Option<std::path::PathBuf> {
         use std::fs;
-        use unitas_render::glyphs::{HorizontalAlign, VerticalAlign};
-
-        let dir = std::env::temp_dir().join(format!(
-            "unitas_presenter_canvas_elements_{}",
-            std::process::id()
-        ));
-        let _ = fs::remove_dir_all(&dir);
-        let assets_dir = dir.join("Assets");
-        let scenes_dir = assets_dir.join("Scenes");
+        let _ = fs::remove_dir_all(dir);
+        let scenes_dir = dir.join("Assets").join("Scenes");
         let settings_dir = dir.join("ProjectSettings");
-        if fs::create_dir_all(&scenes_dir).is_err() || fs::create_dir_all(&settings_dir).is_err() {
-            return;
-        }
-        let sprite_guid = "22222222222222222222222222222222";
+        fs::create_dir_all(&scenes_dir).ok()?;
+        fs::create_dir_all(&settings_dir).ok()?;
         let mut sprite_rgba = unitas_render::Rgba8::new(2, 2);
         sprite_rgba.pixels.copy_from_slice(&[
             255, 128, 64, 255, 255, 128, 64, 255, 255, 128, 64, 255, 255, 128, 64, 255,
@@ -1849,9 +1847,23 @@ mod tests {
             "%YAML 1.1\n%TAG !u! tag:unity3d.com,2011:\n--- !u!1 &1\nGameObject:\n  m_Name: HudCanvas\n--- !u!224 &2\nRectTransform:\n  m_GameObject: {{fileID: 1}}\n  m_Father: {{fileID: 0}}\n  m_AnchorMin: {{x: 0, y: 0}}\n  m_AnchorMax: {{x: 1, y: 1}}\n  m_AnchoredPosition: {{x: 0, y: 0}}\n  m_SizeDelta: {{x: 0, y: 0}}\n  m_Pivot: {{x: 0.5, y: 0.5}}\n--- !u!223 &3\nCanvas:\n  m_GameObject: {{fileID: 1}}\n  m_Enabled: 1\n  m_RenderMode: 0\n  m_SortingOrder: 0\n--- !u!1 &5\nGameObject:\n  m_Name: BadgeImage\n--- !u!224 &6\nRectTransform:\n  m_GameObject: {{fileID: 5}}\n  m_Father: {{fileID: 2}}\n  m_AnchorMin: {{x: 0, y: 1}}\n  m_AnchorMax: {{x: 0, y: 1}}\n  m_AnchoredPosition: {{x: 20, y: -20}}\n  m_SizeDelta: {{x: 40, y: 40}}\n  m_Pivot: {{x: 0, y: 1}}\n--- !u!114 &7\nMonoBehaviour:\n  m_GameObject: {{fileID: 5}}\n  m_Enabled: 1\n  m_Script: {{fileID: 11500000, guid: fe87c0e1cc204ed48ad3b37840f39efc, type: 3}}\n  m_Color: {{r: 1, g: 0.5, b: 0.25, a: 0.75}}\n  m_Sprite: {{fileID: 21300000, guid: {sprite_guid}, type: 3}}\n--- !u!1 &8\nGameObject:\n  m_Name: HeaderLabel\n--- !u!224 &9\nRectTransform:\n  m_GameObject: {{fileID: 8}}\n  m_Father: {{fileID: 2}}\n  m_AnchorMin: {{x: 0, y: 1}}\n  m_AnchorMax: {{x: 0, y: 1}}\n  m_AnchoredPosition: {{x: 80, y: -20}}\n  m_SizeDelta: {{x: 120, y: 24}}\n  m_Pivot: {{x: 0, y: 1}}\n--- !u!114 &10\nMonoBehaviour:\n  m_GameObject: {{fileID: 8}}\n  m_Enabled: 1\n  m_Script: {{fileID: 11500000, guid: 5f7201a12d95ffc409449d95f23cf332, type: 3}}\n  m_Text: \"Line 1\\nLine 2\"\n  m_FontSize: 18\n  m_Color: {{r: 1, g: 1, b: 1, a: 1}}\n"
         );
         let scene_path = scenes_dir.join("Hud.unity");
-        if fs::write(&scene_path, scene_yaml).is_err() {
+        fs::write(&scene_path, scene_yaml).ok()?;
+        Some(scene_path)
+    }
+
+    #[test]
+    fn canvas_elements_maps_sprites_alignment_wrap_and_clip_rect_one_to_one() {
+        use std::fs;
+        use unitas_render::glyphs::{HorizontalAlign, VerticalAlign};
+
+        let dir = std::env::temp_dir().join(format!(
+            "unitas_presenter_canvas_elements_{}",
+            std::process::id()
+        ));
+        let sprite_guid = "22222222222222222222222222222222";
+        let Some(scene_path) = write_hud_canvas_scene(&dir, sprite_guid) else {
             return;
-        }
+        };
         let Ok(mut runtime) = Runtime::new() else {
             return;
         };

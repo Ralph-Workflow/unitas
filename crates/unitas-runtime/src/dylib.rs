@@ -148,34 +148,11 @@ impl RuntimeDylib {
     }
 }
 
-fn decode_capture_frame(bytes: &[u8]) -> Option<unitas_render::CaptureFrame> {
-    if bytes.len() < 16 {
-        return None;
-    }
-    let width = read_u32(bytes, 0)?;
-    let height = read_u32(bytes, 4)?;
-    let id_count = read_u32(bytes, 8)? as usize;
-    let object_count = read_u32(bytes, 12)? as usize;
-    let image_len = (width as usize)
-        .checked_mul(height as usize)?
-        .checked_mul(4)?;
-    let mut cursor = 16usize;
-    let image_end = cursor.checked_add(image_len)?;
-    if image_end > bytes.len() {
-        return None;
-    }
-    let image = unitas_render::Rgba8 {
-        width,
-        height,
-        pixels: bytes[cursor..image_end].to_vec(),
-    };
-    cursor = image_end;
-    let mut id_map = Vec::with_capacity(id_count);
-    for _ in 0..id_count {
-        let id = read_u32(bytes, cursor)?;
-        id_map.push(id);
-        cursor = cursor.checked_add(4)?;
-    }
+fn decode_capture_objects(
+    bytes: &[u8],
+    mut cursor: usize,
+    object_count: usize,
+) -> Option<Vec<unitas_render::CaptureObject>> {
     let mut objects = Vec::with_capacity(object_count);
     for _ in 0..object_count {
         let id = read_u32(bytes, cursor)?;
@@ -204,6 +181,38 @@ fn decode_capture_frame(bytes: &[u8]) -> Option<unitas_render::CaptureFrame> {
             },
         });
     }
+    Some(objects)
+}
+
+fn decode_capture_frame(bytes: &[u8]) -> Option<unitas_render::CaptureFrame> {
+    if bytes.len() < 16 {
+        return None;
+    }
+    let width = read_u32(bytes, 0)?;
+    let height = read_u32(bytes, 4)?;
+    let id_count = read_u32(bytes, 8)? as usize;
+    let object_count = read_u32(bytes, 12)? as usize;
+    let image_len = (width as usize)
+        .checked_mul(height as usize)?
+        .checked_mul(4)?;
+    let mut cursor = 16usize;
+    let image_end = cursor.checked_add(image_len)?;
+    if image_end > bytes.len() {
+        return None;
+    }
+    let image = unitas_render::Rgba8 {
+        width,
+        height,
+        pixels: bytes[cursor..image_end].to_vec(),
+    };
+    cursor = image_end;
+    let mut id_map = Vec::with_capacity(id_count);
+    for _ in 0..id_count {
+        let id = read_u32(bytes, cursor)?;
+        id_map.push(id);
+        cursor = cursor.checked_add(4)?;
+    }
+    let objects = decode_capture_objects(bytes, cursor, object_count)?;
     Some(unitas_render::CaptureFrame {
         image,
         id_map,

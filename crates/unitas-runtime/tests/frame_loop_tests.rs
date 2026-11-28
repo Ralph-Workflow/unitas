@@ -185,23 +185,7 @@ extern "C" fn probe_late_update(_handle: u64, _delta: f64) {
     probe.normalized_times.push(f32::from_le_bytes(raw));
 }
 
-#[test]
-fn frame_loop_animator_evaluation_precedes_the_late_update_dispatch() -> Result<(), Box<dyn Error>>
-{
-    let handle = unitas_runtime_new();
-    if handle == 0 {
-        return Err(String::from("runtime handle creation failed").into());
-    }
-    let path_address = unitas_runtime_path_buffer(handle, 256);
-    if path_address == 0 {
-        return Err(String::from("path buffer allocation failed").into());
-    }
-    let path_bytes = SCENE_WITH_SCRIPT.as_bytes();
-    test_write_path_buffer(handle, path_bytes)?;
-    let path_length = u64::try_from(path_bytes.len())?;
-    if unitas_runtime_load_scene(handle, path_address, path_length) != 0 {
-        return Err(String::from("scene load failed").into());
-    }
+fn setup_animator_probe_entity(handle: u64) -> Result<u64, Box<dyn Error>> {
     let controller = AnimatorController::new(
         "Probe",
         Vec::new(),
@@ -238,6 +222,27 @@ fn frame_loop_animator_evaluation_precedes_the_late_update_dispatch() -> Result<
     if unitas_runtime_animator_set_controller(handle, entity, controller_handle) != 0 {
         return Err(String::from("animator controller assignment failed").into());
     }
+    Ok(entity)
+}
+
+#[test]
+fn frame_loop_animator_evaluation_precedes_the_late_update_dispatch() -> Result<(), Box<dyn Error>>
+{
+    let handle = unitas_runtime_new();
+    if handle == 0 {
+        return Err(String::from("runtime handle creation failed").into());
+    }
+    let path_address = unitas_runtime_path_buffer(handle, 256);
+    if path_address == 0 {
+        return Err(String::from("path buffer allocation failed").into());
+    }
+    let path_bytes = SCENE_WITH_SCRIPT.as_bytes();
+    test_write_path_buffer(handle, path_bytes)?;
+    let path_length = u64::try_from(path_bytes.len())?;
+    if unitas_runtime_load_scene(handle, path_address, path_length) != 0 {
+        return Err(String::from("scene load failed").into());
+    }
+    let entity = setup_animator_probe_entity(handle)?;
     {
         let Ok(mut guard) = ANIMATOR_PROBE.lock() else {
             return Err(String::from("animator probe poisoned").into());
@@ -265,10 +270,7 @@ fn frame_loop_animator_evaluation_precedes_the_late_update_dispatch() -> Result<
     if callback_code != 0 {
         return Err(format!("callback registration failed with code {callback_code}").into());
     }
-    if unitas_runtime_tick(handle, 0.0) != 0 {
-        return Err(String::from("initialization tick failed").into());
-    }
-    if unitas_runtime_tick(handle, 0.5) != 0 {
+    if unitas_runtime_tick(handle, 0.0) != 0 || unitas_runtime_tick(handle, 0.5) != 0 {
         return Err(String::from("tick failed").into());
     }
     let normalized_times = match ANIMATOR_PROBE.lock() {
@@ -373,13 +375,10 @@ struct FrameAnimatorSnapshot {
     normalized_time_bits: u32,
 }
 
-fn run_animated_frame_loop_with_workers(
-    workers: usize,
+fn spawn_animated_entities(
+    runtime: &mut Runtime,
     entity_count: usize,
-    ticks: usize,
-) -> Result<(Runtime, Vec<FrameAnimatorSnapshot>), Box<dyn Error>> {
-    let mut runtime = Runtime::with_job_system(std::sync::Arc::new(JobSystem::new(workers)))?;
-    runtime.load_scene(Path::new(SCENE_WITH_SCRIPT))?;
+) -> Result<Vec<EntityId>, Box<dyn Error>> {
     let mut entities = Vec::with_capacity(entity_count);
     for index in 0..entity_count {
         let entity = {
@@ -398,6 +397,17 @@ fn run_animated_frame_loop_with_workers(
         runtime.set_animator_controller(ensured, handle)?;
         entities.push(ensured);
     }
+    Ok(entities)
+}
+
+fn run_animated_frame_loop_with_workers(
+    workers: usize,
+    entity_count: usize,
+    ticks: usize,
+) -> Result<(Runtime, Vec<FrameAnimatorSnapshot>), Box<dyn Error>> {
+    let mut runtime = Runtime::with_job_system(std::sync::Arc::new(JobSystem::new(workers)))?;
+    runtime.load_scene(Path::new(SCENE_WITH_SCRIPT))?;
+    let entities = spawn_animated_entities(&mut runtime, entity_count)?;
     runtime.tick(0.0)?;
     let mut snapshots = Vec::with_capacity(ticks * entity_count);
     for step in 0..ticks {
@@ -409,11 +419,10 @@ fn run_animated_frame_loop_with_workers(
                 .transform(*entity)
                 .cloned()
                 .unwrap_or_else(Transform::default);
-            let graph_transform = match runtime.scene_graph() {
-                Some(graph) => graph.transform(*entity).cloned(),
-                None => None,
-            }
-            .unwrap_or_else(Transform::default);
+            let graph_transform = runtime
+                .scene_graph()
+                .and_then(|graph| graph.transform(*entity).cloned())
+                .unwrap_or_else(Transform::default);
             assert_eq!(
                 transform.translation.map(f32::to_bits),
                 graph_transform.translation.map(f32::to_bits)
@@ -429,6 +438,28 @@ fn run_animated_frame_loop_with_workers(
         }
     }
     Ok((runtime, snapshots))
+}
+
+fn run_serial_animation_world(
+    entity_count: usize,
+    ticks: usize,
+) -> Result<unitas_runtime::AnimationWorld, Box<dyn Error>> {
+    let mut world = unitas_runtime::AnimationWorld::new();
+    for index in 0..entity_count {
+        let entity = EntityId::new((index + 1) as u64);
+        let initial = Transform {
+            translation: [index as f32 * 0.1, index as f32 * -0.05, 0.5],
+            ..Transform::default()
+        };
+        world.ensure_animator(entity, initial);
+        let handle = world.register_controller(build_parallel_animation_controller(index));
+        world.set_controller(entity, handle)?;
+    }
+    for step in 0..ticks {
+        let delta = 1.0 / 60.0 + (step % 3) as f64 * 0.0025;
+        world.tick(delta);
+    }
+    Ok(world)
 }
 
 #[test]
@@ -449,24 +480,7 @@ fn frame_loop_parallel_animation_slice_dispatches_across_multiple_workers_with_b
     );
     assert_eq!(single_worker_outputs.len(), ticks * entity_count);
     assert_eq!(single_worker_outputs, multi_worker_outputs);
-    let serial_world = {
-        let mut world = unitas_runtime::AnimationWorld::new();
-        for index in 0..entity_count {
-            let entity = EntityId::new((index + 1) as u64);
-            let initial = Transform {
-                translation: [index as f32 * 0.1, index as f32 * -0.05, 0.5],
-                ..Transform::default()
-            };
-            world.ensure_animator(entity, initial);
-            let handle = world.register_controller(build_parallel_animation_controller(index));
-            world.set_controller(entity, handle)?;
-        }
-        for step in 0..ticks {
-            let delta = 1.0 / 60.0 + (step % 3) as f64 * 0.0025;
-            world.tick(delta);
-        }
-        world
-    };
+    let serial_world = run_serial_animation_world(entity_count, ticks)?;
     for index in 0..entity_count {
         let serial_entity = EntityId::new((index + 1) as u64);
         let serial_transform = serial_world

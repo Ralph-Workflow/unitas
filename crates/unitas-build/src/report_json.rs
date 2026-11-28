@@ -190,63 +190,83 @@ pub(super) fn push_kv_compatibility_findings(
     }
     out.push_str(": [\n");
     for (index, item) in items.iter().enumerate() {
-        push_indent(out, indent + 2);
-        out.push_str("{\n");
-        push_kv_str(out, indent + 4, "feature_id", &item.feature_id, true);
-        push_kv_str(out, indent + 4, "tier", tier_name(item.tier), true);
-        push_kv_str(out, indent + 4, "state", state_name(item.state), true);
-        push_kv_opt_str(out, indent + 4, "guid", item.guid.as_deref(), true);
-        push_kv_opt_str(
-            out,
-            indent + 4,
-            "asset_path",
-            item.asset_path.as_deref(),
-            true,
-        );
-        push_kv_opt_str(
-            out,
-            indent + 4,
-            "sub_asset_id",
-            item.sub_asset_id.as_deref(),
-            true,
-        );
-        push_kv_opt_str(
-            out,
-            indent + 4,
-            "object_name",
-            item.object_name.as_deref(),
-            true,
-        );
-        push_kv_str(out, indent + 4, "behavior", &item.behavior, true);
-        push_kv_string_array(
-            out,
-            indent + 4,
-            "relied_upon_unity_differences",
-            &item.relied_upon_unity_differences,
-            true,
-        );
-        push_kv_str(
-            out,
-            indent + 4,
-            "observable_consequence",
-            &item.observable_consequence,
-            true,
-        );
-        push_kv_string_array(out, indent + 4, "conditions", &item.conditions, true);
-        push_kv_string_array(
-            out,
-            indent + 4,
-            "related_findings",
-            &item.related_findings,
-            false,
-        );
-        push_indent(out, indent + 2);
-        out.push('}');
+        push_compatibility_finding(out, indent, item);
         push_trailing(out, index + 1 < items.len());
     }
     push_indent(out, indent);
     out.push(']');
     push_trailing(out, trailing_comma);
+}
+
+fn push_compatibility_finding(out: &mut String, indent: usize, item: &CompatibilityFinding) {
+    push_indent(out, indent + 2);
+    out.push_str("{\n");
+    push_compatibility_finding_identity(out, indent, item);
+    push_compatibility_finding_details(out, indent, item);
+    push_indent(out, indent + 2);
+    out.push('}');
+}
+
+fn push_compatibility_finding_identity(
+    out: &mut String,
+    indent: usize,
+    item: &CompatibilityFinding,
+) {
+    push_kv_str(out, indent + 4, "feature_id", &item.feature_id, true);
+    push_kv_str(out, indent + 4, "tier", tier_name(item.tier), true);
+    push_kv_str(out, indent + 4, "state", state_name(item.state), true);
+    push_kv_opt_str(out, indent + 4, "guid", item.guid.as_deref(), true);
+    push_kv_opt_str(
+        out,
+        indent + 4,
+        "asset_path",
+        item.asset_path.as_deref(),
+        true,
+    );
+    push_kv_opt_str(
+        out,
+        indent + 4,
+        "sub_asset_id",
+        item.sub_asset_id.as_deref(),
+        true,
+    );
+    push_kv_opt_str(
+        out,
+        indent + 4,
+        "object_name",
+        item.object_name.as_deref(),
+        true,
+    );
+}
+
+fn push_compatibility_finding_details(
+    out: &mut String,
+    indent: usize,
+    item: &CompatibilityFinding,
+) {
+    push_kv_str(out, indent + 4, "behavior", &item.behavior, true);
+    push_kv_string_array(
+        out,
+        indent + 4,
+        "relied_upon_unity_differences",
+        &item.relied_upon_unity_differences,
+        true,
+    );
+    push_kv_str(
+        out,
+        indent + 4,
+        "observable_consequence",
+        &item.observable_consequence,
+        true,
+    );
+    push_kv_string_array(out, indent + 4, "conditions", &item.conditions, true);
+    push_kv_string_array(
+        out,
+        indent + 4,
+        "related_findings",
+        &item.related_findings,
+        false,
+    );
 }
 
 pub(super) fn push_kv_category_sizes(
@@ -361,52 +381,23 @@ pub(super) fn push_kv_target_availability(
     }
     out.push_str(": [\n");
     for (index, item) in items.iter().enumerate() {
-        push_indent(out, indent + 2);
-        out.push_str("{\n");
-        push_kv_str(out, indent + 4, "target", &item.target.identifier(), true);
-        push_kv_str(out, indent + 4, "state", item.state(), true);
-        match &item.unavailable {
-            None => {
-                push_kv_opt_str(out, indent + 4, "cause", None, true);
-                push_kv_opt_str(out, indent + 4, "tool", None, true);
-                push_kv_opt_str(out, indent + 4, "version_found", None, true);
-                push_kv_opt_str(out, indent + 4, "required_range", None, true);
-                push_kv_opt_str(out, indent + 4, "resolving_action", None, true);
-            }
-            Some(unavailable) => {
-                push_kv_str(out, indent + 4, "cause", unavailable.cause.as_str(), true);
-                push_kv_str(out, indent + 4, "tool", &unavailable.tool, true);
-                push_kv_opt_str(
-                    out,
-                    indent + 4,
-                    "version_found",
-                    unavailable.version_found.as_deref(),
-                    true,
-                );
-                push_kv_str(
-                    out,
-                    indent + 4,
-                    "required_range",
-                    &unavailable.required_range,
-                    true,
-                );
-                push_kv_str(
-                    out,
-                    indent + 4,
-                    "resolving_action",
-                    &unavailable.resolving_action,
-                    true,
-                );
-            }
-        }
-        push_kv_tool_probes(out, indent + 4, "tools", &item.tools, false);
-        push_indent(out, indent + 2);
-        out.push('}');
+        push_target_availability(out, indent, item);
         push_trailing(out, index + 1 < items.len());
     }
     push_indent(out, indent);
     out.push(']');
     push_trailing(out, trailing_comma);
+}
+
+fn push_target_availability(out: &mut String, indent: usize, item: &TargetAvailability) {
+    push_indent(out, indent + 2);
+    out.push_str("{\n");
+    push_kv_str(out, indent + 4, "target", &item.target.identifier(), true);
+    push_kv_str(out, indent + 4, "state", item.state(), true);
+    push_unavailable_toolchain(out, indent + 4, item.unavailable.as_ref(), true);
+    push_kv_tool_probes(out, indent + 4, "tools", &item.tools, false);
+    push_indent(out, indent + 2);
+    out.push('}');
 }
 
 pub(super) fn push_kv_desktop_packaging(
@@ -425,67 +416,80 @@ pub(super) fn push_kv_desktop_packaging(
     }
     out.push_str(": [\n");
     for (index, item) in items.iter().enumerate() {
-        push_indent(out, indent + 2);
-        out.push_str("{\n");
-        push_kv_str(out, indent + 4, "target", &item.target.identifier(), true);
-        push_kv_str(out, indent + 4, "state", &item.state, true);
-        push_kv_opt_path(out, indent + 4, "app_path", item.app_path.as_deref(), true);
-        push_kv_opt_path(
-            out,
-            indent + 4,
-            "launch_artifact",
-            item.launch_artifact.as_deref(),
-            true,
-        );
-        push_kv_str(
-            out,
-            indent + 4,
-            "build_report_path",
-            &item.build_report_path.to_string_lossy(),
-            true,
-        );
-        push_kv_bool(out, indent + 4, "launched", item.launched, true);
-        match &item.unavailable {
-            None => {
-                push_kv_opt_str(out, indent + 4, "cause", None, true);
-                push_kv_opt_str(out, indent + 4, "tool", None, true);
-                push_kv_opt_str(out, indent + 4, "version_found", None, true);
-                push_kv_opt_str(out, indent + 4, "required_range", None, true);
-                push_kv_opt_str(out, indent + 4, "resolving_action", None, false);
-            }
-            Some(unavailable) => {
-                push_kv_str(out, indent + 4, "cause", unavailable.cause.as_str(), true);
-                push_kv_str(out, indent + 4, "tool", &unavailable.tool, true);
-                push_kv_opt_str(
-                    out,
-                    indent + 4,
-                    "version_found",
-                    unavailable.version_found.as_deref(),
-                    true,
-                );
-                push_kv_str(
-                    out,
-                    indent + 4,
-                    "required_range",
-                    &unavailable.required_range,
-                    true,
-                );
-                push_kv_str(
-                    out,
-                    indent + 4,
-                    "resolving_action",
-                    &unavailable.resolving_action,
-                    false,
-                );
-            }
-        }
-        push_indent(out, indent + 2);
-        out.push('}');
+        push_desktop_packaging(out, indent, item);
         push_trailing(out, index + 1 < items.len());
     }
     push_indent(out, indent);
     out.push(']');
     push_trailing(out, trailing_comma);
+}
+
+fn push_desktop_packaging(out: &mut String, indent: usize, item: &DesktopPackageOutcome) {
+    push_indent(out, indent + 2);
+    out.push_str("{\n");
+    push_kv_str(out, indent + 4, "target", &item.target.identifier(), true);
+    push_kv_str(out, indent + 4, "state", &item.state, true);
+    push_kv_opt_path(out, indent + 4, "app_path", item.app_path.as_deref(), true);
+    push_kv_opt_path(
+        out,
+        indent + 4,
+        "launch_artifact",
+        item.launch_artifact.as_deref(),
+        true,
+    );
+    push_kv_str(
+        out,
+        indent + 4,
+        "build_report_path",
+        &item.build_report_path.to_string_lossy(),
+        true,
+    );
+    push_kv_bool(out, indent + 4, "launched", item.launched, true);
+    push_unavailable_toolchain(out, indent + 4, item.unavailable.as_ref(), false);
+    push_indent(out, indent + 2);
+    out.push('}');
+}
+
+fn push_unavailable_toolchain(
+    out: &mut String,
+    indent: usize,
+    unavailable: Option<&UnavailableToolchain>,
+    trailing_comma: bool,
+) {
+    match unavailable {
+        None => {
+            push_kv_opt_str(out, indent, "cause", None, true);
+            push_kv_opt_str(out, indent, "tool", None, true);
+            push_kv_opt_str(out, indent, "version_found", None, true);
+            push_kv_opt_str(out, indent, "required_range", None, true);
+            push_kv_opt_str(out, indent, "resolving_action", None, trailing_comma);
+        }
+        Some(unavailable) => {
+            push_kv_str(out, indent, "cause", unavailable.cause.as_str(), true);
+            push_kv_str(out, indent, "tool", &unavailable.tool, true);
+            push_kv_opt_str(
+                out,
+                indent,
+                "version_found",
+                unavailable.version_found.as_deref(),
+                true,
+            );
+            push_kv_str(
+                out,
+                indent,
+                "required_range",
+                &unavailable.required_range,
+                true,
+            );
+            push_kv_str(
+                out,
+                indent,
+                "resolving_action",
+                &unavailable.resolving_action,
+                trailing_comma,
+            );
+        }
+    }
 }
 
 fn push_kv_tool_probes(
@@ -547,6 +551,14 @@ pub(super) fn push_kv_licensing(
         return;
     };
     out.push_str(": {\n");
+    push_licensing_identity(out, indent, record);
+    push_licensing_statements(out, indent, record);
+    push_indent(out, indent);
+    out.push('}');
+    push_trailing(out, trailing_comma);
+}
+
+fn push_licensing_identity(out: &mut String, indent: usize, record: &LicensingRecord) {
     push_kv_str(
         out,
         indent + 2,
@@ -582,6 +594,9 @@ pub(super) fn push_kv_licensing(
         &record.corresponding_source_obligation,
         true,
     );
+}
+
+fn push_licensing_statements(out: &mut String, indent: usize, record: &LicensingRecord) {
     push_kv_str(
         out,
         indent + 2,
@@ -624,9 +639,6 @@ pub(super) fn push_kv_licensing(
         &record.third_party_notices,
         false,
     );
-    push_indent(out, indent);
-    out.push('}');
-    push_trailing(out, trailing_comma);
 }
 
 fn push_kv_notices(
@@ -875,45 +887,48 @@ impl<'a> JsonParser<'a> {
                         ReportParseError::new("unexpected end of JSON escape sequence")
                     })?;
                     self.pos += 1;
-                    match escaped {
-                        b'"' => raw.push(b'"'),
-                        b'\\' => raw.push(b'\\'),
-                        b'/' => raw.push(b'/'),
-                        b'n' => raw.push(b'\n'),
-                        b'r' => raw.push(b'\r'),
-                        b't' => raw.push(b'\t'),
-                        b'b' => raw.push(0x08),
-                        b'f' => raw.push(0x0C),
-                        b'u' => {
-                            let hex_slice =
-                                self.bytes.get(self.pos..self.pos + 4).ok_or_else(|| {
-                                    ReportParseError::new("incomplete \\uXXXX escape sequence")
-                                })?;
-                            let hex_str = std::str::from_utf8(hex_slice).map_err(|_| {
-                                ReportParseError::new("invalid hex digits in \\uXXXX escape")
-                            })?;
-                            let code = u32::from_str_radix(hex_str, 16).map_err(|_| {
-                                ReportParseError::new("invalid hex value in \\uXXXX escape")
-                            })?;
-                            let ch = char::from_u32(code).ok_or_else(|| {
-                                ReportParseError::new("invalid Unicode scalar in \\uXXXX escape")
-                            })?;
-                            let mut buf = [0u8; 4];
-                            raw.extend_from_slice(ch.encode_utf8(&mut buf).as_bytes());
-                            self.pos += 4;
-                        }
-                        other => {
-                            return Err(ReportParseError::new(format!(
-                                "unsupported JSON escape '\\{}'",
-                                char::from(other)
-                            )));
-                        }
-                    }
+                    self.parse_escape(escaped, &mut raw)?;
                 }
                 normal => raw.push(normal),
             }
         }
         Err(ReportParseError::new("unterminated JSON string"))
+    }
+
+    fn parse_escape(&mut self, escaped: u8, raw: &mut Vec<u8>) -> Result<(), ReportParseError> {
+        match escaped {
+            b'"' => raw.push(b'"'),
+            b'\\' => raw.push(b'\\'),
+            b'/' => raw.push(b'/'),
+            b'n' => raw.push(b'\n'),
+            b'r' => raw.push(b'\r'),
+            b't' => raw.push(b'\t'),
+            b'b' => raw.push(0x08),
+            b'f' => raw.push(0x0C),
+            b'u' => {
+                let hex_slice = self
+                    .bytes
+                    .get(self.pos..self.pos + 4)
+                    .ok_or_else(|| ReportParseError::new("incomplete \\uXXXX escape sequence"))?;
+                let hex_str = std::str::from_utf8(hex_slice)
+                    .map_err(|_| ReportParseError::new("invalid hex digits in \\uXXXX escape"))?;
+                let code = u32::from_str_radix(hex_str, 16)
+                    .map_err(|_| ReportParseError::new("invalid hex value in \\uXXXX escape"))?;
+                let ch = char::from_u32(code).ok_or_else(|| {
+                    ReportParseError::new("invalid Unicode scalar in \\uXXXX escape")
+                })?;
+                let mut buf = [0u8; 4];
+                raw.extend_from_slice(ch.encode_utf8(&mut buf).as_bytes());
+                self.pos += 4;
+            }
+            other => {
+                return Err(ReportParseError::new(format!(
+                    "unsupported JSON escape '\\{}'",
+                    char::from(other)
+                )));
+            }
+        }
+        Ok(())
     }
 
     fn parse_bool(&mut self) -> Result<bool, ReportParseError> {
@@ -985,6 +1000,30 @@ pub(super) fn get_optional_string(
     match get_field(obj, key)? {
         JsonValue::Null => Ok(None),
         value => Ok(Some(value.as_str(key)?.to_string())),
+    }
+}
+
+pub(super) fn get_optional_string_or_default(
+    obj: &BTreeMap<String, JsonValue>,
+    key: &str,
+) -> Result<String, ReportParseError> {
+    match obj.get(key) {
+        None | Some(JsonValue::Null) => Ok(String::new()),
+        Some(value) => Ok(value.as_str(key)?.to_string()),
+    }
+}
+
+pub(super) fn get_optional_string_list(
+    obj: &BTreeMap<String, JsonValue>,
+    key: &str,
+) -> Result<Vec<String>, ReportParseError> {
+    match obj.get(key) {
+        None | Some(JsonValue::Null) => Ok(Vec::new()),
+        Some(value) => value
+            .as_array(key)?
+            .iter()
+            .map(|item| item.as_str(key).map(str::to_string))
+            .collect::<Result<Vec<String>, ReportParseError>>(),
     }
 }
 
@@ -1230,83 +1269,113 @@ pub(super) fn get_optional_target_availability(
     }
     let mut availability = Vec::new();
     for entry in value.as_array("target_availability")? {
-        let record = entry.as_object("target_availability")?;
-        let target_name = get_required_str(record, "target")?;
-        let target = parse_build_target(target_name, TargetArch::X86_64)?;
-        let state = get_required_str(record, "state")?;
-        if state != crate::toolchain::TOOLCHAIN_AVAILABLE
-            && state != crate::toolchain::TOOLCHAIN_EXTERNALLY_UNAVAILABLE
-        {
-            return Err(ReportParseError::new(format!(
-                "unrecognized target availability state '{state}'"
-            )));
-        }
-        let cause = match record.get("cause") {
-            None | Some(JsonValue::Null) => None,
-            Some(text) => {
-                let name = text.as_str("cause")?;
-                Some(ToolchainCause::from_name(name).ok_or_else(|| {
-                    ReportParseError::new(format!("unrecognized toolchain cause '{name}'"))
-                })?)
-            }
-        };
-        let tool = match record.get("tool") {
-            None | Some(JsonValue::Null) => None,
-            Some(text) => Some(text.as_str("tool")?.to_string()),
-        };
-        let version_found = match record.get("version_found") {
-            None | Some(JsonValue::Null) => None,
-            Some(text) => Some(text.as_str("version_found")?.to_string()),
-        };
-        let required_range = match record.get("required_range") {
-            None | Some(JsonValue::Null) => None,
-            Some(text) => Some(text.as_str("required_range")?.to_string()),
-        };
-        let resolving_action = match record.get("resolving_action") {
-            None | Some(JsonValue::Null) => None,
-            Some(text) => Some(text.as_str("resolving_action")?.to_string()),
-        };
-        let mut tools = Vec::new();
-        if let Some(probes) = record.get("tools") {
-            for probe in probes.as_array("tools")? {
-                let fields = probe.as_object("tools")?;
-                let version = match fields.get("version_found") {
-                    None | Some(JsonValue::Null) => None,
-                    Some(text) => Some(text.as_str("version_found")?.to_string()),
-                };
-                tools.push(ToolchainProbe {
-                    tool: get_required_str(fields, "tool")?.to_string(),
-                    required_range: get_required_str(fields, "required_range")?.to_string(),
-                    purpose: get_required_str(fields, "purpose")?.to_string(),
-                    present: get_required_bool(fields, "present")?,
-                    version_found: version,
-                });
-            }
-        }
-        let unavailable = match (cause, tool, required_range, resolving_action) {
-            (Some(cause), Some(tool), Some(required_range), Some(resolving_action)) => {
-                Some(crate::toolchain::UnavailableToolchain {
-                    cause,
-                    tool,
-                    version_found,
-                    required_range,
-                    resolving_action,
-                })
-            }
-            (None, None, None, None) => None,
-            _ => {
-                return Err(ReportParseError::new(
-                    "a target availability record carries an incomplete unavailable state",
-                ))
-            }
-        };
-        availability.push(TargetAvailability {
-            target,
-            tools,
-            unavailable,
-        });
+        availability.push(parse_target_availability_entry(entry)?);
     }
     Ok(availability)
+}
+
+fn parse_target_availability_entry(
+    entry: &JsonValue,
+) -> Result<TargetAvailability, ReportParseError> {
+    let record = entry.as_object("target_availability")?;
+    let target_name = get_required_str(record, "target")?;
+    let target = parse_build_target(target_name, TargetArch::X86_64)?;
+    let state = get_required_str(record, "state")?;
+    if state != crate::toolchain::TOOLCHAIN_AVAILABLE
+        && state != crate::toolchain::TOOLCHAIN_EXTERNALLY_UNAVAILABLE
+    {
+        return Err(ReportParseError::new(format!(
+            "unrecognized target availability state '{state}'"
+        )));
+    }
+    let cause = parse_optional_toolchain_cause(record)?;
+    let tool = parse_optional_string_field(record, "tool")?;
+    let version_found = parse_optional_string_field(record, "version_found")?;
+    let required_range = parse_optional_string_field(record, "required_range")?;
+    let resolving_action = parse_optional_string_field(record, "resolving_action")?;
+    let tools = parse_toolchain_probes(record)?;
+    let unavailable = build_unavailable_toolchain(
+        cause,
+        tool,
+        version_found,
+        required_range,
+        resolving_action,
+        "target availability",
+    )?;
+    Ok(TargetAvailability {
+        target,
+        tools,
+        unavailable,
+    })
+}
+
+fn parse_optional_toolchain_cause(
+    record: &BTreeMap<String, JsonValue>,
+) -> Result<Option<ToolchainCause>, ReportParseError> {
+    match record.get("cause") {
+        None | Some(JsonValue::Null) => Ok(None),
+        Some(text) => {
+            let name = text.as_str("cause")?;
+            Ok(Some(ToolchainCause::from_name(name).ok_or_else(|| {
+                ReportParseError::new(format!("unrecognized toolchain cause '{name}'"))
+            })?))
+        }
+    }
+}
+
+fn parse_optional_string_field(
+    record: &BTreeMap<String, JsonValue>,
+    key: &str,
+) -> Result<Option<String>, ReportParseError> {
+    match record.get(key) {
+        None | Some(JsonValue::Null) => Ok(None),
+        Some(text) => Ok(Some(text.as_str(key)?.to_string())),
+    }
+}
+
+fn parse_toolchain_probes(
+    record: &BTreeMap<String, JsonValue>,
+) -> Result<Vec<ToolchainProbe>, ReportParseError> {
+    let mut tools = Vec::new();
+    if let Some(probes) = record.get("tools") {
+        for probe in probes.as_array("tools")? {
+            let fields = probe.as_object("tools")?;
+            let version = parse_optional_string_field(fields, "version_found")?;
+            tools.push(ToolchainProbe {
+                tool: get_required_str(fields, "tool")?.to_string(),
+                required_range: get_required_str(fields, "required_range")?.to_string(),
+                purpose: get_required_str(fields, "purpose")?.to_string(),
+                present: get_required_bool(fields, "present")?,
+                version_found: version,
+            });
+        }
+    }
+    Ok(tools)
+}
+
+fn build_unavailable_toolchain(
+    cause: Option<ToolchainCause>,
+    tool: Option<String>,
+    version_found: Option<String>,
+    required_range: Option<String>,
+    resolving_action: Option<String>,
+    context: &str,
+) -> Result<Option<UnavailableToolchain>, ReportParseError> {
+    match (cause, tool, required_range, resolving_action) {
+        (Some(cause), Some(tool), Some(required_range), Some(resolving_action)) => {
+            Ok(Some(UnavailableToolchain {
+                cause,
+                tool,
+                version_found,
+                required_range,
+                resolving_action,
+            }))
+        }
+        (None, None, None, None) => Ok(None),
+        _ => Err(ReportParseError::new(format!(
+            "a {context} record carries an incomplete unavailable state"
+        ))),
+    }
 }
 
 pub(super) fn get_optional_desktop_packaging(
@@ -1320,74 +1389,51 @@ pub(super) fn get_optional_desktop_packaging(
     }
     let mut outcomes = Vec::new();
     for entry in value.as_array("desktop_packaging")? {
-        let record = entry.as_object("desktop_packaging")?;
-        let target_name = get_required_str(record, "target")?;
-        let target = parse_build_target(target_name, TargetArch::X86_64)?;
-        let state = get_required_str(record, "state")?.to_string();
-        if state != DESKTOP_PACKAGE_STATE_PACKAGED
-            && state != DESKTOP_PACKAGE_STATE_EXTERNALLY_UNAVAILABLE
-        {
-            return Err(ReportParseError::new(format!(
-                "unrecognized desktop packaging state '{state}'"
-            )));
-        }
-        let app_path = get_optional_path(record, "app_path")?;
-        let launch_artifact = get_optional_path(record, "launch_artifact")?;
-        let build_report_path = PathBuf::from(get_required_str(record, "build_report_path")?);
-        let launched = get_required_bool(record, "launched")?;
-        let cause = match record.get("cause") {
-            None | Some(JsonValue::Null) => None,
-            Some(text) => {
-                let name = text.as_str("cause")?;
-                Some(ToolchainCause::from_name(name).ok_or_else(|| {
-                    ReportParseError::new(format!("unrecognized toolchain cause '{name}'"))
-                })?)
-            }
-        };
-        let tool = match record.get("tool") {
-            None | Some(JsonValue::Null) => None,
-            Some(text) => Some(text.as_str("tool")?.to_string()),
-        };
-        let version_found = match record.get("version_found") {
-            None | Some(JsonValue::Null) => None,
-            Some(text) => Some(text.as_str("version_found")?.to_string()),
-        };
-        let required_range = match record.get("required_range") {
-            None | Some(JsonValue::Null) => None,
-            Some(text) => Some(text.as_str("required_range")?.to_string()),
-        };
-        let resolving_action = match record.get("resolving_action") {
-            None | Some(JsonValue::Null) => None,
-            Some(text) => Some(text.as_str("resolving_action")?.to_string()),
-        };
-        let unavailable = match (cause, tool, required_range, resolving_action) {
-            (Some(cause), Some(tool), Some(required_range), Some(resolving_action)) => {
-                Some(UnavailableToolchain {
-                    cause,
-                    tool,
-                    version_found,
-                    required_range,
-                    resolving_action,
-                })
-            }
-            (None, None, None, None) => None,
-            _ => {
-                return Err(ReportParseError::new(
-                    "a desktop packaging record carries an incomplete unavailable state",
-                ))
-            }
-        };
-        outcomes.push(DesktopPackageOutcome {
-            target,
-            state,
-            app_path,
-            launch_artifact,
-            build_report_path,
-            launched,
-            unavailable,
-        });
+        outcomes.push(parse_desktop_packaging_entry(entry)?);
     }
     Ok(outcomes)
+}
+
+fn parse_desktop_packaging_entry(
+    entry: &JsonValue,
+) -> Result<DesktopPackageOutcome, ReportParseError> {
+    let record = entry.as_object("desktop_packaging")?;
+    let target_name = get_required_str(record, "target")?;
+    let target = parse_build_target(target_name, TargetArch::X86_64)?;
+    let state = get_required_str(record, "state")?.to_string();
+    if state != DESKTOP_PACKAGE_STATE_PACKAGED
+        && state != DESKTOP_PACKAGE_STATE_EXTERNALLY_UNAVAILABLE
+    {
+        return Err(ReportParseError::new(format!(
+            "unrecognized desktop packaging state '{state}'"
+        )));
+    }
+    let app_path = get_optional_path(record, "app_path")?;
+    let launch_artifact = get_optional_path(record, "launch_artifact")?;
+    let build_report_path = PathBuf::from(get_required_str(record, "build_report_path")?);
+    let launched = get_required_bool(record, "launched")?;
+    let cause = parse_optional_toolchain_cause(record)?;
+    let tool = parse_optional_string_field(record, "tool")?;
+    let version_found = parse_optional_string_field(record, "version_found")?;
+    let required_range = parse_optional_string_field(record, "required_range")?;
+    let resolving_action = parse_optional_string_field(record, "resolving_action")?;
+    let unavailable = build_unavailable_toolchain(
+        cause,
+        tool,
+        version_found,
+        required_range,
+        resolving_action,
+        "desktop packaging",
+    )?;
+    Ok(DesktopPackageOutcome {
+        target,
+        state,
+        app_path,
+        launch_artifact,
+        build_report_path,
+        launched,
+        unavailable,
+    })
 }
 
 fn get_required_notices(

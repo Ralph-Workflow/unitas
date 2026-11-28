@@ -57,11 +57,7 @@ fn content_update_diffing_against_v1_catalog_emits_only_changed_bundles_and_upda
 
     let host = BuildTarget::host();
     let v1_config = BuildConfiguration::new(
-        vec![
-            boot_scene.clone(),
-            level_one_scene.clone(),
-            level_two_scene.clone(),
-        ],
+        vec![boot_scene, level_one_scene, level_two_scene.clone()],
         "Unitas",
         "CatalogGame",
         "com.unitas.cataloggame",
@@ -72,7 +68,24 @@ fn content_update_diffing_against_v1_catalog_emits_only_changed_bundles_and_upda
 
     let v1_out = workspace.join("v1_content_out");
     let v1_build = build_content_catalog_for_host(&v1_config, &v1_out, Some(host))?;
+    assert_v1_content_catalog(&v1_out, &v1_build, host)?;
 
+    fs::write(&level_two_scene, sample_unity_scene("LevelTwoUpdatedBoss"))?;
+
+    let update_out = workspace.join("v1_update_out");
+    let update_build =
+        build_content_update_for_host(&v1_config, &v1_build.catalog, &update_out, Some(host))?;
+    assert_v1_content_update(&update_out, &v1_build, &update_build, host)?;
+
+    fs::remove_dir_all(&workspace)?;
+    Ok(())
+}
+
+fn assert_v1_content_catalog(
+    v1_out: &std::path::Path,
+    v1_build: &unitas_build::bundle::ContentBuildResult,
+    host: BuildTarget,
+) -> Result<(), Box<dyn std::error::Error>> {
     assert_eq!(v1_build.catalog.unitas_version, env!("CARGO_PKG_VERSION"));
     assert_eq!(v1_build.catalog.player_compatibility_version, "1.0");
     assert_eq!(v1_build.catalog.target, host);
@@ -82,18 +95,20 @@ fn content_update_diffing_against_v1_catalog_emits_only_changed_bundles_and_upda
     assert!(v1_build.rejected_bundles.is_empty());
     assert!(v1_out.join(CONTENT_CATALOG_FILENAME).is_file());
 
-    let loaded_v1_catalog = ContentCatalog::load_from_dir(&v1_out)?;
+    let loaded_v1_catalog = ContentCatalog::load_from_dir(v1_out)?;
     assert_eq!(loaded_v1_catalog, v1_build.catalog);
     assert!(loaded_v1_catalog.is_compatible_with_player("1.0.0", host));
     assert!(loaded_v1_catalog.is_compatible_with_player("1.0.4", host));
     assert!(!loaded_v1_catalog.is_compatible_with_player("2.0.0", host));
+    Ok(())
+}
 
-    fs::write(&level_two_scene, sample_unity_scene("LevelTwoUpdatedBoss"))?;
-
-    let update_out = workspace.join("v1_update_out");
-    let update_build =
-        build_content_update_for_host(&v1_config, &v1_build.catalog, &update_out, Some(host))?;
-
+fn assert_v1_content_update(
+    update_out: &std::path::Path,
+    v1_build: &unitas_build::bundle::ContentBuildResult,
+    update_build: &unitas_build::bundle::ContentBuildResult,
+    host: BuildTarget,
+) -> Result<(), Box<dyn std::error::Error>> {
     assert_eq!(update_build.emitted_bundles.len(), 1);
     let emitted = &update_build.emitted_bundles[0];
     assert!(emitted.bundle_name.contains("LevelTwo"));
@@ -121,11 +136,11 @@ fn content_update_diffing_against_v1_catalog_emits_only_changed_bundles_and_upda
         .catalog
         .is_compatible_with_player("1.0.0", host));
 
-    let loaded_update_catalog = ContentCatalog::load_from_dir(&update_out)?;
+    let loaded_update_catalog = ContentCatalog::load_from_dir(update_out)?;
     assert_eq!(loaded_update_catalog, update_build.catalog);
 
     let report =
-        ContentBuildReport::from_build_result(&update_build, ContentBuildMode::ContentUpdate, 25);
+        ContentBuildReport::from_build_result(update_build, ContentBuildMode::ContentUpdate, 25);
     assert_eq!(report.outcome, BuildOutcome::Succeeded);
     assert_eq!(report.unitas_version, env!("CARGO_PKG_VERSION"));
     assert_eq!(report.player_compatibility_version, "1.0");
@@ -137,8 +152,6 @@ fn content_update_diffing_against_v1_catalog_emits_only_changed_bundles_and_upda
     let report_json = report.to_json();
     let parsed_report = ContentBuildReport::from_json(&report_json)?;
     assert_eq!(parsed_report, report);
-
-    fs::remove_dir_all(&workspace)?;
     Ok(())
 }
 
@@ -153,6 +166,32 @@ fn unity_built_and_incompatible_bundles_are_reported_by_name_and_reason_and_excl
         BuildTarget::WINDOWS_X86_64
     };
 
+    let inputs = build_rejected_bundle_test_inputs(&workspace, host, mismatched_target)?;
+    let out_dir = workspace.join("validated_content_out");
+    let validation_result = validate_content_bundle(&inputs, host, "1.0", &out_dir)?;
+
+    assert_eq!(validation_result.emitted_bundles.len(), 1);
+    assert_eq!(
+        validation_result.emitted_bundles[0].bundle_name,
+        "valid_level"
+    );
+    assert!(out_dir
+        .join(&validation_result.emitted_bundles[0].staged_path)
+        .is_file());
+
+    assert_eq!(validation_result.rejected_bundles.len(), 5);
+    assert_rejected_bundle_reasons(&validation_result, host, mismatched_target);
+    assert_rejected_bundles_excluded_and_reported(&validation_result, &out_dir)?;
+
+    fs::remove_dir_all(&workspace)?;
+    Ok(())
+}
+
+fn build_rejected_bundle_test_inputs(
+    workspace: &std::path::Path,
+    host: BuildTarget,
+    mismatched_target: BuildTarget,
+) -> Result<Vec<ContentBundleInput>, Box<dyn std::error::Error>> {
     let valid_scene_path = workspace.join("ValidScene.unity");
     fs::write(&valid_scene_path, sample_unity_scene("ValidRoot"))?;
 
@@ -176,29 +215,21 @@ fn unity_built_and_incompatible_bundles_are_reported_by_name_and_reason_and_excl
     let wrong_target_path = workspace.join("wrong_target.bundle");
     fs::write(&wrong_target_path, sample_unity_scene("WrongTargetContent"))?;
 
-    let inputs = vec![
+    Ok(vec![
         ContentBundleInput::new("valid_level", valid_scene_path, host, "1.0"),
         ContentBundleInput::new("characters_unity", unity_fs_path, host, "1.0"),
         ContentBundleInput::new("env_unityweb", unity_web_path, host, "1.0"),
         ContentBundleInput::new("props_unityraw", unity_raw_path, host, "1.0"),
         ContentBundleInput::new("future_player", incompatible_player_path, host, "2.0"),
         ContentBundleInput::new("wrong_target", wrong_target_path, mismatched_target, "1.0"),
-    ];
+    ])
+}
 
-    let out_dir = workspace.join("validated_content_out");
-    let validation_result = validate_content_bundle(&inputs, host, "1.0", &out_dir)?;
-
-    assert_eq!(validation_result.emitted_bundles.len(), 1);
-    assert_eq!(
-        validation_result.emitted_bundles[0].bundle_name,
-        "valid_level"
-    );
-    assert!(out_dir
-        .join(&validation_result.emitted_bundles[0].staged_path)
-        .is_file());
-
-    assert_eq!(validation_result.rejected_bundles.len(), 5);
-
+fn assert_rejected_bundle_reasons(
+    validation_result: &unitas_build::bundle::ContentBuildResult,
+    host: BuildTarget,
+    mismatched_target: BuildTarget,
+) {
     let find_rejection = |name: &str| {
         validation_result
             .rejected_bundles
@@ -206,36 +237,22 @@ fn unity_built_and_incompatible_bundles_are_reported_by_name_and_reason_and_excl
             .find(|item| item.bundle_name == name)
     };
 
-    let unity_fs_rej = find_rejection("characters_unity");
-    assert!(matches!(
-        unity_fs_rej,
-        Some(rej) if matches!(
-            rej.reason,
-            ContentRejectionReason::UnityBuiltArchive { ref signature } if signature == "UnityFS"
-        )
-    ));
+    for (name, expected_sig) in [
+        ("characters_unity", "UnityFS"),
+        ("env_unityweb", "UnityWeb"),
+        ("props_unityraw", "UnityRaw"),
+    ] {
+        assert!(matches!(
+            find_rejection(name),
+            Some(rej) if matches!(
+                rej.reason,
+                ContentRejectionReason::UnityBuiltArchive { ref signature } if signature == expected_sig
+            )
+        ));
+    }
 
-    let unity_web_rej = find_rejection("env_unityweb");
     assert!(matches!(
-        unity_web_rej,
-        Some(rej) if matches!(
-            rej.reason,
-            ContentRejectionReason::UnityBuiltArchive { ref signature } if signature == "UnityWeb"
-        )
-    ));
-
-    let unity_raw_rej = find_rejection("props_unityraw");
-    assert!(matches!(
-        unity_raw_rej,
-        Some(rej) if matches!(
-            rej.reason,
-            ContentRejectionReason::UnityBuiltArchive { ref signature } if signature == "UnityRaw"
-        )
-    ));
-
-    let future_rej = find_rejection("future_player");
-    assert!(matches!(
-        future_rej,
+        find_rejection("future_player"),
         Some(rej) if matches!(
             rej.reason,
             ContentRejectionReason::IncompatiblePlayerVersion {
@@ -245,9 +262,8 @@ fn unity_built_and_incompatible_bundles_are_reported_by_name_and_reason_and_excl
         )
     ));
 
-    let target_rej = find_rejection("wrong_target");
     assert!(matches!(
-        target_rej,
+        find_rejection("wrong_target"),
         Some(rej) if matches!(
             rej.reason,
             ContentRejectionReason::TargetMismatch {
@@ -256,7 +272,12 @@ fn unity_built_and_incompatible_bundles_are_reported_by_name_and_reason_and_excl
             } if bundle_target == mismatched_target && expected_target == host
         )
     ));
+}
 
+fn assert_rejected_bundles_excluded_and_reported(
+    validation_result: &unitas_build::bundle::ContentBuildResult,
+    out_dir: &std::path::Path,
+) -> Result<(), Box<dyn std::error::Error>> {
     for rejected_name in [
         "characters_unity",
         "env_unityweb",
@@ -275,11 +296,8 @@ fn unity_built_and_incompatible_bundles_are_reported_by_name_and_reason_and_excl
         assert!(!staged_candidate.exists());
     }
 
-    let report = ContentBuildReport::from_build_result(
-        &validation_result,
-        ContentBuildMode::FullCatalog,
-        12,
-    );
+    let report =
+        ContentBuildReport::from_build_result(validation_result, ContentBuildMode::FullCatalog, 12);
     assert_eq!(report.outcome, BuildOutcome::Failed);
     assert_eq!(report.rejected_bundles.len(), 5);
     for rej in &validation_result.rejected_bundles {
@@ -292,8 +310,6 @@ fn unity_built_and_incompatible_bundles_are_reported_by_name_and_reason_and_excl
     let json = report.to_json();
     let round_trip = ContentBuildReport::from_json(&json)?;
     assert_eq!(round_trip, report);
-
-    fs::remove_dir_all(&workspace)?;
     Ok(())
 }
 
@@ -332,6 +348,38 @@ fn bld_005_story_25_addressables_profile_groups_dependencies_and_shipped_player_
     let initial_session = launch_bundle(&player_dir, 2, 1.0 / 60.0)?;
     assert_eq!(initial_session.root_object_count, 1);
 
+    let (profile, groups) =
+        build_addressables_profile_and_groups(boot_scene.clone(), arena_scene, boss_scene);
+
+    let v1_content_dir = workspace.join("v1_addressables");
+    let v1_result = build_addressables_content_for_host(
+        &player_config,
+        &profile,
+        &groups,
+        &v1_content_dir,
+        Some(host),
+    )?;
+    assert_v1_addressables_catalog(&v1_content_dir, &v1_result, host)?;
+
+    assert_v2_addressables_update_and_player_apply(
+        &workspace,
+        &boot_scene,
+        &player_config,
+        &profile,
+        &groups,
+        &v1_result.catalog,
+        (&player_dir, &staged_player, &initial_launcher_bytes),
+    )?;
+
+    fs::remove_dir_all(&workspace)?;
+    Ok(())
+}
+
+fn build_addressables_profile_and_groups(
+    boot_scene: PathBuf,
+    arena_scene: PathBuf,
+    boss_scene: PathBuf,
+) -> (AddressablesProfile, Vec<AddressablesGroupConfig>) {
     let mut profile = AddressablesProfile::new(
         "ProductionCDN",
         "ServerData/[BuildTarget]",
@@ -342,36 +390,34 @@ fn bld_005_story_25_addressables_profile_groups_dependencies_and_shipped_player_
     let groups = vec![
         AddressablesGroupConfig::new(
             "core_shared",
-            vec![boot_scene.clone()],
+            vec![boot_scene],
             "{BuildPath}/{Env}/core",
             "{LoadPath}/{Env}/core",
             Vec::new(),
         ),
         AddressablesGroupConfig::new(
             "world_arena",
-            vec![arena_scene.clone()],
+            vec![arena_scene],
             "{BuildPath}/{Env}/world",
             "{LoadPath}/{Env}/world",
             vec![String::from("core_shared")],
         ),
         AddressablesGroupConfig::new(
             "world_boss",
-            vec![boss_scene.clone()],
+            vec![boss_scene],
             "{BuildPath}/{Env}/boss",
             "{LoadPath}/{Env}/boss",
             vec![String::from("core_shared"), String::from("world_arena")],
         ),
     ];
+    (profile, groups)
+}
 
-    let v1_content_dir = workspace.join("v1_addressables");
-    let v1_result = build_addressables_content_for_host(
-        &player_config,
-        &profile,
-        &groups,
-        &v1_content_dir,
-        Some(host),
-    )?;
-
+fn assert_v1_addressables_catalog(
+    v1_content_dir: &std::path::Path,
+    v1_result: &unitas_build::bundle::ContentBuildResult,
+    host: BuildTarget,
+) -> Result<(), Box<dyn std::error::Error>> {
     assert_eq!(
         v1_result.catalog.unitas_version,
         env!("CARGO_PKG_VERSION"),
@@ -424,38 +470,40 @@ fn bld_005_story_25_addressables_profile_groups_dependencies_and_shipped_player_
         v1_content_dir.join(&boss_entry.staged_path).is_file(),
         "BLD-005 story 25: bundle must be staged at its resolved profile build path"
     );
+    Ok(())
+}
 
+fn assert_v2_addressables_update_and_player_apply(
+    workspace: &std::path::Path,
+    boot_scene: &std::path::Path,
+    player_config: &BuildConfiguration,
+    profile: &AddressablesProfile,
+    groups: &[AddressablesGroupConfig],
+    v1_catalog: &ContentCatalog,
+    player_state: (&std::path::Path, &unitas_build::StagedBundle, &[u8]),
+) -> Result<(), Box<dyn std::error::Error>> {
+    let (player_dir, staged_player, initial_launcher_bytes) = player_state;
+    let host = player_config.target;
     let updated_boot_yaml = format!(
         "{}\n--- !u!1 &200\nGameObject:\n  m_Name: LiveEventBanner\n--- !u!4 &201\nTransform:\n  m_GameObject: {{fileID: 200}}\n  m_Father: {{fileID: 0}}\n  m_Children: []\n  m_LocalPosition: {{x: 1, y: 2, z: 3}}\n  m_LocalRotation: {{x: 0, y: 0, z: 0, w: 1}}\n  m_LocalScale: {{x: 1, y: 1, z: 1}}\n",
         sample_unity_scene("BootRootV2")
     );
-    fs::write(&boot_scene, updated_boot_yaml)?;
+    fs::write(boot_scene, updated_boot_yaml)?;
 
     let v2_update_dir = workspace.join("v2_addressables_update");
     let v2_update = build_addressables_content_update_for_host(
-        &player_config,
-        &profile,
-        &groups,
-        &v1_result.catalog,
+        player_config,
+        profile,
+        groups,
+        v1_catalog,
         &v2_update_dir,
         Some(host),
     )?;
 
-    assert_eq!(
-        v2_update.emitted_bundles.len(),
-        1,
-        "BLD-005 story 25: post-release content update must emit only the changed bundle"
-    );
+    assert_eq!(v2_update.emitted_bundles.len(), 1);
     assert_eq!(v2_update.emitted_bundles[0].group_name, "core_shared");
-    assert_eq!(
-        v2_update.unchanged_bundles.len(),
-        2,
-        "BLD-005 story 25: unchanged bundles must not be re-emitted"
-    );
-    assert_ne!(
-        v2_update.catalog.catalog_hash, v1_result.catalog.catalog_hash,
-        "BLD-005 story 25: content update must produce a new content catalog"
-    );
+    assert_eq!(v2_update.unchanged_bundles.len(), 2);
+    assert_ne!(v2_update.catalog.catalog_hash, v1_catalog.catalog_hash);
 
     let v2_report =
         ContentBuildReport::from_build_result(&v2_update, ContentBuildMode::ContentUpdate, 18);
@@ -464,11 +512,7 @@ fn bld_005_story_25_addressables_profile_groups_dependencies_and_shipped_player_
         v2_report.compatible_player_versions,
         v2_update.catalog.compatible_player_versions
     );
-    assert_eq!(
-        v2_report.bundles.len(),
-        3,
-        "BLD-005 story 25: content build report must record the bundle list with hashes and dependencies"
-    );
+    assert_eq!(v2_report.bundles.len(), 3);
     let report_json = v2_report.to_json();
     let parsed_v2_report = ContentBuildReport::from_json(&report_json)?;
     assert_eq!(parsed_v2_report, v2_report);
@@ -476,18 +520,12 @@ fn bld_005_story_25_addressables_profile_groups_dependencies_and_shipped_player_
     let reloaded_v2_catalog = ContentCatalog::load_from_dir(&v2_update_dir)?;
     assert_eq!(reloaded_v2_catalog, v2_update.catalog);
 
-    let updated_session = apply_content_update_to_player(&player_dir, &v2_update, 3, 1.0 / 60.0)?;
+    let updated_session = apply_content_update_to_player(player_dir, &v2_update, 3, 1.0 / 60.0)?;
     assert_eq!(
         fs::read(&staged_player.launch_artifact_path)?,
-        initial_launcher_bytes,
-        "BLD-005 story 25: already-shipped player loads content update without rebuilding player binary"
+        initial_launcher_bytes
     );
-    assert_eq!(
-        updated_session.root_object_count, 2,
-        "BLD-005 story 25: shipped player must load the updated scene content from the content update"
-    );
-
-    fs::remove_dir_all(&workspace)?;
+    assert_eq!(updated_session.root_object_count, 2);
     Ok(())
 }
 
@@ -514,17 +552,50 @@ fn collect_relative_files(
 #[test]
 fn ser005_outcome17_project_open_and_build_to_named_output_folder_writes_only_sln_csproj_and_named_build_output(
 ) -> Result<(), Box<dyn std::error::Error>> {
-    use unitas_asset::project::{MigrationStatus, Project, BASELINE_UNITY_VERSION};
+    use unitas_asset::project::{MigrationStatus, Project};
     use unitas_asset::trust::{TrustOrigin, TrustStore};
-    use unitas_build::player::BUILD_REPORT_FILENAME;
-    use unitas_build::BUNDLE_MANIFEST_FILENAME;
 
     let workspace = temp_dir("ser005_outcome17_build_footprint")?;
     let project_root = workspace.join("project_2022");
     let per_user_dir = workspace.join("unitas_user_state");
+    fs::create_dir_all(&per_user_dir)?;
+    let (scene_path, initial_project_files) = setup_ser005_project(&project_root)?;
+
+    let store = TrustStore::new(per_user_dir.join("trust.json"));
+    let (_, open_report) = Project::open(&project_root, &store)?;
+    assert_eq!(open_report.declared_version.as_deref(), Some("2022.3.16f1"));
+    assert_eq!(open_report.migration, MigrationStatus::Current);
+    assert!(!project_root
+        .join("ProjectSettings/UnitasVersion.txt")
+        .exists());
+
+    let mut after_open_files = Vec::new();
+    collect_relative_files(&project_root, &project_root, &mut after_open_files)?;
+    after_open_files.sort();
+    assert_eq!(after_open_files, initial_project_files);
+
+    store.trust_project(&project_root.to_string_lossy(), TrustOrigin::Person)?;
+
+    let (sln_rel, csproj_rel) = write_project_solution_files(&project_root)?;
+    build_and_verify_ser005_output(&workspace, &scene_path)?;
+    assert_ser005_footprint(
+        &workspace,
+        &project_root,
+        &initial_project_files,
+        &[csproj_rel, sln_rel],
+    )?;
+
+    fs::remove_dir_all(&workspace)?;
+    Ok(())
+}
+
+fn setup_ser005_project(
+    project_root: &std::path::Path,
+) -> Result<(PathBuf, Vec<PathBuf>), Box<dyn std::error::Error>> {
+    use unitas_asset::project::BASELINE_UNITY_VERSION;
+
     fs::create_dir_all(project_root.join("Assets/Scenes"))?;
     fs::create_dir_all(project_root.join("ProjectSettings"))?;
-    fs::create_dir_all(&per_user_dir)?;
 
     let scene_path = project_root.join("Assets/Scenes/Main.unity");
     let scene_meta_path = project_root.join("Assets/Scenes/Main.unity.meta");
@@ -546,30 +617,14 @@ fn ser005_outcome17_project_open_and_build_to_named_output_folder_writes_only_sl
     )?;
 
     let mut initial_project_files = Vec::new();
-    collect_relative_files(&project_root, &project_root, &mut initial_project_files)?;
+    collect_relative_files(project_root, project_root, &mut initial_project_files)?;
     initial_project_files.sort();
+    Ok((scene_path, initial_project_files))
+}
 
-    let store = TrustStore::new(per_user_dir.join("trust.json"));
-    let (_, open_report) = Project::open(&project_root, &store)?;
-    assert_eq!(open_report.declared_version.as_deref(), Some("2022.3.16f1"));
-    assert_eq!(open_report.migration, MigrationStatus::Current);
-    assert!(
-        !project_root
-            .join("ProjectSettings/UnitasVersion.txt")
-            .exists(),
-        "SER-005 outcome 17: opening alone writes no recorded unitas version"
-    );
-
-    let mut after_open_files = Vec::new();
-    collect_relative_files(&project_root, &project_root, &mut after_open_files)?;
-    after_open_files.sort();
-    assert_eq!(
-        after_open_files, initial_project_files,
-        "SER-005 outcome 17: opening a project must not write any files into project root"
-    );
-
-    store.trust_project(&project_root.to_string_lossy(), TrustOrigin::Person)?;
-
+fn write_project_solution_files(
+    project_root: &std::path::Path,
+) -> Result<(PathBuf, PathBuf), Box<dyn std::error::Error>> {
     let sln_rel = PathBuf::from("project_2022.sln");
     let csproj_rel = PathBuf::from("Assembly-CSharp.csproj");
     fs::write(
@@ -580,10 +635,19 @@ fn ser005_outcome17_project_open_and_build_to_named_output_folder_writes_only_sl
         project_root.join(&csproj_rel),
         "<Project Sdk=\"Microsoft.NET.Sdk\" />\n",
     )?;
+    Ok((sln_rel, csproj_rel))
+}
+
+fn build_and_verify_ser005_output(
+    workspace: &std::path::Path,
+    scene_path: &std::path::Path,
+) -> Result<(), Box<dyn std::error::Error>> {
+    use unitas_build::player::BUILD_REPORT_FILENAME;
+    use unitas_build::BUNDLE_MANIFEST_FILENAME;
 
     let host = BuildTarget::host();
     let config = BuildConfiguration::new(
-        vec![scene_path.clone()],
+        vec![scene_path.to_path_buf()],
         "Unitas",
         "FootprintGame",
         "com.unitas.footprintgame",
@@ -608,22 +672,24 @@ fn ser005_outcome17_project_open_and_build_to_named_output_folder_writes_only_sl
 
     let launched = launch_bundle(&named_output_dir, 1, 1.0 / 60.0)?;
     assert_eq!(launched.root_object_count, 1);
+    Ok(())
+}
 
+fn assert_ser005_footprint(
+    workspace: &std::path::Path,
+    project_root: &std::path::Path,
+    initial_project_files: &[PathBuf],
+    expected_added: &[PathBuf],
+) -> Result<(), Box<dyn std::error::Error>> {
     for generated in ["Library", "Temp", "Logs", "obj", "UserSettings"] {
-        assert!(
-            !project_root.join(generated).exists(),
-            "SER-005 outcome 17: Unity-generated folder {generated} must not exist after open and build"
-        );
+        assert!(!project_root.join(generated).exists());
     }
-    assert!(
-        !project_root
-            .join("ProjectSettings/UnitasVersion.txt")
-            .exists(),
-        "SER-005 outcome 17: opening and building without saving project edits must not write UnitasVersion.txt"
-    );
+    assert!(!project_root
+        .join("ProjectSettings/UnitasVersion.txt")
+        .exists());
 
     let mut after_build_project_files = Vec::new();
-    collect_relative_files(&project_root, &project_root, &mut after_build_project_files)?;
+    collect_relative_files(project_root, project_root, &mut after_build_project_files)?;
     after_build_project_files.sort();
 
     let added_in_project: Vec<PathBuf> = after_build_project_files
@@ -631,14 +697,10 @@ fn ser005_outcome17_project_open_and_build_to_named_output_folder_writes_only_sl
         .filter(|p| !initial_project_files.contains(p))
         .cloned()
         .collect();
-    assert_eq!(
-        added_in_project,
-        vec![csproj_rel, sln_rel],
-        "SER-005 outcome 17: only .sln and .csproj may be written at the project root outside project content"
-    );
+    assert_eq!(added_in_project, expected_added);
 
     let mut workspace_files = Vec::new();
-    collect_relative_files(&workspace, &workspace, &mut workspace_files)?;
+    collect_relative_files(workspace, workspace, &mut workspace_files)?;
     workspace_files.sort();
     for rel in &workspace_files {
         let top = rel
@@ -648,11 +710,9 @@ fn ser005_outcome17_project_open_and_build_to_named_output_folder_writes_only_sl
             .unwrap_or_default();
         assert!(
             top == "project_2022" || top == "unitas_user_state" || top == "NamedBuildOutput",
-            "SER-005 outcome 17: unexpected file written outside project content, unitas-owned state, and named output folder: {}",
+            "unexpected file written outside project content: {}",
             rel.display()
         );
     }
-
-    fs::remove_dir_all(&workspace)?;
     Ok(())
 }

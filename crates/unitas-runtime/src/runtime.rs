@@ -8,8 +8,8 @@ use unitas_asset::project_settings::{
     parse_physics_manager, parse_physics2d_settings, parse_quality_settings,
 };
 use unitas_asset::scene::{
-    AudioSourceComponent, CharacterControllerComponent, ParticleBinding, ScriptBinding,
-    TrailBinding, assemble_scene_file_bundle,
+    AudioSourceComponent, CharacterControllerComponent, ParticleBinding, PhysicsBinding,
+    RenderBinding, ScriptBinding, TrailBinding, assemble_scene_file_bundle,
 };
 use unitas_asset::trail::TrailRendererBinding;
 use unitas_asset::{
@@ -388,25 +388,35 @@ impl Runtime {
         validate_bodies(&descs)?;
         self.prepare_scene_load(mode, &settings, &mut hook);
         let entity_base = self.next_entity_base();
+        let loaded = self.build_loaded_scene(path, assembled, scripts, &descs, collider_diagnostics)?;
+        self.finish_scene_load(loaded)
+    }
+
+    fn build_loaded_scene(
+        &mut self,
+        path: &Path,
+        assembled: SceneBundle,
+        scripts: Vec<ScriptInstance>,
+        descs: &[(EntityId, BodyDesc, [f64; 3], Vec<BodyColliderDesc>)],
+        collider_diagnostics: Vec<(EntityId, String)>,
+    ) -> Result<LoadedScene, RuntimeError> {
+        let entity_base = self.next_entity_base();
         let mut graph = assembled.graph;
         graph.shift_entity_ids(entity_base);
         let mut ui = assembled.ui;
         ui.shift_entity_ids(entity_base);
         let ui = UiComponents::new(ui);
         let scripts = shift_scene_scripts(scripts, entity_base);
-        let (bodies, body_offsets, body_colliders) = shift_scene_bodies(&descs, entity_base);
-        let character_controllers = collect_character_controllers(&assembled.physics, entity_base);
-        for (entity, config) in &character_controllers {
-            self.character_states
-                .insert(*entity, controller_from_component(Some(*entity), config));
-        }
-        let mut diagnostics = collect_material_diagnostics(&assembled.physics, entity_base);
-        diagnostics.extend(
-            collider_diagnostics
-                .into_iter()
-                .map(|(entity, text)| (EntityId::new(entity_base + entity.as_u64()), text)),
+        let (bodies, body_offsets, body_colliders) = shift_scene_bodies(descs, entity_base);
+        let character_controllers =
+            self.register_scene_character_controllers(&assembled.physics, entity_base);
+        let mut diagnostics = self.collect_initial_scene_diagnostics(
+            &assembled.physics,
+            collider_diagnostics,
+            &assembled.render,
+            entity_base,
+            &graph,
         );
-        diagnostics.extend(self.populate_render_world(&assembled.render, entity_base, &graph));
         let audio_sources = self.register_scene_audio_sources(
             assembled.audio_bindings,
             entity_base,
@@ -414,16 +424,16 @@ impl Runtime {
             &mut diagnostics,
         );
         let rigidbodies = collect_scene_rigidbodies(&assembled.physics, entity_base);
-        self.register_scene_bodies(&bodies, &descs, &rigidbodies)?;
+        self.register_scene_bodies(&bodies, descs, &rigidbodies)?;
         attach_scene_physics_2d(
             &mut self.physics,
             &graph,
             &assembled.physics_2d,
             entity_base,
         );
-        let particle_entities = self.register_scene_particles(&assembled.particles, entity_base);
-        let trail_entities = self.register_scene_trails(&assembled.trails, entity_base);
-        let animator_entities = self.register_scene_animators(
+        let particles = self.register_scene_particles(&assembled.particles, entity_base);
+        let trails = self.register_scene_trails(&assembled.trails, entity_base);
+        let animators = self.register_scene_animators(
             &assembled.animators,
             entity_base,
             &graph,
@@ -431,9 +441,10 @@ impl Runtime {
             &mut diagnostics,
         );
         let entity_count = graph.len() as u64;
-        let rigid_body_ids = rigidbodies.keys().copied().collect();
-        self.scenes.push(LoadedScene {
-            name: scene_name_from_path(path),
+        let rigid_bodies = rigidbodies.keys().copied().collect();
+        let name = scene_name_from_path(path);
+        Ok(LoadedScene {
+            name,
             graph,
             scripts,
             bodies,
@@ -441,15 +452,50 @@ impl Runtime {
             body_colliders,
             character_controllers,
             audio_sources,
-            animators: animator_entities,
-            particles: particle_entities,
-            trails: trail_entities,
+            animators,
+            particles,
+            trails,
             ui,
             diagnostics,
             entity_base,
             entity_count,
-            rigid_bodies: rigid_body_ids,
-        });
+            rigid_bodies,
+        })
+    }
+
+    fn register_scene_character_controllers(
+        &mut self,
+        physics: &[PhysicsBinding],
+        entity_base: u64,
+    ) -> Vec<(EntityId, CharacterControllerComponent)> {
+        let character_controllers = collect_character_controllers(physics, entity_base);
+        for (entity, config) in &character_controllers {
+            self.character_states
+                .insert(*entity, controller_from_component(Some(*entity), config));
+        }
+        character_controllers
+    }
+
+    fn collect_initial_scene_diagnostics(
+        &mut self,
+        physics: &[PhysicsBinding],
+        collider_diagnostics: Vec<(EntityId, String)>,
+        render: &RenderBinding,
+        entity_base: u64,
+        graph: &SceneGraph,
+    ) -> Vec<(EntityId, String)> {
+        let mut diagnostics = collect_material_diagnostics(physics, entity_base);
+        diagnostics.extend(
+            collider_diagnostics
+                .into_iter()
+                .map(|(entity, text)| (EntityId::new(entity_base + entity.as_u64()), text)),
+        );
+        diagnostics.extend(self.populate_render_world(render, entity_base, graph));
+        diagnostics
+    }
+
+    fn finish_scene_load(&mut self, scene: LoadedScene) -> Result<usize, RuntimeError> {
+        self.scenes.push(scene);
         if self.active_scene.is_none() {
             self.active_scene = Some(self.scenes.len() - 1);
         }
@@ -652,76 +698,66 @@ impl Runtime {
         self.active_scene
     }
 
+    fn detach_scene_animator_for_persistence(&mut self, entity: EntityId) -> bool {
+        for scene in &mut self.scenes {
+            if let Some(anim_index) = scene.animators.iter().position(|id| *id == entity) {
+                let entry = scene.animators.remove(anim_index);
+                if !self.persistent_animators.contains(&entry) {
+                    self.persistent_animators.push(entry);
+                }
+                return true;
+            }
+        }
+        false
+    }
+
+    fn detach_scene_components_for_persistence(&mut self, entity: EntityId) -> bool {
+        let mut found = false;
+        for scene in &mut self.scenes {
+            if let Some(idx) = scene.scripts.iter().position(|s| s.entity == entity) {
+                self.persistent.push(scene.scripts.remove(idx));
+                found = true;
+                break;
+            }
+        }
+        for scene in &mut self.scenes {
+            if let Some(idx) = scene.bodies.iter().position(|b| *b == entity) {
+                scene.bodies.remove(idx);
+                scene.body_offsets.retain(|(id, _)| *id != entity);
+                found = true;
+                break;
+            }
+        }
+        for scene in &mut self.scenes {
+            if let Some(idx) = scene
+                .character_controllers
+                .iter()
+                .position(|(id, _)| *id == entity)
+            {
+                self.persistent_character_controllers
+                    .push(scene.character_controllers.remove(idx));
+                found = true;
+                break;
+            }
+        }
+        for scene in &mut self.scenes {
+            if let Some(idx) = scene.audio_sources.iter().position(|(id, _)| *id == entity) {
+                self.persistent_audio_sources
+                    .push(scene.audio_sources.remove(idx));
+                found = true;
+                break;
+            }
+        }
+        found
+    }
+
     pub fn dont_destroy_on_load(&mut self, entity: EntityId) -> Result<(), RuntimeError> {
         if self.persistent_entities.contains(&entity) {
             return Ok(());
         }
-        let mut found = false;
-        for index in 0..self.scenes.len() {
-            let script_index = self.scenes[index]
-                .scripts
-                .iter()
-                .position(|script| script.entity == entity);
-            if let Some(script_index) = script_index {
-                let script = self.scenes[index].scripts.remove(script_index);
-                self.persistent.push(script);
-                found = true;
-                break;
-            }
-        }
-        for index in 0..self.scenes.len() {
-            let body_index = self.scenes[index]
-                .bodies
-                .iter()
-                .position(|body| *body == entity);
-            if let Some(body_index) = body_index {
-                self.scenes[index].bodies.remove(body_index);
-                self.scenes[index]
-                    .body_offsets
-                    .retain(|(id, _)| *id != entity);
-                found = true;
-                break;
-            }
-        }
-        for index in 0..self.scenes.len() {
-            let controller_index = self.scenes[index]
-                .character_controllers
-                .iter()
-                .position(|(id, _)| *id == entity);
-            if let Some(controller_index) = controller_index {
-                let entry = self.scenes[index]
-                    .character_controllers
-                    .remove(controller_index);
-                self.persistent_character_controllers.push(entry);
-                found = true;
-                break;
-            }
-        }
-        for index in 0..self.scenes.len() {
-            let audio_index = self.scenes[index]
-                .audio_sources
-                .iter()
-                .position(|(id, _)| *id == entity);
-            if let Some(audio_index) = audio_index {
-                let entry = self.scenes[index].audio_sources.remove(audio_index);
-                self.persistent_audio_sources.push(entry);
-                found = true;
-                break;
-            }
-        }
-        for index in 0..self.scenes.len() {
-            let anim_index = self.scenes[index]
-                .animators
-                .iter()
-                .position(|id| *id == entity);
-            if let Some(anim_index) = anim_index {
-                let entry = self.scenes[index].animators.remove(anim_index);
-                if !self.persistent_animators.contains(&entry) {
-                    self.persistent_animators.push(entry);
-                }
-                found = true;
-                break;
-            }
+        let mut found = self.detach_scene_components_for_persistence(entity);
+        if self.detach_scene_animator_for_persistence(entity) {
+            found = true;
         }
         if !found && self.animation.entry(entity).is_some() {
             if !self.persistent_animators.contains(&entity) {
@@ -1206,6 +1242,31 @@ impl Runtime {
         Ok(())
     }
 
+    fn invoke_script_delta_callback<H>(
+        &mut self,
+        delta: f64,
+        cb: extern "C" fn(u64, f64),
+        hook: &mut H,
+    ) where
+        H: FnMut(&mut Self, &mut dyn FnMut()),
+    {
+        for handle in self.all_script_handles() {
+            hook(self, &mut || cb(handle, delta));
+        }
+    }
+
+    fn run_vfx_update(&mut self, scaled_delta: f64) {
+        self.particles
+            .step_all(scaled_delta as f32, Some(self.physics.world_3d()));
+        self.particles_2d
+            .step_all(scaled_delta as f32, Some(self.physics.world_2d()));
+        self.step_trails(scaled_delta as f32);
+        if scaled_delta >= 0.0 {
+            let _ = self.navigation.step(scaled_delta);
+        }
+        self.terrain.apply_heightfields(self.physics.world_3d_mut());
+    }
+
     fn run_player_loop_work<H>(
         &mut self,
         work: BuiltinWork,
@@ -1218,77 +1279,34 @@ impl Runtime {
     {
         match work {
             BuiltinWork::PlayerUpdateTime => {
-                self.accumulator += scaled_delta;
-                if self.accumulator > self.maximum_delta_time {
-                    self.accumulator = self.maximum_delta_time;
-                }
+                self.accumulator = (self.accumulator + scaled_delta).min(self.maximum_delta_time);
             }
-            BuiltinWork::SynchronizeInputs => {
-                self.input.begin_frame(scaled_delta);
-            }
-            BuiltinWork::PhysicsFixedUpdate => {
-                self.run_physics_fixed_update_3d()?;
-            }
-            BuiltinWork::Physics2DFixedUpdate => {
-                self.run_physics_fixed_update_2d();
-            }
-            BuiltinWork::PhysicsUpdateStep3D => {
-                self.run_physics_update_3d(scaled_delta, hook)?;
-            }
-            BuiltinWork::Physics2DUpdateStep => {
-                self.run_physics_update_2d(scaled_delta, hook);
-            }
+            BuiltinWork::SynchronizeInputs => self.input.begin_frame(scaled_delta),
+            BuiltinWork::PhysicsFixedUpdate => self.run_physics_fixed_update_3d()?,
+            BuiltinWork::Physics2DFixedUpdate => self.run_physics_fixed_update_2d(),
+            BuiltinWork::PhysicsUpdateStep3D => self.run_physics_update_3d(scaled_delta, hook)?,
+            BuiltinWork::Physics2DUpdateStep => self.run_physics_update_2d(scaled_delta, hook),
             BuiltinWork::ScriptRunBehaviourFixedUpdate => {
-                let fixed_step = self.fixed_timestep;
-                if let Some(callbacks) = self.callbacks {
-                    let handles = self.all_script_handles();
-                    for handle in handles {
-                        hook(self, &mut || {
-                            (callbacks.fixed_update)(handle, fixed_step);
-                        });
-                    }
+                if let Some(cb) = self.callbacks {
+                    self.invoke_script_delta_callback(self.fixed_timestep, cb.fixed_update, hook);
                 }
             }
             BuiltinWork::ScriptRunBehaviourUpdate => {
-                if let Some(callbacks) = self.callbacks {
-                    let handles = self.all_script_handles();
-                    for handle in handles {
-                        hook(self, &mut || {
-                            (callbacks.update)(handle, scaled_delta);
-                        });
-                    }
+                if let Some(cb) = self.callbacks {
+                    self.invoke_script_delta_callback(scaled_delta, cb.update, hook);
                 }
             }
-            BuiltinWork::LegacyAnimationUpdate => {
-                self.step_animators(scaled_delta);
-            }
-            BuiltinWork::VFXUpdate => {
-                self.particles
-                    .step_all(scaled_delta as f32, Some(self.physics.world_3d()));
-                self.particles_2d
-                    .step_all(scaled_delta as f32, Some(self.physics.world_2d()));
-                self.step_trails(scaled_delta as f32);
-                if scaled_delta >= 0.0 {
-                    let _ = self.navigation.step(scaled_delta);
-                }
-                self.terrain.apply_heightfields(self.physics.world_3d_mut());
-            }
+            BuiltinWork::LegacyAnimationUpdate => self.step_animators(scaled_delta),
+            BuiltinWork::VFXUpdate => self.run_vfx_update(scaled_delta),
             BuiltinWork::UpdateAudio => {
                 self.sync_audio_source_positions();
                 self.sync_audio_listener();
                 self.audio.tick(delta_seconds, self.time_scale);
             }
-            BuiltinWork::UpdateCanvas => {
-                self.route_ui_pointer();
-            }
+            BuiltinWork::UpdateCanvas => self.route_ui_pointer(),
             BuiltinWork::ScriptLateUpdate => {
-                if let Some(callbacks) = self.callbacks {
-                    let late_handles = self.all_script_handles();
-                    for handle in late_handles {
-                        hook(self, &mut || {
-                            (callbacks.late_update)(handle, scaled_delta);
-                        });
-                    }
+                if let Some(cb) = self.callbacks {
+                    self.invoke_script_delta_callback(scaled_delta, cb.late_update, hook);
                 }
             }
             BuiltinWork::InitPendingScripts => {
@@ -1303,6 +1321,27 @@ impl Runtime {
         Ok(())
     }
 
+    fn record_contact_payload(&mut self, contact: &ContactEvent) {
+        let (a, b) = (contact.a, contact.b);
+        if !contact.is_2d
+            && !contact.trigger
+            && let Some(payload) = self.physics.world_3d().collision_payload(a, b).cloned()
+        {
+            self.collision_payloads
+                .insert(ordered_pair(a.as_u64(), b.as_u64()), payload);
+        }
+        if contact.is_2d && !contact.trigger {
+            self.collision_payloads_2d.insert(
+                (a.as_u64(), b.as_u64()),
+                CollisionPayload2D {
+                    impulse: contact.contacts.iter().map(|p| p.normal_impulse).sum(),
+                    relative_velocity: contact.relative_velocity,
+                    contacts: contact.contacts.clone(),
+                },
+            );
+        }
+    }
+
     pub(crate) fn dispatch_physics_messages<H>(&mut self, hook: &mut H)
     where
         H: FnMut(&mut Self, &mut dyn FnMut()) + ?Sized,
@@ -1313,9 +1352,10 @@ impl Runtime {
         let Some(callbacks) = self.callbacks else {
             return;
         };
-        let mut contacts: Vec<ContactEvent> = Vec::new();
-        for event in messages.events {
-            contacts.push(ContactEvent {
+        let mut contacts: Vec<ContactEvent> = messages
+            .events
+            .into_iter()
+            .map(|event| ContactEvent {
                 a: event.a,
                 b: event.b,
                 trigger: false,
@@ -1323,60 +1363,32 @@ impl Runtime {
                 is_2d: false,
                 contacts: Vec::new(),
                 relative_velocity: [0.0; 2],
-            });
-        }
+            })
+            .collect();
         for event in messages.trigger_events {
-            let has_rigidbody = self.entity_belongs_to_rigid_body(event.a)
-                || self.entity_belongs_to_rigid_body(event.b);
-            if !has_rigidbody {
-                continue;
+            if self.entity_belongs_to_rigid_body(event.a)
+                || self.entity_belongs_to_rigid_body(event.b)
+            {
+                contacts.push(ContactEvent {
+                    a: event.a,
+                    b: event.b,
+                    trigger: true,
+                    phase: event.phase,
+                    is_2d: false,
+                    contacts: Vec::new(),
+                    relative_velocity: [0.0; 2],
+                });
             }
-            contacts.push(ContactEvent {
-                a: event.a,
-                b: event.b,
-                trigger: true,
-                phase: event.phase,
-                is_2d: false,
-                contacts: Vec::new(),
-                relative_velocity: [0.0; 2],
-            });
         }
         contacts.extend(messages.contacts_2d);
         for contact in contacts {
-            let a = contact.a;
-            let b = contact.b;
-            if !contact.is_2d && !contact.trigger {
-                let payload = self.physics.world_3d().collision_payload(a, b).cloned();
-                if let Some(payload) = payload {
-                    self.collision_payloads
-                        .insert(ordered_pair(a.as_u64(), b.as_u64()), payload);
-                }
-            }
-            if contact.is_2d && !contact.trigger {
-                self.collision_payloads_2d.insert(
-                    (a.as_u64(), b.as_u64()),
-                    CollisionPayload2D {
-                        impulse: contact
-                            .contacts
-                            .iter()
-                            .map(|point| point.normal_impulse)
-                            .sum(),
-                        relative_velocity: contact.relative_velocity,
-                        contacts: contact.contacts,
-                    },
-                );
-            }
-            let a = a.as_u64();
-            let b = b.as_u64();
+            self.record_contact_payload(&contact);
+            let (a, b) = (contact.a.as_u64(), contact.b.as_u64());
             let phase = contact_phase_code(contact.phase, contact.is_2d);
             if contact.trigger {
-                hook(self, &mut || {
-                    (callbacks.trigger)(a, b, phase);
-                });
+                hook(self, &mut || (callbacks.trigger)(a, b, phase));
             } else {
-                hook(self, &mut || {
-                    (callbacks.collision)(a, b, phase);
-                });
+                hook(self, &mut || (callbacks.collision)(a, b, phase));
             }
         }
     }

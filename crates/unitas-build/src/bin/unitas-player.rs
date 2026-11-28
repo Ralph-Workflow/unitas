@@ -44,153 +44,151 @@ struct CliOptions {
     help: bool,
 }
 
+impl Default for CliOptions {
+    fn default() -> Self {
+        Self {
+            bundle_dir: None,
+            sample: false,
+            windowed: false,
+            package_sample: None,
+            frames: None,
+            delta_seconds: 1.0 / 60.0,
+            width: 1280,
+            height: 720,
+            capture_reference: None,
+            verify_device: None,
+            demo_input: false,
+            control_stdio: false,
+            script_debugging: false,
+            help: false,
+        }
+    }
+}
+
 fn parse_cli_args<I>(args: I) -> Result<CliOptions, String>
 where
     I: IntoIterator<Item = String>,
 {
     let mut iter = args.into_iter();
-    let mut bundle_dir: Option<PathBuf> = None;
-    let mut sample = false;
-    let mut windowed = false;
-    let mut package_sample: Option<PathBuf> = None;
-    let mut frames: Option<usize> = None;
-    let mut delta_seconds: f64 = 1.0 / 60.0;
-    let mut width: u32 = 1280;
-    let mut height: u32 = 720;
-    let mut capture_reference: Option<PathBuf> = None;
-    let mut verify_device: Option<PathBuf> = None;
-    let mut demo_input = false;
-    let mut control_stdio = false;
-    let mut script_debugging = false;
-    let mut help = false;
-
+    let mut options = CliOptions::default();
     while let Some(arg) = iter.next() {
-        match arg.as_str() {
-            "--frames" => {
-                let raw = iter
-                    .next()
-                    .ok_or_else(|| String::from("missing value for '--frames'"))?;
-                let parsed = raw
-                    .parse::<usize>()
-                    .map_err(|err| format!("invalid '--frames' value '{raw}': {err}"))?;
-                frames = Some(parsed);
-            }
-            "--dt" => {
-                let raw = iter
-                    .next()
-                    .ok_or_else(|| String::from("missing value for '--dt'"))?;
-                delta_seconds = raw
-                    .parse::<f64>()
-                    .map_err(|err| format!("invalid '--dt' value '{raw}': {err}"))?;
-                if !delta_seconds.is_finite() || delta_seconds <= 0.0 {
-                    return Err(format!(
-                        "invalid '--dt' value '{raw}': must be a positive finite number"
-                    ));
-                }
-            }
-            "--width" => {
-                let raw = iter
-                    .next()
-                    .ok_or_else(|| String::from("missing value for '--width'"))?;
-                width = raw
-                    .parse::<u32>()
-                    .map_err(|err| format!("invalid '--width' value '{raw}': {err}"))?;
-                if width == 0 {
-                    return Err(String::from(
-                        "invalid '--width' value '0': must be positive",
-                    ));
-                }
-            }
-            "--height" => {
-                let raw = iter
-                    .next()
-                    .ok_or_else(|| String::from("missing value for '--height'"))?;
-                height = raw
-                    .parse::<u32>()
-                    .map_err(|err| format!("invalid '--height' value '{raw}': {err}"))?;
-                if height == 0 {
-                    return Err(String::from(
-                        "invalid '--height' value '0': must be positive",
-                    ));
-                }
-            }
-            "--sample" => {
-                sample = true;
-            }
-            "--windowed" => {
-                windowed = true;
-            }
-            "--package-sample" => {
-                let raw = iter
-                    .next()
-                    .ok_or_else(|| String::from("missing directory for '--package-sample'"))?;
-                package_sample = Some(PathBuf::from(raw));
-            }
-            "--demo-input" => {
-                demo_input = true;
-            }
-            "--control-stdio" => {
-                control_stdio = true;
-            }
-            "--debug" => {
-                script_debugging = true;
-            }
-            "--help" => {
-                help = true;
-            }
-            "--capture-reference" => {
-                let raw = iter
-                    .next()
-                    .ok_or_else(|| String::from("missing path for '--capture-reference'"))?;
-                capture_reference = Some(PathBuf::from(raw));
-            }
-            "--verify-device" => {
-                let raw = iter
-                    .next()
-                    .ok_or_else(|| String::from("missing path for '--verify-device'"))?;
-                verify_device = Some(PathBuf::from(raw));
-            }
-            flag if flag.starts_with('-') => {
-                return Err(format!("unrecognized argument '{flag}'"));
-            }
-            positional => {
-                if bundle_dir.is_some() {
-                    return Err(format!(
-                        "unexpected extra positional argument '{positional}'"
-                    ));
-                }
-                bundle_dir = Some(PathBuf::from(positional));
-            }
-        }
+        apply_cli_argument(&mut options, &mut iter, &arg)?;
     }
 
-    if bundle_dir.is_none()
-        && !sample
-        && capture_reference.is_none()
-        && verify_device.is_none()
-        && !control_stdio
-        && package_sample.is_none()
-        && !help
+    if options.bundle_dir.is_none()
+        && !options.sample
+        && options.capture_reference.is_none()
+        && options.verify_device.is_none()
+        && !options.control_stdio
+        && options.package_sample.is_none()
+        && !options.help
     {
         return Err(String::from(USAGE));
     }
 
-    Ok(CliOptions {
-        bundle_dir,
-        sample,
-        windowed,
-        package_sample,
-        frames,
-        delta_seconds,
-        width,
-        height,
-        capture_reference,
-        verify_device,
-        demo_input,
-        control_stdio,
-        script_debugging,
-        help,
-    })
+    Ok(options)
+}
+
+fn next_value<I>(iter: &mut I, message: &str) -> Result<String, String>
+where
+    I: Iterator<Item = String>,
+{
+    iter.next().ok_or_else(|| String::from(message))
+}
+
+fn apply_cli_argument<I>(options: &mut CliOptions, iter: &mut I, arg: &str) -> Result<(), String>
+where
+    I: Iterator<Item = String>,
+{
+    match arg {
+        "--sample" => options.sample = true,
+        "--windowed" => options.windowed = true,
+        "--demo-input" => options.demo_input = true,
+        "--control-stdio" => options.control_stdio = true,
+        "--debug" => options.script_debugging = true,
+        "--help" => options.help = true,
+        "--package-sample" => {
+            let raw = next_value(iter, "missing directory for '--package-sample'")?;
+            options.package_sample = Some(PathBuf::from(raw));
+        }
+        "--capture-reference" => {
+            let raw = next_value(iter, "missing path for '--capture-reference'")?;
+            options.capture_reference = Some(PathBuf::from(raw));
+        }
+        "--verify-device" => {
+            let raw = next_value(iter, "missing path for '--verify-device'")?;
+            options.verify_device = Some(PathBuf::from(raw));
+        }
+        _ => apply_cli_measured_argument(options, iter, arg)?,
+    }
+    Ok(())
+}
+
+fn apply_cli_measured_argument<I>(
+    options: &mut CliOptions,
+    iter: &mut I,
+    arg: &str,
+) -> Result<(), String>
+where
+    I: Iterator<Item = String>,
+{
+    match arg {
+        "--frames" => {
+            let raw = next_value(iter, "missing value for '--frames'")?;
+            options.frames = Some(parse_frames(&raw)?);
+        }
+        "--dt" => {
+            let raw = next_value(iter, "missing value for '--dt'")?;
+            options.delta_seconds = parse_delta_seconds(&raw)?;
+        }
+        "--width" => {
+            let raw = next_value(iter, "missing value for '--width'")?;
+            options.width = parse_dimension(&raw, "--width")?;
+        }
+        "--height" => {
+            let raw = next_value(iter, "missing value for '--height'")?;
+            options.height = parse_dimension(&raw, "--height")?;
+        }
+        flag if flag.starts_with('-') => {
+            return Err(format!("unrecognized argument '{flag}'"));
+        }
+        positional => {
+            if options.bundle_dir.is_some() {
+                return Err(format!(
+                    "unexpected extra positional argument '{positional}'"
+                ));
+            }
+            options.bundle_dir = Some(PathBuf::from(positional));
+        }
+    }
+    Ok(())
+}
+
+fn parse_frames(raw: &str) -> Result<usize, String> {
+    raw.parse::<usize>()
+        .map_err(|err| format!("invalid '--frames' value '{raw}': {err}"))
+}
+
+fn parse_delta_seconds(raw: &str) -> Result<f64, String> {
+    let delta_seconds = raw
+        .parse::<f64>()
+        .map_err(|err| format!("invalid '--dt' value '{raw}': {err}"))?;
+    if !delta_seconds.is_finite() || delta_seconds <= 0.0 {
+        return Err(format!(
+            "invalid '--dt' value '{raw}': must be a positive finite number"
+        ));
+    }
+    Ok(delta_seconds)
+}
+
+fn parse_dimension(raw: &str, flag: &str) -> Result<u32, String> {
+    let value = raw
+        .parse::<u32>()
+        .map_err(|err| format!("invalid '{flag}' value '{raw}': {err}"))?;
+    if value == 0 {
+        return Err(format!("invalid '{flag}' value '0': must be positive"));
+    }
+    Ok(value)
 }
 
 fn run_package_sample(output_dir: &Path, script_debugging: bool) -> ExitCode {
@@ -259,6 +257,32 @@ fn main() -> ExitCode {
         return run_verify_device(reference_path, cli.frames.unwrap_or(12) as u64);
     }
 
+    let (resolved_bundle_dir, temp_sample_dir) = match resolve_bundle_dir(&cli) {
+        Ok(resolved) => resolved,
+        Err(code) => return code,
+    };
+
+    let run_headless =
+        !cli.windowed && (cli.frames.is_some() || (!cli.sample && cli.bundle_dir.is_some()));
+
+    if let Err(error) = install_project_trust(&resolved_bundle_dir) {
+        eprintln!("unitas-player refused to run project code: {error}");
+        return ExitCode::from(TRUST_REQUIRED_EXIT_CODE);
+    }
+
+    let exit_code = if run_headless {
+        run_headless_launch(&resolved_bundle_dir, &cli)
+    } else {
+        run_windowed_launch(&resolved_bundle_dir, &cli)
+    };
+
+    if let Some(dir) = temp_sample_dir {
+        let _ = fs::remove_dir_all(dir);
+    }
+    exit_code
+}
+
+fn resolve_bundle_dir(cli: &CliOptions) -> Result<(PathBuf, Option<PathBuf>), ExitCode> {
     let mut temp_sample_dir: Option<PathBuf> = None;
     let resolved_bundle_dir = match cli.bundle_dir {
         Some(ref dir) if cli.sample && !dir.exists() => {
@@ -268,7 +292,7 @@ fn main() -> ExitCode {
                 cli.script_debugging,
             ) {
                 eprintln!("unitas-player startup failed: {error}");
-                return ExitCode::from(STARTUP_FAILURE_EXIT_CODE);
+                return Err(ExitCode::from(STARTUP_FAILURE_EXIT_CODE));
             }
             dir.clone()
         }
@@ -284,59 +308,49 @@ fn main() -> ExitCode {
                 cli.script_debugging,
             ) {
                 eprintln!("unitas-player startup failed: {error}");
-                return ExitCode::from(STARTUP_FAILURE_EXIT_CODE);
+                return Err(ExitCode::from(STARTUP_FAILURE_EXIT_CODE));
             }
             temp_sample_dir = Some(temp_dir.clone());
             temp_dir
         }
     };
+    Ok((resolved_bundle_dir, temp_sample_dir))
+}
 
-    let run_headless =
-        !cli.windowed && (cli.frames.is_some() || (!cli.sample && cli.bundle_dir.is_some()));
-
-    if let Err(error) = install_project_trust(&resolved_bundle_dir) {
-        eprintln!("unitas-player refused to run project code: {error}");
-        return ExitCode::from(TRUST_REQUIRED_EXIT_CODE);
-    }
-
-    let exit_code = if run_headless {
-        let frames = cli.frames.unwrap_or(1);
-        match launch_bundle(&resolved_bundle_dir, frames, cli.delta_seconds) {
-            Ok(result) => {
-                println!(
-                    "launched_product={} startup_scene={} loaded_scenes={} root_objects={} frames_stepped={} development_diagnostics={} script_host={} hud=false",
-                    result.manifest.product_name,
-                    result.startup_scene_path.display(),
-                    result.loaded_scene_count,
-                    result.root_object_count,
-                    result.frames_stepped,
-                    result.development_diagnostics_enabled,
-                    result.script_host.as_str()
-                );
-                ExitCode::SUCCESS
-            }
-            Err(error) => {
-                eprintln!("unitas-player startup failed: {error}");
-                ExitCode::from(STARTUP_FAILURE_EXIT_CODE)
-            }
+fn run_headless_launch(bundle_dir: &Path, cli: &CliOptions) -> ExitCode {
+    let frames = cli.frames.unwrap_or(1);
+    match launch_bundle(bundle_dir, frames, cli.delta_seconds) {
+        Ok(result) => {
+            println!(
+                "launched_product={} startup_scene={} loaded_scenes={} root_objects={} frames_stepped={} development_diagnostics={} script_host={} hud=false",
+                result.manifest.product_name,
+                result.startup_scene_path.display(),
+                result.loaded_scene_count,
+                result.root_object_count,
+                result.frames_stepped,
+                result.development_diagnostics_enabled,
+                result.script_host.as_str()
+            );
+            ExitCode::SUCCESS
         }
-    } else {
-        let options = WindowedLaunchOptions {
-            width: cli.width,
-            height: cli.height,
-            max_frames: cli.frames.map(|n| n as u64),
-            fixed_delta_seconds: Some(cli.delta_seconds),
-            capture_last_frame: false,
-            start_audio_device: true,
-            inject_demo_input: cli.demo_input,
-        };
-        run_windowed(&resolved_bundle_dir, &options)
-    };
-
-    if let Some(dir) = temp_sample_dir {
-        let _ = fs::remove_dir_all(dir);
+        Err(error) => {
+            eprintln!("unitas-player startup failed: {error}");
+            ExitCode::from(STARTUP_FAILURE_EXIT_CODE)
+        }
     }
-    exit_code
+}
+
+fn run_windowed_launch(bundle_dir: &Path, cli: &CliOptions) -> ExitCode {
+    let options = WindowedLaunchOptions {
+        width: cli.width,
+        height: cli.height,
+        max_frames: cli.frames.map(|n| n as u64),
+        fixed_delta_seconds: Some(cli.delta_seconds),
+        capture_last_frame: false,
+        start_audio_device: true,
+        inject_demo_input: cli.demo_input,
+    };
+    run_windowed(bundle_dir, &options)
 }
 
 #[cfg(feature = "device")]

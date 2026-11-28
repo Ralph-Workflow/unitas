@@ -804,39 +804,8 @@ impl Terrain {
                     });
                 }
             } else if prev_above && !above {
-                let mut low = prev_t;
-                let mut high = t;
-                for _ in 0..16 {
-                    let mid = 0.5 * (low + high);
-                    let mid_pt = [
-                        origin[0] + unit[0] * mid,
-                        origin[1] + unit[1] * mid,
-                        origin[2] + unit[2] * mid,
-                    ];
-                    if let Some((surf, _)) = self.sample_surface(mid_pt) {
-                        if mid_pt[1] >= surf[1] {
-                            low = mid;
-                        } else {
-                            high = mid;
-                        }
-                    } else {
-                        low = mid;
-                    }
-                }
-                let hit_t = 0.5 * (low + high);
-                let hit_pt = [
-                    origin[0] + unit[0] * hit_t,
-                    origin[1] + unit[1] * hit_t,
-                    origin[2] + unit[2] * hit_t,
-                ];
-                if !self.is_hole(hit_pt) {
-                    if let Some((surf, norm)) = self.sample_surface(hit_pt) {
-                        return Some(TerrainRayHit {
-                            point: surf,
-                            normal: norm,
-                            distance: distance(origin, surf),
-                        });
-                    }
+                if let Some(hit) = self.refine_ray_hit(origin, unit, prev_t, t) {
+                    return Some(hit);
                 }
             }
             prev_above = above;
@@ -845,12 +814,57 @@ impl Terrain {
         None
     }
 
+    fn refine_ray_hit(
+        &self,
+        origin: [f64; 3],
+        unit: [f64; 3],
+        mut low: f64,
+        mut high: f64,
+    ) -> Option<TerrainRayHit> {
+        for _ in 0..16 {
+            let mid = 0.5 * (low + high);
+            let mid_pt = [
+                origin[0] + unit[0] * mid,
+                origin[1] + unit[1] * mid,
+                origin[2] + unit[2] * mid,
+            ];
+            if let Some((surf, _)) = self.sample_surface(mid_pt) {
+                if mid_pt[1] >= surf[1] {
+                    low = mid;
+                } else {
+                    high = mid;
+                }
+            } else {
+                low = mid;
+            }
+        }
+        let hit_t = 0.5 * (low + high);
+        let hit_pt = [
+            origin[0] + unit[0] * hit_t,
+            origin[1] + unit[1] * hit_t,
+            origin[2] + unit[2] * hit_t,
+        ];
+        if self.is_hole(hit_pt) {
+            return None;
+        }
+        let (surf, norm) = self.sample_surface(hit_pt)?;
+        Some(TerrainRayHit {
+            point: surf,
+            normal: norm,
+            distance: distance(origin, surf),
+        })
+    }
+
     pub fn evaluate_wind(&self, wind_zone: &WindZone, time_seconds: f64) -> TerrainWindReport {
+        TerrainWindReport {
+            trees: self.evaluate_tree_wind(wind_zone, time_seconds),
+            details: self.evaluate_detail_wind(wind_zone, time_seconds),
+        }
+    }
+
+    fn evaluate_tree_wind(&self, wind_zone: &WindZone, time_seconds: f64) -> Vec<TreeWindSample> {
         let prototypes = self.data.tree_prototypes();
         let tree_instances = self.data.tree_instances();
-        let detail_instances = self.data.detail_instances();
-        let grass_wind = self.data.grass_wind_settings();
-
         let mut trees = Vec::with_capacity(tree_instances.len());
         for (idx, instance) in tree_instances.iter().enumerate() {
             let base =
@@ -895,7 +909,16 @@ impl Terrain {
                 bend_offset,
             });
         }
+        trees
+    }
 
+    fn evaluate_detail_wind(
+        &self,
+        wind_zone: &WindZone,
+        time_seconds: f64,
+    ) -> Vec<DetailWindSample> {
+        let detail_instances = self.data.detail_instances();
+        let grass_wind = self.data.grass_wind_settings();
         let mut details = Vec::with_capacity(detail_instances.len());
         for (idx, instance) in detail_instances.iter().enumerate() {
             let base =
@@ -922,16 +945,27 @@ impl Terrain {
                 wave_offset,
             });
         }
-
-        TerrainWindReport { trees, details }
+        details
     }
 
     pub fn instanced_draw_data(&self) -> TerrainInstancedDrawData {
+        let (tree_batches, wind_exclusion_diagnostics) = self.build_instanced_tree_batches();
+        let detail_batches = self.build_instanced_detail_batches();
+        TerrainInstancedDrawData {
+            material_shader: self.material_shader.clone(),
+            draw_instanced: self.draw_instanced,
+            billboard_start: self.billboard_start,
+            tree_distance: self.tree_distance,
+            detail_distance: self.detail_distance,
+            tree_batches,
+            detail_batches,
+            wind_exclusion_diagnostics,
+        }
+    }
+
+    fn build_instanced_tree_batches(&self) -> (Vec<InstancedTreeBatch>, Vec<String>) {
         let tree_prototypes = self.data.tree_prototypes();
         let tree_instances = self.data.tree_instances();
-        let detail_prototypes = self.data.detail_prototypes();
-        let detail_instances = self.data.detail_instances();
-
         let mut tree_batches = Vec::with_capacity(tree_prototypes.len());
         let mut wind_exclusion_diagnostics = Vec::new();
         for (proto_idx, proto) in tree_prototypes.iter().enumerate() {
@@ -969,7 +1003,12 @@ impl Terrain {
                 rotations_y,
             });
         }
+        (tree_batches, wind_exclusion_diagnostics)
+    }
 
+    fn build_instanced_detail_batches(&self) -> Vec<InstancedDetailBatch> {
+        let detail_prototypes = self.data.detail_prototypes();
+        let detail_instances = self.data.detail_instances();
         let mut detail_batches = Vec::new();
         if detail_prototypes.is_empty() && !detail_instances.is_empty() {
             let mut world_positions = Vec::new();
@@ -1012,17 +1051,7 @@ impl Terrain {
                 });
             }
         }
-
-        TerrainInstancedDrawData {
-            material_shader: self.material_shader.clone(),
-            draw_instanced: self.draw_instanced,
-            billboard_start: self.billboard_start,
-            tree_distance: self.tree_distance,
-            detail_distance: self.detail_distance,
-            tree_batches,
-            detail_batches,
-            wind_exclusion_diagnostics,
-        }
+        detail_batches
     }
 
     pub fn contact(
@@ -1054,43 +1083,11 @@ impl Terrain {
         let normal = contact.normal;
         let normal_velocity = dot(velocity, normal);
         if normal_velocity < 0.0 {
-            let without_normal = subtract(
-                velocity,
-                [
-                    normal[0] * normal_velocity,
-                    normal[1] * normal_velocity,
-                    normal[2] * normal_velocity,
-                ],
-            );
             let friction = world
                 .body_material(body.entity)
                 .map_or(DEFAULT_FRICTION, |material| material.friction);
-            let along_normal = dot(without_normal, normal);
-            let tangential = subtract(
-                without_normal,
-                [
-                    normal[0] * along_normal,
-                    normal[1] * along_normal,
-                    normal[2] * along_normal,
-                ],
-            );
-            let tangential_speed = dot(tangential, tangential).sqrt();
-            let limit = friction * -normal_velocity;
-            let friction_velocity = if tangential_speed > limit {
-                let remaining = 1.0 - limit / tangential_speed;
-                [
-                    tangential[0] * remaining,
-                    tangential[1] * remaining,
-                    tangential[2] * remaining,
-                ]
-            } else {
-                [0.0; 3]
-            };
-            let resolved_velocity = [
-                normal[0] * along_normal + friction_velocity[0],
-                normal[1] * along_normal + friction_velocity[1],
-                normal[2] * along_normal + friction_velocity[2],
-            ];
+            let resolved_velocity =
+                resolve_terrain_support_velocity(velocity, normal, normal_velocity, friction);
             world.set_velocity(body.entity, resolved_velocity).ok()?;
         }
         world
@@ -1324,4 +1321,46 @@ impl Terrain {
         };
         [world_x, height + height_offset, world_z]
     }
+}
+
+fn resolve_terrain_support_velocity(
+    velocity: [f64; 3],
+    normal: [f64; 3],
+    normal_velocity: f64,
+    friction: f64,
+) -> [f64; 3] {
+    let without_normal = subtract(
+        velocity,
+        [
+            normal[0] * normal_velocity,
+            normal[1] * normal_velocity,
+            normal[2] * normal_velocity,
+        ],
+    );
+    let along_normal = dot(without_normal, normal);
+    let tangential = subtract(
+        without_normal,
+        [
+            normal[0] * along_normal,
+            normal[1] * along_normal,
+            normal[2] * along_normal,
+        ],
+    );
+    let tangential_speed = dot(tangential, tangential).sqrt();
+    let limit = friction * -normal_velocity;
+    let friction_velocity = if tangential_speed > limit {
+        let remaining = 1.0 - limit / tangential_speed;
+        [
+            tangential[0] * remaining,
+            tangential[1] * remaining,
+            tangential[2] * remaining,
+        ]
+    } else {
+        [0.0; 3]
+    };
+    [
+        normal[0] * along_normal + friction_velocity[0],
+        normal[1] * along_normal + friction_velocity[1],
+        normal[2] * along_normal + friction_velocity[2],
+    ]
 }

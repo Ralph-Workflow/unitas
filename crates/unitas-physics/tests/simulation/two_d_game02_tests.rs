@@ -124,6 +124,13 @@ fn box_cast_reports_hits_filtered_by_contact_filter_and_normal_angle() {
         hits[0].normal
     );
 
+    assert_box_cast_angle_and_layer_filters(&world, marker_col);
+}
+
+fn assert_box_cast_angle_and_layer_filters(
+    world: &World2D,
+    marker_col: unitas_physics::two_d::ColliderId2D,
+) {
     let upward_only = world.box_cast(
         [0.0, 0.0],
         [0.25, 0.25],
@@ -249,34 +256,36 @@ fn platform_effector_side_friction_and_side_bounce_are_honored() {
     );
 }
 
+fn build_rider_stick_world(
+    stick: bool,
+) -> (
+    World2D,
+    unitas_physics::two_d::BodyId2D,
+    unitas_physics::two_d::BodyId2D,
+) {
+    let mut world = World2D::with_gravity([0.0, -10.0]);
+    let carrier_go = EntityId::new(1);
+    let rider_go = EntityId::new(2);
+
+    let carrier_body =
+        world.add_body(BodyDesc2D::kinematic(carrier_go, [0.0, 0.0]).with_velocity([2.0, 0.0]));
+    world.add_collider(
+        ColliderDesc2D::box_collider(carrier_go, [2.0, 0.25]).with_attached_body(carrier_body),
+    );
+    let rider_body = world.add_body(BodyDesc2D::dynamic(rider_go, [0.0, 0.5]));
+    world.add_collider(
+        ColliderDesc2D::box_collider(rider_go, [0.25, 0.25]).with_attached_body(rider_body),
+    );
+    if stick {
+        assert!(world.stick_rider(rider_body, carrier_body));
+        assert_eq!(world.rider_carrier(rider_body), Some(carrier_body));
+    }
+    (world, carrier_body, rider_body)
+}
+
 #[test]
 fn rider_stick_carries_the_rider_over_a_waypoint_leg_without_drift() {
-    let build_world = |stick: bool| -> (
-        World2D,
-        unitas_physics::two_d::BodyId2D,
-        unitas_physics::two_d::BodyId2D,
-    ) {
-        let mut world = World2D::with_gravity([0.0, -10.0]);
-        let carrier_go = EntityId::new(1);
-        let rider_go = EntityId::new(2);
-
-        let carrier_body =
-            world.add_body(BodyDesc2D::kinematic(carrier_go, [0.0, 0.0]).with_velocity([2.0, 0.0]));
-        world.add_collider(
-            ColliderDesc2D::box_collider(carrier_go, [2.0, 0.25]).with_attached_body(carrier_body),
-        );
-        let rider_body = world.add_body(BodyDesc2D::dynamic(rider_go, [0.0, 0.5]));
-        world.add_collider(
-            ColliderDesc2D::box_collider(rider_go, [0.25, 0.25]).with_attached_body(rider_body),
-        );
-        if stick {
-            assert!(world.stick_rider(rider_body, carrier_body));
-            assert_eq!(world.rider_carrier(rider_body), Some(carrier_body));
-        }
-        (world, carrier_body, rider_body)
-    };
-
-    let (mut world, carrier_body, rider_body) = build_world(true);
+    let (mut world, carrier_body, rider_body) = build_rider_stick_world(true);
     for _ in 0..25 {
         world.step(0.02);
     }
@@ -293,7 +302,7 @@ fn rider_stick_carries_the_rider_over_a_waypoint_leg_without_drift() {
         "a stuck rider must keep its offset over the waypoint leg, drifted {drift} ({rider:?} on {carrier:?})"
     );
 
-    let (mut loose, loose_carrier, loose_rider) = build_world(false);
+    let (mut loose, loose_carrier, loose_rider) = build_rider_stick_world(false);
     for _ in 0..25 {
         loose.step(0.02);
     }

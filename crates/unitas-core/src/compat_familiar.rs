@@ -161,6 +161,24 @@ pub fn lookup_familiar_behavior_differences(
         .find(|entry| entry.feature_id == feature_id)
 }
 
+fn semantic_consequence(
+    owning_spec: &str,
+    benchmark: &str,
+    found_difference: Option<&str>,
+) -> String {
+    match found_difference {
+        Some(diff) if !diff.trim().is_empty() => format!(
+            "assessed against Unity 2022.3 LTS reference ({}) and backed by CMP-001 benchmark {}; difference: {}",
+            owning_spec,
+            benchmark,
+            diff.trim()
+        ),
+        _ => format!(
+            "matches Unity 2022.3 LTS documented observable behavior ({owning_spec}) as verified by CMP-001 benchmark {benchmark}"
+        ),
+    }
+}
+
 pub fn build_semantic_finding(
     feature_id: &str,
     state: CompatibilityState,
@@ -189,18 +207,7 @@ pub fn build_semantic_finding(
     if benchmark.is_empty() {
         return Err(FindingSubmissionError::EmptyObservableConsequence);
     }
-    let consequence = match found_difference {
-        Some(diff) if !diff.trim().is_empty() => format!(
-            "assessed against Unity 2022.3 LTS reference ({}) and backed by CMP-001 benchmark {}; difference: {}",
-            catalog_entry.owning_spec,
-            benchmark,
-            diff.trim()
-        ),
-        _ => format!(
-            "matches Unity 2022.3 LTS documented observable behavior ({}) as verified by CMP-001 benchmark {}",
-            catalog_entry.owning_spec, benchmark
-        ),
-    };
+    let consequence = semantic_consequence(catalog_entry.owning_spec, benchmark, found_difference);
     let mut input = FindingInput::new(
         trimmed_id,
         Tier::Semantic,
@@ -220,6 +227,17 @@ pub fn build_semantic_finding(
         }
     }
     validate_finding_input(input, &[])
+}
+
+fn familiar_feature_differences(feature_id: &str, additional_differences: &[&str]) -> Vec<String> {
+    let mut differences = super::familiar_differences(feature_id, Tier::Familiar);
+    for extra in additional_differences {
+        let trimmed = extra.trim();
+        if !trimmed.is_empty() && !differences.iter().any(|existing| existing == trimmed) {
+            differences.push(trimmed.to_string());
+        }
+    }
+    differences
 }
 
 pub fn build_familiar_finding(
@@ -245,21 +263,7 @@ pub fn build_familiar_finding(
             submitted: Tier::Familiar,
         });
     }
-    let mut differences: Vec<String> = lookup_familiar_behavior_differences(trimmed_id)
-        .map(|entry| {
-            entry
-                .differences
-                .iter()
-                .map(|diff| (*diff).to_string())
-                .collect()
-        })
-        .unwrap_or_default();
-    for extra in additional_differences {
-        let trimmed = extra.trim();
-        if !trimmed.is_empty() && !differences.iter().any(|existing| existing == trimmed) {
-            differences.push(trimmed.to_string());
-        }
-    }
+    let differences = familiar_feature_differences(trimmed_id, additional_differences);
     let consequence = format!(
         "behavior defined by {} ({}) and listed in the AUT-006 API reference with {} Unity 2022.3 LTS difference(s)",
         catalog_entry.owning_spec,

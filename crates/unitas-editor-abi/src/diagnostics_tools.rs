@@ -5,6 +5,7 @@ use serde_json::{Value, json};
 use std::path::Path;
 use std::time::Instant;
 use unitas_asset::dependencies::{AssetImportState, DependencyGraph};
+use unitas_asset::project::Project;
 use unitas_asset::project_settings::{self, InputManagerSettings};
 
 pub fn register(builder: DispatchTableBuilder) -> Result<DispatchTableBuilder, AbiError> {
@@ -155,6 +156,35 @@ fn capture_profile(args: &Value) -> Result<Value, String> {
 fn inspect_accessibility(args: &Value) -> Result<Value, String> {
     let root = required_string(args, "projectPath")?;
     let (project, _report) = open_project(args)?;
+    let (fonts, text_assets) = collect_accessibility_assets(&project);
+    let settings = project_settings::load_project_settings(Path::new(&root))
+        .map_err(|error| error.to_string())?;
+    let sorting_layers = collect_sorting_layers(&settings);
+    let input = project_settings::parse_input_manager(
+        &Path::new(&root)
+            .join("ProjectSettings")
+            .join("InputManager.asset"),
+    )
+    .map_err(|error| error.to_string())?
+    .unwrap_or_else(|| InputManagerSettings {
+        axes: Vec::new(),
+        skipped_axes: 0,
+    });
+    let axes = collect_input_axes(&input);
+    Ok(json!({
+        "fonts": fonts,
+        "textAssets": text_assets,
+        "sortingLayers": sorting_layers,
+        "inputAxes": axes,
+        "skippedInputAxes": input.skipped_axes,
+        "notInspected": [
+            "accessibility roles, labels, and focus order are owned by the editor scene model",
+            "contrast and text-scale readiness are not computed from the project assets",
+        ],
+    }))
+}
+
+fn collect_accessibility_assets(project: &Project) -> (Vec<String>, Vec<String>) {
     let mut fonts: Vec<String> = Vec::new();
     let mut text_assets: Vec<String> = Vec::new();
     for entry in &project.inventory().entries {
@@ -169,30 +199,24 @@ fn inspect_accessibility(args: &Value) -> Result<Value, String> {
             text_assets.push(entry.path.to_string_lossy().to_string());
         }
     }
-    let settings = project_settings::load_project_settings(Path::new(&root))
-        .map_err(|error| error.to_string())?;
-    let sorting_layers: Vec<String> =
-        settings
-            .tag_manager
-            .as_ref()
-            .map_or_else(Vec::new, |manager| {
-                manager
-                    .sorting_layers
-                    .iter()
-                    .map(|layer| layer.name.clone())
-                    .collect()
-            });
-    let input = project_settings::parse_input_manager(
-        &Path::new(&root)
-            .join("ProjectSettings")
-            .join("InputManager.asset"),
-    )
-    .map_err(|error| error.to_string())?
-    .unwrap_or_else(|| InputManagerSettings {
-        axes: Vec::new(),
-        skipped_axes: 0,
-    });
-    let axes: Vec<Value> = input
+    (fonts, text_assets)
+}
+
+fn collect_sorting_layers(settings: &project_settings::LoadedProjectSettings) -> Vec<String> {
+    settings
+        .tag_manager
+        .as_ref()
+        .map_or_else(Vec::new, |manager| {
+            manager
+                .sorting_layers
+                .iter()
+                .map(|layer| layer.name.clone())
+                .collect()
+        })
+}
+
+fn collect_input_axes(input: &InputManagerSettings) -> Vec<Value> {
+    input
         .axes
         .iter()
         .map(|axis| {
@@ -203,16 +227,5 @@ fn inspect_accessibility(args: &Value) -> Result<Value, String> {
                 "altPositiveButton": axis.alt_negative_button,
             })
         })
-        .collect();
-    Ok(json!({
-        "fonts": fonts,
-        "textAssets": text_assets,
-        "sortingLayers": sorting_layers,
-        "inputAxes": axes,
-        "skippedInputAxes": input.skipped_axes,
-        "notInspected": [
-            "accessibility roles, labels, and focus order are owned by the editor scene model",
-            "contrast and text-scale readiness are not computed from the project assets",
-        ],
-    }))
+        .collect()
 }

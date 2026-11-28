@@ -403,21 +403,11 @@ fn runtime_scene_without_physics_dispatches_no_collisions() -> Result<(), Box<dy
 #[test]
 fn runtime_maps_body_roles_and_writes_simulated_dynamic_positions_back_to_scene_graph()
 -> Result<(), Box<dyn Error>> {
-    let temp_dir = std::env::temp_dir().join(format!(
-        "unitas_runtime_resting_sphere_{}",
-        std::process::id()
-    ));
-    std::fs::create_dir_all(&temp_dir)?;
-    let temp_scene = temp_dir.join("resting_sphere.unity");
     let yaml = include_str!("../fixtures/scene_physics_collision.unity").replace(
         "  m_LocalPosition: {x: 0.9999999, y: 0.499, z: 0}",
         "  m_LocalPosition: {x: 0, y: 1.5, z: 0}",
     );
-    std::fs::write(&temp_scene, yaml)?;
-    let mut runtime = Runtime::new()?;
-    let load_res = runtime.load_scene(&temp_scene);
-    let _ = std::fs::remove_dir_all(&temp_dir);
-    load_res?;
+    let mut runtime = load_temp_scene("resting_sphere", &yaml)?;
     let ball = EntityId::new(entity_handle(&runtime, BALL_NAME)?);
     let crate_entity = EntityId::new(entity_handle(&runtime, CRATE_NAME)?);
     assert_eq!(runtime.body_role(ball), Some(BodyRole::Dynamic));
@@ -448,18 +438,15 @@ fn runtime_maps_body_roles_and_writes_simulated_dynamic_positions_back_to_scene_
         REST_TOLERANCE,
     );
 
-    let graph = match runtime.scene_graph() {
-        Some(graph) => graph,
-        None => return Err(String::from("missing scene graph").into()),
-    };
-    let ball_local = match graph.transform(ball) {
-        Some(transform) => transform.translation,
-        None => return Err(String::from("missing ball local transform").into()),
-    };
-    let ball_world = match graph.world_transform(ball) {
-        Some(transform) => transform.translation,
-        None => return Err(String::from("missing ball world transform").into()),
-    };
+    let graph = runtime.scene_graph().ok_or("missing scene graph")?;
+    let ball_local = graph
+        .transform(ball)
+        .ok_or("missing ball local transform")?
+        .translation;
+    let ball_world = graph
+        .world_transform(ball)
+        .ok_or("missing ball world transform")?
+        .translation;
     assert_close(
         f64::from(ball_local[1]),
         ball_body_pos[1],
@@ -472,10 +459,10 @@ fn runtime_maps_body_roles_and_writes_simulated_dynamic_positions_back_to_scene_
         "ball world transform y",
         QUERY_TOLERANCE,
     );
-    let crate_local = match graph.transform(crate_entity) {
-        Some(transform) => transform.translation,
-        None => return Err(String::from("missing crate local transform").into()),
-    };
+    let crate_local = graph
+        .transform(crate_entity)
+        .ok_or("missing crate local transform")?
+        .translation;
     assert_eq!(crate_local, [0.0, 0.0, 0.0]);
     Ok(())
 }
@@ -483,21 +470,11 @@ fn runtime_maps_body_roles_and_writes_simulated_dynamic_positions_back_to_scene_
 #[test]
 fn runtime_maps_kinematic_rigidbody_role_and_preserves_transform_under_gravity()
 -> Result<(), Box<dyn Error>> {
-    let temp_dir = std::env::temp_dir().join(format!(
-        "unitas_runtime_kinematic_role_{}",
-        std::process::id()
-    ));
-    std::fs::create_dir_all(&temp_dir)?;
-    let temp_scene = temp_dir.join("kinematic_role.unity");
     let yaml = include_str!("../fixtures/scene_physics_collision.unity").replace(
         "  m_Mass: 1\n  m_UseGravity: 1",
         "  m_Mass: 1\n  m_UseGravity: 1\n  m_IsKinematic: 1",
     );
-    std::fs::write(&temp_scene, yaml)?;
-    let mut runtime = Runtime::new()?;
-    let load_res = runtime.load_scene(&temp_scene);
-    let _ = std::fs::remove_dir_all(&temp_dir);
-    load_res?;
+    let mut runtime = load_temp_scene("kinematic_role", &yaml)?;
 
     let ball = EntityId::new(entity_handle(&runtime, BALL_NAME)?);
     assert_eq!(runtime.body_role(ball), Some(BodyRole::Kinematic));
@@ -534,12 +511,6 @@ fn runtime_maps_kinematic_rigidbody_role_and_preserves_transform_under_gravity()
 #[test]
 fn runtime_writes_simulated_dynamic_position_back_for_parented_collider_with_offset()
 -> Result<(), Box<dyn Error>> {
-    let temp_dir = std::env::temp_dir().join(format!(
-        "unitas_runtime_parented_dynamic_{}",
-        std::process::id()
-    ));
-    std::fs::create_dir_all(&temp_dir)?;
-    let temp_scene = temp_dir.join("parented_dynamic.unity");
     let yaml = include_str!("../fixtures/scene_physics_rotated_nested.unity").replace(
         "  - component: {fileID: 1311639361}\n  - component: {fileID: 1311639362}",
         "  - component: {fileID: 1311639361}\n  - component: {fileID: 1311639362}\n  - component: {fileID: 1311639365}",
@@ -548,11 +519,7 @@ fn runtime_writes_simulated_dynamic_position_back_for_parented_collider_with_off
         "  m_Center: {x: 0, y: 0, z: 0}\n--- !u!1 &519420062",
         "  m_Center: {x: 0.5, y: 0, z: 0}\n--- !u!54 &1311639365\nRigidbody:\n  m_ObjectHideFlags: 0\n  m_CorrespondingSourceObject: {fileID: 0}\n  m_PrefabInstance: {fileID: 0}\n  m_PrefabAsset: {fileID: 0}\n  m_GameObject: {fileID: 519420061}\n  m_Mass: 1\n  m_UseGravity: 1\n--- !u!1 &519420062",
     );
-    std::fs::write(&temp_scene, yaml)?;
-    let mut runtime = Runtime::new()?;
-    let load_res = runtime.load_scene(&temp_scene);
-    let _ = std::fs::remove_dir_all(&temp_dir);
-    load_res?;
+    let mut runtime = load_temp_scene("parented_dynamic", &yaml)?;
 
     let crate_entity = EntityId::new(entity_handle(&runtime, CRATE_NAME)?);
     assert_eq!(runtime.body_role(crate_entity), Some(BodyRole::Dynamic));
@@ -595,18 +562,8 @@ fn runtime_writes_simulated_dynamic_position_back_for_parented_collider_with_off
 #[test]
 fn runtime_syncs_kinematic_scene_graph_transform_edits_and_carries_resting_dynamic_body()
 -> Result<(), Box<dyn Error>> {
-    let temp_dir = std::env::temp_dir().join(format!(
-        "unitas_runtime_kinematic_carry_{}",
-        std::process::id()
-    ));
-    std::fs::create_dir_all(&temp_dir)?;
-    let temp_scene = temp_dir.join("kinematic_carry.unity");
     let yaml = "%YAML 1.1\n%TAG !u! tag:unity3d.com,2011:\n--- !u!1 &100\nGameObject:\n  m_Name: Platform\n  m_Layer: 0\n--- !u!4 &101\nTransform:\n  m_GameObject: {fileID: 100}\n  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}\n  m_LocalPosition: {x: 0, y: 0, z: 0}\n  m_LocalScale: {x: 1, y: 1, z: 1}\n  m_Children: []\n  m_Father: {fileID: 0}\n--- !u!54 &102\nRigidbody:\n  m_GameObject: {fileID: 100}\n  m_Mass: 1\n  m_UseGravity: 0\n  m_IsKinematic: 1\n--- !u!65 &103\nBoxCollider:\n  m_GameObject: {fileID: 100}\n  m_IsTrigger: 0\n  m_Size: {x: 4, y: 1, z: 4}\n  m_Center: {x: 0, y: 0, z: 0}\n--- !u!1 &200\nGameObject:\n  m_Name: Cargo\n  m_Layer: 0\n--- !u!4 &201\nTransform:\n  m_GameObject: {fileID: 200}\n  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}\n  m_LocalPosition: {x: 0, y: 1.0, z: 0}\n  m_LocalScale: {x: 1, y: 1, z: 1}\n  m_Children: []\n  m_Father: {fileID: 0}\n--- !u!54 &202\nRigidbody:\n  m_GameObject: {fileID: 200}\n  m_Mass: 1\n  m_UseGravity: 1\n  m_IsKinematic: 0\n--- !u!65 &203\nBoxCollider:\n  m_GameObject: {fileID: 200}\n  m_IsTrigger: 0\n  m_Size: {x: 1, y: 1, z: 1}\n  m_Center: {x: 0, y: 0, z: 0}\n";
-    std::fs::write(&temp_scene, yaml)?;
-    let mut runtime = Runtime::new()?;
-    let load_res = runtime.load_scene(&temp_scene);
-    let _ = std::fs::remove_dir_all(&temp_dir);
-    load_res?;
+    let mut runtime = load_temp_scene("kinematic_carry", yaml)?;
 
     let platform = EntityId::new(entity_handle(&runtime, "Platform")?);
     let cargo = EntityId::new(entity_handle(&runtime, "Cargo")?);
@@ -656,18 +613,12 @@ fn runtime_syncs_kinematic_scene_graph_transform_edits_and_carries_resting_dynam
     Ok(())
 }
 
-#[test]
-fn runtime_maps_physic_material_restitution_and_records_unresolved_material_diagnostics()
--> Result<(), Box<dyn Error>> {
-    let temp_dir = std::env::temp_dir().join(format!(
-        "unitas_runtime_physic_material_{}",
-        std::process::id()
-    ));
-    let assets_dir = temp_dir.join("Assets");
-    std::fs::create_dir_all(&assets_dir)?;
-
-    let mat_guid = "feedfacefeedfacefeedfacefeedface";
-    let missing_guid = "deadbeefdeadbeefdeadbeefdeadbeef";
+fn write_physic_material_test_assets(
+    assets_dir: &Path,
+    mat_guid: &str,
+    missing_guid: &str,
+) -> Result<(std::path::PathBuf, std::path::PathBuf), Box<dyn Error>> {
+    std::fs::create_dir_all(assets_dir)?;
     let mat_path = assets_dir.join("Bouncy.physicMaterial");
     let mat_meta_path = assets_dir.join("Bouncy.physicMaterial.meta");
     std::fs::write(
@@ -678,22 +629,30 @@ fn runtime_maps_physic_material_restitution_and_records_unresolved_material_diag
         &mat_meta_path,
         format!("fileFormatVersion: 2\nguid: {mat_guid}\n"),
     )?;
-
+    let scene_for_guid = |guid: &str| {
+        format!(
+            "%YAML 1.1\n%TAG !u! tag:unity3d.com,2011:\n--- !u!1 &100\nGameObject:\n  m_Name: Floor\n  m_Layer: 0\n--- !u!4 &101\nTransform:\n  m_GameObject: {{fileID: 100}}\n  m_LocalRotation: {{x: 0, y: 0, z: 0, w: 1}}\n  m_LocalPosition: {{x: 0, y: 0, z: 0}}\n  m_LocalScale: {{x: 1, y: 1, z: 1}}\n  m_Children: []\n  m_Father: {{fileID: 0}}\n--- !u!65 &102\nBoxCollider:\n  m_GameObject: {{fileID: 100}}\n  m_Material: {{fileID: 13400000, guid: {guid}, type: 2}}\n  m_IsTrigger: 0\n  m_Size: {{x: 4, y: 1, z: 4}}\n  m_Center: {{x: 0, y: 0, z: 0}}\n--- !u!1 &200\nGameObject:\n  m_Name: Ball\n  m_Layer: 0\n--- !u!4 &201\nTransform:\n  m_GameObject: {{fileID: 200}}\n  m_LocalRotation: {{x: 0, y: 0, z: 0, w: 1}}\n  m_LocalPosition: {{x: 0, y: 2.0, z: 0}}\n  m_LocalScale: {{x: 1, y: 1, z: 1}}\n  m_Children: []\n  m_Father: {{fileID: 0}}\n--- !u!54 &202\nRigidbody:\n  m_GameObject: {{fileID: 200}}\n  m_Mass: 1\n  m_UseGravity: 1\n  m_IsKinematic: 0\n--- !u!135 &203\nSphereCollider:\n  m_GameObject: {{fileID: 200}}\n  m_Material: {{fileID: 13400000, guid: {guid}, type: 2}}\n  m_IsTrigger: 0\n  m_Radius: 0.5\n  m_Center: {{x: 0, y: 0, z: 0}}\n"
+        )
+    };
     let bouncy_scene = assets_dir.join("BouncyScene.unity");
-    std::fs::write(
-        &bouncy_scene,
-        format!(
-            "%YAML 1.1\n%TAG !u! tag:unity3d.com,2011:\n--- !u!1 &100\nGameObject:\n  m_Name: Floor\n  m_Layer: 0\n--- !u!4 &101\nTransform:\n  m_GameObject: {{fileID: 100}}\n  m_LocalRotation: {{x: 0, y: 0, z: 0, w: 1}}\n  m_LocalPosition: {{x: 0, y: 0, z: 0}}\n  m_LocalScale: {{x: 1, y: 1, z: 1}}\n  m_Children: []\n  m_Father: {{fileID: 0}}\n--- !u!65 &102\nBoxCollider:\n  m_GameObject: {{fileID: 100}}\n  m_Material: {{fileID: 13400000, guid: {mat_guid}, type: 2}}\n  m_IsTrigger: 0\n  m_Size: {{x: 4, y: 1, z: 4}}\n  m_Center: {{x: 0, y: 0, z: 0}}\n--- !u!1 &200\nGameObject:\n  m_Name: Ball\n  m_Layer: 0\n--- !u!4 &201\nTransform:\n  m_GameObject: {{fileID: 200}}\n  m_LocalRotation: {{x: 0, y: 0, z: 0, w: 1}}\n  m_LocalPosition: {{x: 0, y: 2.0, z: 0}}\n  m_LocalScale: {{x: 1, y: 1, z: 1}}\n  m_Children: []\n  m_Father: {{fileID: 0}}\n--- !u!54 &202\nRigidbody:\n  m_GameObject: {{fileID: 200}}\n  m_Mass: 1\n  m_UseGravity: 1\n  m_IsKinematic: 0\n--- !u!135 &203\nSphereCollider:\n  m_GameObject: {{fileID: 200}}\n  m_Material: {{fileID: 13400000, guid: {mat_guid}, type: 2}}\n  m_IsTrigger: 0\n  m_Radius: 0.5\n  m_Center: {{x: 0, y: 0, z: 0}}\n"
-        ),
-    )?;
-
+    std::fs::write(&bouncy_scene, scene_for_guid(mat_guid))?;
     let unresolved_scene = assets_dir.join("UnresolvedScene.unity");
-    std::fs::write(
-        &unresolved_scene,
-        format!(
-            "%YAML 1.1\n%TAG !u! tag:unity3d.com,2011:\n--- !u!1 &100\nGameObject:\n  m_Name: Floor\n  m_Layer: 0\n--- !u!4 &101\nTransform:\n  m_GameObject: {{fileID: 100}}\n  m_LocalRotation: {{x: 0, y: 0, z: 0, w: 1}}\n  m_LocalPosition: {{x: 0, y: 0, z: 0}}\n  m_LocalScale: {{x: 1, y: 1, z: 1}}\n  m_Children: []\n  m_Father: {{fileID: 0}}\n--- !u!65 &102\nBoxCollider:\n  m_GameObject: {{fileID: 100}}\n  m_Material: {{fileID: 13400000, guid: {missing_guid}, type: 2}}\n  m_IsTrigger: 0\n  m_Size: {{x: 4, y: 1, z: 4}}\n  m_Center: {{x: 0, y: 0, z: 0}}\n--- !u!1 &200\nGameObject:\n  m_Name: Ball\n  m_Layer: 0\n--- !u!4 &201\nTransform:\n  m_GameObject: {{fileID: 200}}\n  m_LocalRotation: {{x: 0, y: 0, z: 0, w: 1}}\n  m_LocalPosition: {{x: 0, y: 2.0, z: 0}}\n  m_LocalScale: {{x: 1, y: 1, z: 1}}\n  m_Children: []\n  m_Father: {{fileID: 0}}\n--- !u!54 &202\nRigidbody:\n  m_GameObject: {{fileID: 200}}\n  m_Mass: 1\n  m_UseGravity: 1\n  m_IsKinematic: 0\n--- !u!135 &203\nSphereCollider:\n  m_GameObject: {{fileID: 200}}\n  m_Material: {{fileID: 13400000, guid: {missing_guid}, type: 2}}\n  m_IsTrigger: 0\n  m_Radius: 0.5\n  m_Center: {{x: 0, y: 0, z: 0}}\n"
-        ),
-    )?;
+    std::fs::write(&unresolved_scene, scene_for_guid(missing_guid))?;
+    Ok((bouncy_scene, unresolved_scene))
+}
+
+#[test]
+fn runtime_maps_physic_material_restitution_and_records_unresolved_material_diagnostics()
+-> Result<(), Box<dyn Error>> {
+    let temp_dir = std::env::temp_dir().join(format!(
+        "unitas_runtime_physic_material_{}",
+        std::process::id()
+    ));
+    let assets_dir = temp_dir.join("Assets");
+    let mat_guid = "feedfacefeedfacefeedfacefeedface";
+    let missing_guid = "deadbeefdeadbeefdeadbeefdeadbeef";
+    let (bouncy_scene, unresolved_scene) =
+        write_physic_material_test_assets(&assets_dir, mat_guid, missing_guid)?;
 
     let mut bouncy_runtime = Runtime::new()?;
     let bouncy_load = bouncy_runtime.load_scene(&bouncy_scene);
@@ -745,6 +704,27 @@ fn runtime_maps_physic_material_restitution_and_records_unresolved_material_diag
     Ok(())
 }
 
+fn static_box_body_desc(
+    half_extents: [f64; 3],
+    position: [f64; 3],
+    is_trigger: bool,
+) -> unitas_physics::BodyDesc {
+    unitas_physics::BodyDesc {
+        role: BodyRole::Static,
+        collider_shape: ColliderShape::Primitive(unitas_physics::Shape::Box { half_extents }),
+        position,
+        rotation: [0.0, 0.0, 0.0, 1.0],
+        mass: 0.0,
+        velocity: [0.0; 3],
+        use_gravity: false,
+        is_trigger,
+        layer: 0,
+        friction: 0.6,
+        restitution: 0.0,
+        collision_detection_mode: unitas_physics::CollisionDetectionMode3D::Discrete,
+    }
+}
+
 #[test]
 fn phy_001_runtime_physics_world_reports_no_events_for_pairs_that_cannot_exchange_messages()
 -> Result<(), Box<dyn Error>> {
@@ -759,60 +739,15 @@ fn phy_001_runtime_physics_world_reports_no_events_for_pairs_that_cannot_exchang
 
     runtime_world.add_body_3d(
         floor,
-        BodyDesc {
-            role: BodyRole::Static,
-            collider_shape: ColliderShape::Primitive(Shape::Box {
-                half_extents: [2.0, 0.5, 2.0],
-            }),
-            position: [0.0, -0.5, 0.0],
-            rotation: [0.0, 0.0, 0.0, 1.0],
-            mass: 0.0,
-            velocity: [0.0; 3],
-            use_gravity: false,
-            is_trigger: false,
-            layer: 0,
-            friction: 0.6,
-            restitution: 0.0,
-            collision_detection_mode: unitas_physics::CollisionDetectionMode3D::Discrete,
-        },
+        static_box_body_desc([2.0, 0.5, 2.0], [0.0, -0.5, 0.0], false),
     )?;
     runtime_world.add_body_3d(
         trigger_zone,
-        BodyDesc {
-            role: BodyRole::Static,
-            collider_shape: ColliderShape::Primitive(Shape::Box {
-                half_extents: [0.5, 0.5, 0.5],
-            }),
-            position: [10.0, 0.0, 0.0],
-            rotation: [0.0, 0.0, 0.0, 1.0],
-            mass: 0.0,
-            velocity: [0.0; 3],
-            use_gravity: false,
-            is_trigger: true,
-            layer: 0,
-            friction: 0.6,
-            restitution: 0.0,
-            collision_detection_mode: unitas_physics::CollisionDetectionMode3D::Discrete,
-        },
+        static_box_body_desc([0.5, 0.5, 0.5], [10.0, 0.0, 0.0], true),
     )?;
     runtime_world.add_body_3d(
         crate_body,
-        BodyDesc {
-            role: BodyRole::Static,
-            collider_shape: ColliderShape::Primitive(Shape::Box {
-                half_extents: [0.5, 0.5, 0.5],
-            }),
-            position: [10.5, 0.0, 0.0],
-            rotation: [0.0, 0.0, 0.0, 1.0],
-            mass: 0.0,
-            velocity: [0.0; 3],
-            use_gravity: false,
-            is_trigger: false,
-            layer: 0,
-            friction: 0.6,
-            restitution: 0.0,
-            collision_detection_mode: unitas_physics::CollisionDetectionMode3D::Discrete,
-        },
+        static_box_body_desc([0.5, 0.5, 0.5], [10.5, 0.0, 0.0], false),
     )?;
     runtime_world.add_body_3d(
         dynamic_body,
@@ -851,11 +786,9 @@ fn phy_001_story_13_runtime_routes_3d_messages_to_collider_and_rigidbody_game_ob
     use unitas_runtime::physics::PhysicsRuntimeWorld;
 
     let mut runtime_world = PhysicsRuntimeWorld::new();
-
     let mut kinematic_platform = PhysicsObject::new(100, 0);
     kinematic_platform.has_rigidbody = true;
     kinematic_platform.is_kinematic = true;
-
     let mut compound_dynamic = PhysicsObject::new(200, 1);
     compound_dynamic.has_rigidbody = true;
     compound_dynamic.collider_object_id = Some(201);
@@ -873,13 +806,7 @@ fn phy_001_story_13_runtime_routes_3d_messages_to_collider_and_rigidbody_game_ob
     collision_receivers.sort_unstable();
     assert_eq!(
         collision_receivers,
-        vec![100, 201, 200]
-            .into_iter()
-            .fold(Vec::new(), |mut acc, x| {
-                acc.push(x);
-                acc.sort_unstable();
-                acc
-            }),
+        vec![100, 200, 201],
         "PHY-001 story 13: route_3d_message must deliver OnCollisionEnter to kinematic body and both child collider and parent Rigidbody GameObjects"
     );
 
@@ -926,18 +853,8 @@ fn phy_001_story_13_runtime_routes_3d_messages_to_collider_and_rigidbody_game_ob
 #[test]
 fn runtime_syncs_kinematic_scene_graph_rotation_into_the_physics_world()
 -> Result<(), Box<dyn Error>> {
-    let temp_dir = std::env::temp_dir().join(format!(
-        "unitas_runtime_kinematic_rotation_{}",
-        std::process::id()
-    ));
-    std::fs::create_dir_all(&temp_dir)?;
-    let temp_scene = temp_dir.join("kinematic_rotation.unity");
     let yaml = "%YAML 1.1\n%TAG !u! tag:unity3d.com,2011:\n--- !u!1 &100\nGameObject:\n  m_Name: Platform\n  m_Layer: 0\n--- !u!4 &101\nTransform:\n  m_GameObject: {fileID: 100}\n  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}\n  m_LocalPosition: {x: 0, y: 0, z: 0}\n  m_LocalScale: {x: 1, y: 1, z: 1}\n  m_Children: []\n  m_Father: {fileID: 0}\n--- !u!54 &102\nRigidbody:\n  m_GameObject: {fileID: 100}\n  m_Mass: 1\n  m_UseGravity: 0\n  m_IsKinematic: 1\n--- !u!65 &103\nBoxCollider:\n  m_GameObject: {fileID: 100}\n  m_IsTrigger: 0\n  m_Size: {x: 4, y: 1, z: 4}\n  m_Center: {x: 0, y: 0, z: 0}\n--- !u!1 &200\nGameObject:\n  m_Name: Cargo\n  m_Layer: 0\n--- !u!4 &201\nTransform:\n  m_GameObject: {fileID: 200}\n  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}\n  m_LocalPosition: {x: 1, y: 1.0, z: 0}\n  m_LocalScale: {x: 1, y: 1, z: 1}\n  m_Children: []\n  m_Father: {fileID: 0}\n--- !u!54 &202\nRigidbody:\n  m_GameObject: {fileID: 200}\n  m_Mass: 1\n  m_UseGravity: 1\n  m_IsKinematic: 0\n--- !u!65 &203\nBoxCollider:\n  m_GameObject: {fileID: 200}\n  m_IsTrigger: 0\n  m_Size: {x: 1, y: 1, z: 1}\n  m_Center: {x: 0, y: 0, z: 0}\n";
-    std::fs::write(&temp_scene, yaml)?;
-    let mut runtime = Runtime::new()?;
-    let load_res = runtime.load_scene(&temp_scene);
-    let _ = std::fs::remove_dir_all(&temp_dir);
-    load_res?;
+    let mut runtime = load_temp_scene("kinematic_rotation", yaml)?;
 
     let platform = EntityId::new(entity_handle(&runtime, "Platform")?);
     let cargo = EntityId::new(entity_handle(&runtime, "Cargo")?);
@@ -986,4 +903,17 @@ fn runtime_syncs_kinematic_scene_graph_rotation_into_the_physics_world()
         cargo_pos[2]
     );
     Ok(())
+}
+
+fn load_temp_scene(name: &str, yaml: &str) -> Result<Runtime, Box<dyn Error>> {
+    let temp_dir =
+        std::env::temp_dir().join(format!("unitas_runtime_{name}_{}", std::process::id()));
+    std::fs::create_dir_all(&temp_dir)?;
+    let temp_scene = temp_dir.join(format!("{name}.unity"));
+    std::fs::write(&temp_scene, yaml)?;
+    let mut runtime = Runtime::new()?;
+    let load_res = runtime.load_scene(&temp_scene);
+    let _ = std::fs::remove_dir_all(&temp_dir);
+    load_res?;
+    Ok(runtime)
 }

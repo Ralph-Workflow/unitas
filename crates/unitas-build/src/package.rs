@@ -574,6 +574,52 @@ pub fn package_desktop_target(
     };
     report.elapsed_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
 
+    let (app_path, launch_artifact) =
+        package_staged_target_app(config, target, &staged, &staged_dir, &target_dir)?;
+
+    let host = BuildTarget::current_host().unwrap_or_else(BuildTarget::host);
+    let launched = target == host;
+    let report = finalize_packaged_target_report(
+        report,
+        target,
+        host,
+        launched,
+        output_dir,
+        &target_dir,
+        &launch_artifact,
+        &config.product_name,
+    );
+
+    let build_report_path = target_dir.join(BUILD_REPORT_FILENAME);
+    report
+        .write_to_file(&build_report_path)
+        .map_err(|error| PackageError::Io {
+            path: build_report_path.clone(),
+            message: error.to_string(),
+        })?;
+
+    fs::remove_dir_all(&staged_dir).map_err(|error| PackageError::Io {
+        path: staged_dir,
+        message: error.to_string(),
+    })?;
+
+    Ok(PackagedTarget {
+        target,
+        label,
+        app_path,
+        launch_artifact,
+        build_report_path,
+        launched,
+    })
+}
+
+fn package_staged_target_app(
+    config: &BuildConfiguration,
+    target: BuildTarget,
+    staged: &crate::bundle::StagedBundle,
+    staged_dir: &Path,
+    target_dir: &Path,
+) -> Result<(PathBuf, PathBuf), PackageError> {
     let player_binary =
         locate_player_binary().ok_or_else(|| PackageError::MissingPlayerBinary {
             path: PathBuf::from(PLAYER_BINARY_FILENAME),
@@ -581,7 +627,7 @@ pub fn package_desktop_target(
     let licensing = licensing_record(&config.application_identifier);
     let license_text = workspace_root().map(|root| root.join("LICENSE"));
 
-    let (app_path, launch_artifact) = match target.os() {
+    match target.os() {
         TargetOs::MacOs => {
             let app_path = target_dir.join(format!(
                 "{}.{}",
@@ -590,51 +636,60 @@ pub fn package_desktop_target(
             ));
             let app = package_macos_app(
                 &staged.manifest,
-                &staged_dir,
+                staged_dir,
                 &app_path,
                 &player_binary,
                 &licensing,
                 license_text.as_deref(),
             )?;
-            (app.app_path, app.executable_path)
+            Ok((app.app_path, app.executable_path))
         }
         TargetOs::Windows => {
             let packaged = package_windows_app(
                 &staged.manifest,
-                &staged_dir,
-                &target_dir,
+                staged_dir,
+                target_dir,
                 &player_binary,
                 &licensing,
                 license_text.as_deref(),
             )?;
-            (packaged.app_dir, packaged.executable_path)
+            Ok((packaged.app_dir, packaged.executable_path))
         }
         TargetOs::Linux => {
             let packaged = package_linux_app(
                 &staged.manifest,
-                &staged_dir,
-                &target_dir,
+                staged_dir,
+                target_dir,
                 &player_binary,
                 &licensing,
                 license_text.as_deref(),
             )?;
-            (packaged.app_dir, packaged.executable_path)
+            Ok((packaged.app_dir, packaged.executable_path))
         }
         TargetOs::Web => {
             let packaged = package_web_app(
                 &staged.manifest,
-                &staged_dir,
-                &target_dir,
+                staged_dir,
+                target_dir,
                 &player_binary,
                 &licensing,
                 license_text.as_deref(),
             )?;
-            (packaged.app_dir, packaged.executable_path)
+            Ok((packaged.app_dir, packaged.executable_path))
         }
-    };
+    }
+}
 
-    let host = BuildTarget::current_host().unwrap_or_else(BuildTarget::host);
-    let launched = target == host;
+fn finalize_packaged_target_report(
+    mut report: BuildReport,
+    target: BuildTarget,
+    host: BuildTarget,
+    launched: bool,
+    output_dir: &Path,
+    target_dir: &Path,
+    launch_artifact: &Path,
+    product_name: &str,
+) -> BuildReport {
     if !launched {
         let reason = format!(
             "the {target} package was staged on this {host} host but not launched: \
@@ -655,39 +710,17 @@ pub fn package_desktop_target(
         ));
         report = report.with_warnings(warnings);
     }
-    report.output_location = Some(target_dir.clone());
-    report.launch_artifact = Some(launch_artifact.clone());
+    report.output_location = Some(target_dir.to_path_buf());
+    report.launch_artifact = Some(launch_artifact.to_path_buf());
     let availability = target_availability_report();
     let desktop_packaging = crate::player::desktop_packaging_outcomes_from_availability(
         &availability,
         output_dir,
-        &config.product_name,
+        product_name,
     );
-    report = report
-        .with_target_availability(availability)
-        .with_desktop_packaging(desktop_packaging);
-
-    let build_report_path = target_dir.join(BUILD_REPORT_FILENAME);
     report
-        .write_to_file(&build_report_path)
-        .map_err(|error| PackageError::Io {
-            path: build_report_path.clone(),
-            message: error.to_string(),
-        })?;
-
-    fs::remove_dir_all(&staged_dir).map_err(|error| PackageError::Io {
-        path: staged_dir.clone(),
-        message: error.to_string(),
-    })?;
-
-    Ok(PackagedTarget {
-        target,
-        label,
-        app_path,
-        launch_artifact,
-        build_report_path,
-        launched,
-    })
+        .with_target_availability(availability)
+        .with_desktop_packaging(desktop_packaging)
 }
 
 pub fn package_desktop_targets(
@@ -728,27 +761,7 @@ pub fn attempt_desktop_target(
     target_config.target = target;
 
     let unavailable = availability.unavailable.clone();
-    let diagnostic = match &unavailable {
-        Some(unavail) => BuildDiagnostic::new(
-            format!("toolchain.{}", unavail.cause.as_str()),
-            format!(
-                "target '{}' is externally unavailable on this host ({}): required '{}' ({}), found {:?}",
-                target,
-                unavail.cause.as_str(),
-                unavail.tool,
-                unavail.required_range,
-                unavail.version_found
-            ),
-            Some(unavail.tool.clone()),
-            Some(unavail.resolving_action.clone()),
-        ),
-        None => BuildDiagnostic::new(
-            "toolchain.unavailable",
-            format!("target '{target}' is externally unavailable on this host"),
-            None,
-            None,
-        ),
-    };
+    let diagnostic = unavailable_target_diagnostic(target, unavailable.as_ref());
 
     let all_availability = target_availability_report();
     let desktop_packaging = crate::player::desktop_packaging_outcomes_from_availability(
@@ -779,6 +792,33 @@ pub fn attempt_desktop_target(
         launched: false,
         unavailable,
     })
+}
+
+fn unavailable_target_diagnostic(
+    target: BuildTarget,
+    unavailable: Option<&crate::toolchain::ToolchainUnavailability>,
+) -> BuildDiagnostic {
+    match unavailable {
+        Some(unavail) => BuildDiagnostic::new(
+            format!("toolchain.{}", unavail.cause.as_str()),
+            format!(
+                "target '{}' is externally unavailable on this host ({}): required '{}' ({}), found {:?}",
+                target,
+                unavail.cause.as_str(),
+                unavail.tool,
+                unavail.required_range,
+                unavail.version_found
+            ),
+            Some(unavail.tool.clone()),
+            Some(unavail.resolving_action.clone()),
+        ),
+        None => BuildDiagnostic::new(
+            "toolchain.unavailable",
+            format!("target '{target}' is externally unavailable on this host"),
+            None,
+            None,
+        ),
+    }
 }
 
 pub fn attempt_desktop_targets(
@@ -1045,11 +1085,23 @@ mod tests {
         let contents = app_path.join(CONTENTS_DIR_NAME);
         let macos = contents.join(MACOS_DIR_NAME);
         let resources = contents.join(RESOURCES_DIR_NAME);
+        let executable = macos.join("PackagedGame");
+        assert_macos_bundle_files(&contents, &macos, &resources, &executable)?;
+        assert_macos_bundle_launches(&macos, &resources, &executable)?;
+        let _ = fs::remove_dir_all(&output_dir);
+        Ok(())
+    }
+
+    fn assert_macos_bundle_files(
+        contents: &Path,
+        macos: &Path,
+        resources: &Path,
+        executable: &Path,
+    ) -> Result<(), Box<dyn Error>> {
         let info_plist_path = contents.join(INFO_PLIST_FILENAME);
         assert!(info_plist_path.is_file());
-        let executable = macos.join("PackagedGame");
         assert!(executable.is_file());
-        assert!(is_executable(&executable)?);
+        assert!(is_executable(executable)?);
         assert!(macos.join(PLAYER_BINARY_FILENAME).is_file());
         assert!(resources.join(BUNDLE_MANIFEST_FILENAME).is_file());
         assert!(resources
@@ -1062,7 +1114,7 @@ mod tests {
         assert!(info_plist.contains("<string>PackagedGame</string>"));
         assert!(info_plist.contains("<string>com.unitas.packaged</string>"));
 
-        let launcher = fs::read_to_string(&executable)?;
+        let launcher = fs::read_to_string(executable)?;
         assert!(
             launcher.contains("--windowed"),
             "the packaged launcher does not start the player windowed: {launcher}"
@@ -1071,42 +1123,55 @@ mod tests {
             launcher.contains("\"$@\""),
             "the packaged launcher does not forward caller arguments: {launcher}"
         );
+        Ok(())
+    }
 
-        #[cfg(target_os = "macos")]
-        {
-            let output = Command::new(macos.join(PLAYER_BINARY_FILENAME))
-                .arg(&resources)
-                .arg("--frames")
-                .arg("1")
-                .output()?;
-            assert!(
-                output.status.success(),
-                "the packaged player exited with {}: {}",
-                output.status,
-                String::from_utf8_lossy(&output.stderr)
-            );
-            let stdout = String::from_utf8(output.stdout)?;
-            assert!(
-                stdout.contains("launched_product=PackagedGame"),
-                "unexpected startup output: {stdout}"
-            );
-            assert!(
-                stdout.contains("frames_stepped=1"),
-                "unexpected startup output: {stdout}"
-            );
+    #[cfg(target_os = "macos")]
+    fn assert_macos_bundle_launches(
+        macos: &Path,
+        resources: &Path,
+        executable: &Path,
+    ) -> Result<(), Box<dyn Error>> {
+        let output = Command::new(macos.join(PLAYER_BINARY_FILENAME))
+            .arg(resources)
+            .arg("--frames")
+            .arg("1")
+            .output()?;
+        assert!(
+            output.status.success(),
+            "the packaged player exited with {}: {}",
+            output.status,
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let stdout = String::from_utf8(output.stdout)?;
+        assert!(
+            stdout.contains("launched_product=PackagedGame"),
+            "unexpected startup output: {stdout}"
+        );
+        assert!(
+            stdout.contains("frames_stepped=1"),
+            "unexpected startup output: {stdout}"
+        );
 
-            let launcher_run = Command::new(&executable)
-                .arg("--control-stdio")
-                .stdin(std::process::Stdio::null())
-                .output()?;
-            assert!(
-                launcher_run.status.success(),
-                "the packaged launcher exited with {}: {}",
-                launcher_run.status,
-                String::from_utf8_lossy(&launcher_run.stderr)
-            );
-        }
-        let _ = fs::remove_dir_all(&output_dir);
+        let launcher_run = Command::new(executable)
+            .arg("--control-stdio")
+            .stdin(std::process::Stdio::null())
+            .output()?;
+        assert!(
+            launcher_run.status.success(),
+            "the packaged launcher exited with {}: {}",
+            launcher_run.status,
+            String::from_utf8_lossy(&launcher_run.stderr)
+        );
+        Ok(())
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    fn assert_macos_bundle_launches(
+        _macos: &Path,
+        _resources: &Path,
+        _executable: &Path,
+    ) -> Result<(), Box<dyn Error>> {
         Ok(())
     }
 
@@ -1241,31 +1306,7 @@ mod tests {
         assert_eq!(labels, vec!["macos", "windows", "linux"]);
 
         for target in &packaged {
-            assert!(target.app_path.is_dir());
-            assert!(target.launch_artifact.is_file());
-            assert!(target.build_report_path.is_file());
-            let target_dir = target
-                .app_path
-                .parent()
-                .ok_or("the packaged app has no parent directory")?;
-            assert_eq!(
-                target.build_report_path,
-                target_dir.join(BUILD_REPORT_FILENAME)
-            );
-            assert!(!target_dir.join(STAGED_DIR_NAME).exists());
-
-            let report = BuildReport::read_from_file(&target.build_report_path)?;
-            assert_eq!(report.target, target.target);
-            assert!(!report.build_identifier.is_empty());
-            assert_eq!(report.included_scenes.len(), 1);
-            assert!(!report.assets.is_empty());
-            assert!(report.total_size_bytes > 0);
-            assert!(!report.major_contributors.is_empty());
-            assert!(report
-                .major_contributors
-                .iter()
-                .all(|contributor| !contributor.path.is_empty()));
-            assert!(report.licensing.is_some());
+            assert_packaged_target_report(target)?;
         }
 
         let windows = packaged
@@ -1280,6 +1321,35 @@ mod tests {
             .iter()
             .any(|warning| warning.code == "package.not_launched"));
         let _ = fs::remove_dir_all(&output_dir);
+        Ok(())
+    }
+
+    fn assert_packaged_target_report(target: &PackagedTarget) -> Result<(), Box<dyn Error>> {
+        assert!(target.app_path.is_dir());
+        assert!(target.launch_artifact.is_file());
+        assert!(target.build_report_path.is_file());
+        let target_dir = target
+            .app_path
+            .parent()
+            .ok_or("the packaged app has no parent directory")?;
+        assert_eq!(
+            target.build_report_path,
+            target_dir.join(BUILD_REPORT_FILENAME)
+        );
+        assert!(!target_dir.join(STAGED_DIR_NAME).exists());
+
+        let report = BuildReport::read_from_file(&target.build_report_path)?;
+        assert_eq!(report.target, target.target);
+        assert!(!report.build_identifier.is_empty());
+        assert_eq!(report.included_scenes.len(), 1);
+        assert!(!report.assets.is_empty());
+        assert!(report.total_size_bytes > 0);
+        assert!(!report.major_contributors.is_empty());
+        assert!(report
+            .major_contributors
+            .iter()
+            .all(|contributor| !contributor.path.is_empty()));
+        assert!(report.licensing.is_some());
         Ok(())
     }
 

@@ -167,6 +167,27 @@ fn write_regioned_tga(path: &Path, size: u16, border: u16) -> std::io::Result<()
     std::fs::write(path, bytes)
 }
 
+fn assert_initial_script_sprite_sorting(runtime: &mut Runtime, entity: EntityId) {
+    let sprites = runtime.sprite_instances();
+    assert_eq!(sprites.len(), 2);
+    assert_eq!(sprites[0].sorting_layer, 0);
+    assert_eq!(sprites[0].sorting_order, 1);
+    assert_eq!(sprites[0].color, [0.1, 0.2, 0.3, 0.4]);
+    assert_eq!(sprites[0].texture.width, 100);
+    assert_eq!(sprites[0].texture.height, 50);
+    assert!((sprites[0].model.get(3, 0) - 3.0).abs() < 1e-6);
+    assert!((sprites[0].model.get(3, 1) - 4.0).abs() < 1e-6);
+    assert!((sprites[0].model.get(0, 0) + 1.0).abs() < 1e-6);
+    assert!((sprites[0].model.get(1, 1) - 0.5).abs() < 1e-6);
+    assert_eq!(sprites[1].sorting_layer, 0);
+    assert_eq!(sprites[1].sorting_order, 5);
+
+    assert!(runtime.set_runtime_sprite_sorting(entity, 0, 10));
+    let sprites = runtime.sprite_instances();
+    assert_eq!(sprites[0].sorting_order, 5);
+    assert_eq!(sprites[1].sorting_order, 10);
+}
+
 #[test]
 fn script_sprite_draws_in_the_same_sorted_pass_as_the_scene_sprites()
 -> Result<(), Box<dyn std::error::Error>> {
@@ -194,25 +215,7 @@ fn script_sprite_draws_in_the_same_sorted_pass_as_the_scene_sprites()
     assert!(runtime.set_runtime_sprite_color(entity, [0.1, 0.2, 0.3, 0.4]));
     assert!(runtime.set_runtime_sprite_sorting(entity, 0, 1));
     assert!(runtime.set_runtime_sprite_flip(entity, true, false));
-
-    let sprites = runtime.sprite_instances();
-    assert_eq!(sprites.len(), 2);
-    assert_eq!(sprites[0].sorting_layer, 0);
-    assert_eq!(sprites[0].sorting_order, 1);
-    assert_eq!(sprites[0].color, [0.1, 0.2, 0.3, 0.4]);
-    assert_eq!(sprites[0].texture.width, 100);
-    assert_eq!(sprites[0].texture.height, 50);
-    assert!((sprites[0].model.get(3, 0) - 3.0).abs() < 1e-6);
-    assert!((sprites[0].model.get(3, 1) - 4.0).abs() < 1e-6);
-    assert!((sprites[0].model.get(0, 0) + 1.0).abs() < 1e-6);
-    assert!((sprites[0].model.get(1, 1) - 0.5).abs() < 1e-6);
-    assert_eq!(sprites[1].sorting_layer, 0);
-    assert_eq!(sprites[1].sorting_order, 5);
-
-    assert!(runtime.set_runtime_sprite_sorting(entity, 0, 10));
-    let sprites = runtime.sprite_instances();
-    assert_eq!(sprites[0].sorting_order, 5);
-    assert_eq!(sprites[1].sorting_order, 10);
+    assert_initial_script_sprite_sorting(&mut runtime, entity);
 
     assert!(runtime.set_runtime_sprite_enabled(entity, false));
     assert_eq!(runtime.sprite_instances().len(), 1);

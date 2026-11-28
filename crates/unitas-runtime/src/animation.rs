@@ -629,12 +629,12 @@ impl AnimationWorld {
         all_child_bindings
     }
 
-    pub fn tick_frame_parallel(
+    fn collect_parallel_tasks(
         &mut self,
-        frame: &AnimatorFrame,
-        jobs: &JobSystem,
-    ) -> Vec<(EntityId, Vec<SampledBinding>)> {
-        let mut all_child_bindings = Vec::new();
+    ) -> (
+        Vec<(EntityId, Mutex<Option<AnimatorInstance>>)>,
+        Vec<ParallelAnimatorSlot>,
+    ) {
         let animated: Vec<EntityId> = self.animated.iter().copied().collect();
         let mut tasks = Vec::with_capacity(animated.len());
         let mut slots: Vec<ParallelAnimatorSlot> = Vec::with_capacity(animated.len());
@@ -651,6 +651,16 @@ impl AnimationWorld {
             tasks.push((entity, Mutex::new(Some(animator))));
             slots.push(Arc::new(Mutex::new(None)));
         }
+        (tasks, slots)
+    }
+
+    pub fn tick_frame_parallel(
+        &mut self,
+        frame: &AnimatorFrame,
+        jobs: &JobSystem,
+    ) -> Vec<(EntityId, Vec<SampledBinding>)> {
+        let mut all_child_bindings = Vec::new();
+        let (tasks, slots) = self.collect_parallel_tasks();
         let task_count = tasks.len();
         if task_count == 0 {
             self.last_job_workers = 0;
@@ -660,7 +670,26 @@ impl AnimationWorld {
         }
         let shared_tasks = Arc::new(tasks);
         let shared_slots = Arc::new(slots);
-        let frame_copy = *frame;
+        Self::dispatch_parallel_animator_jobs(
+            jobs,
+            *frame,
+            task_count,
+            Arc::clone(&shared_tasks),
+            Arc::clone(&shared_slots),
+        );
+        self.commit_parallel_animator_outputs(&shared_tasks, &shared_slots, &mut all_child_bindings);
+        self.tick_legacy(frame, &mut all_child_bindings);
+        self.resolve_all_object_references();
+        all_child_bindings
+    }
+
+    fn dispatch_parallel_animator_jobs(
+        jobs: &JobSystem,
+        frame_copy: AnimatorFrame,
+        task_count: usize,
+        job_tasks: Arc<Vec<(EntityId, Mutex<Option<AnimatorInstance>>)>>,
+        job_slots: Arc<Vec<ParallelAnimatorSlot>>,
+    ) {
         let workers = jobs.active_workers().max(1);
         let batch_size = if workers <= 1 {
             i64::try_from(task_count).unwrap_or(1)
@@ -670,8 +699,6 @@ impl AnimationWorld {
             i64::try_from(raw).unwrap_or(1)
         };
         let length = i64::try_from(task_count).unwrap_or(0);
-        let job_tasks = Arc::clone(&shared_tasks);
-        let job_slots = Arc::clone(&shared_slots);
         let handle = jobs.schedule_parallel_for(
             length,
             batch_size,
@@ -702,6 +729,14 @@ impl AnimationWorld {
             &[],
         );
         jobs.complete(handle);
+    }
+
+    fn commit_parallel_animator_outputs(
+        &mut self,
+        shared_tasks: &[(EntityId, Mutex<Option<AnimatorInstance>>)],
+        shared_slots: &[ParallelAnimatorSlot],
+        all_child_bindings: &mut Vec<(EntityId, Vec<SampledBinding>)>,
+    ) {
         let mut written = Vec::new();
         let mut observed_threads = Vec::new();
         for (idx, (entity, _)) in shared_tasks.iter().enumerate() {
@@ -719,7 +754,7 @@ impl AnimationWorld {
                 continue;
             };
             entry.animator = Some(output.animator);
-            if Self::commit_animator_step(*entity, entry, output.result, &mut all_child_bindings) {
+            if Self::commit_animator_step(*entity, entry, output.result, all_child_bindings) {
                 written.push(*entity);
             }
         }
@@ -727,9 +762,6 @@ impl AnimationWorld {
             self.pending_transform_writes.insert(entity);
         }
         self.last_job_workers = observed_threads.len();
-        self.tick_legacy(frame, &mut all_child_bindings);
-        self.resolve_all_object_references();
-        all_child_bindings
     }
 
     fn commit_animator_step(
@@ -1605,52 +1637,16 @@ impl Default for LookAtIkResult {
     }
 }
 
-pub fn solve_two_bone_ik(
-    chain: &TwoBoneIkChain,
-    target_position: [f32; 3],
-    target_rotation: [f32; 4],
+fn compute_two_bone_ik_positions(
+    root: [f32; 3],
+    orig_tip: [f32; 3],
+    upper_vec: [f32; 3],
+    lengths: (f32, f32),
+    effective_target: [f32; 3],
     bend_hint: Option<[f32; 3]>,
-    position_weight: f32,
-    rotation_weight: f32,
-    hint_weight: f32,
-) -> TwoBoneIkResult {
-    let pos_w = sanitize_weight(position_weight);
-    let rot_w = sanitize_weight(rotation_weight);
-    let hint_w = sanitize_weight(hint_weight);
-    let root = chain.root_position;
-    let orig_mid = chain.mid_position;
-    let orig_tip = chain.tip_position;
-    let orig_tip_rot = normalize_rotation(chain.tip_rotation);
-    let goal_tip_rot = normalize_rotation(target_rotation);
-    let tip_rotation = slerp_rotation(orig_tip_rot, goal_tip_rot, rot_w);
-
-    if pos_w <= 1e-6 {
-        return TwoBoneIkResult {
-            root_position: root,
-            mid_position: orig_mid,
-            tip_position: orig_tip,
-            root_rotation_delta: unitas_core::IDENTITY_ROTATION,
-            mid_rotation_delta: unitas_core::IDENTITY_ROTATION,
-            tip_rotation,
-        };
-    }
-
-    let upper_vec = subtract_vectors(orig_mid, root);
-    let lower_vec = subtract_vectors(orig_tip, orig_mid);
-    let l1 = vector_length(upper_vec);
-    let l2 = vector_length(lower_vec);
-    if l1 <= 1e-6 || l2 <= 1e-6 {
-        return TwoBoneIkResult {
-            root_position: root,
-            mid_position: orig_mid,
-            tip_position: orig_tip,
-            root_rotation_delta: unitas_core::IDENTITY_ROTATION,
-            mid_rotation_delta: unitas_core::IDENTITY_ROTATION,
-            tip_rotation,
-        };
-    }
-
-    let effective_target = lerp_vector(orig_tip, target_position, pos_w);
+    hint_w: f32,
+) -> ([f32; 3], [f32; 3]) {
+    let (l1, l2) = lengths;
     let root_to_target = subtract_vectors(effective_target, root);
     let raw_dist = vector_length(root_to_target);
     let orig_root_to_tip = subtract_vectors(orig_tip, root);
@@ -1676,10 +1672,11 @@ pub fn solve_two_bone_ik(
         _ => fallback_perpendicular(orig_bend_dir, axis),
     };
 
-    let (mid_position, tip_position) = if raw_dist >= max_reach {
-        let mid = add_vectors(root, scale_vector(axis, l1));
-        let tip = add_vectors(root, scale_vector(axis, max_reach));
-        (mid, tip)
+    if raw_dist >= max_reach {
+        (
+            add_vectors(root, scale_vector(axis, l1)),
+            add_vectors(root, scale_vector(axis, max_reach)),
+        )
     } else {
         let clamped_d = raw_dist.clamp(min_reach, max_reach);
         let cos_alpha =
@@ -1687,10 +1684,57 @@ pub fn solve_two_bone_ik(
         let sin_alpha = (1.0 - cos_alpha * cos_alpha).max(0.0).sqrt();
         let along = scale_vector(axis, l1 * cos_alpha);
         let perp = scale_vector(hinted_bend_dir, l1 * sin_alpha);
-        let mid = add_vectors(root, add_vectors(along, perp));
-        let tip = add_vectors(root, scale_vector(axis, clamped_d));
-        (mid, tip)
-    };
+        (
+            add_vectors(root, add_vectors(along, perp)),
+            add_vectors(root, scale_vector(axis, clamped_d)),
+        )
+    }
+}
+
+pub fn solve_two_bone_ik(
+    chain: &TwoBoneIkChain,
+    target_position: [f32; 3],
+    target_rotation: [f32; 4],
+    bend_hint: Option<[f32; 3]>,
+    position_weight: f32,
+    rotation_weight: f32,
+    hint_weight: f32,
+) -> TwoBoneIkResult {
+    let pos_w = sanitize_weight(position_weight);
+    let rot_w = sanitize_weight(rotation_weight);
+    let hint_w = sanitize_weight(hint_weight);
+    let root = chain.root_position;
+    let orig_mid = chain.mid_position;
+    let orig_tip = chain.tip_position;
+    let orig_tip_rot = normalize_rotation(chain.tip_rotation);
+    let goal_tip_rot = normalize_rotation(target_rotation);
+    let tip_rotation = slerp_rotation(orig_tip_rot, goal_tip_rot, rot_w);
+
+    let upper_vec = subtract_vectors(orig_mid, root);
+    let lower_vec = subtract_vectors(orig_tip, orig_mid);
+    let l1 = vector_length(upper_vec);
+    let l2 = vector_length(lower_vec);
+    if pos_w <= 1e-6 || l1 <= 1e-6 || l2 <= 1e-6 {
+        return TwoBoneIkResult {
+            root_position: root,
+            mid_position: orig_mid,
+            tip_position: orig_tip,
+            root_rotation_delta: unitas_core::IDENTITY_ROTATION,
+            mid_rotation_delta: unitas_core::IDENTITY_ROTATION,
+            tip_rotation,
+        };
+    }
+
+    let effective_target = lerp_vector(orig_tip, target_position, pos_w);
+    let (mid_position, tip_position) = compute_two_bone_ik_positions(
+        root,
+        orig_tip,
+        upper_vec,
+        (l1, l2),
+        effective_target,
+        bend_hint,
+        hint_w,
+    );
 
     let solved_upper = subtract_vectors(mid_position, root);
     let solved_lower = subtract_vectors(tip_position, mid_position);
@@ -2054,147 +2098,173 @@ impl AnimationWorld {
             let Some(hook_entry) = hooks.entries.get_mut(&entity) else {
                 continue;
             };
-            let Some(script) = hook_entry.script.as_mut() else {
-                continue;
-            };
-            for callback in entry.callbacks.clone() {
-                match callback.kind {
-                    StateMachineCallbackKind::OnStateEnter => {
-                        script.on_state_enter(entity, &callback);
-                    }
-                    StateMachineCallbackKind::OnStateUpdate => {
-                        script.on_state_update(entity, &callback);
-                    }
-                    StateMachineCallbackKind::OnStateExit => {
-                        script.on_state_exit(entity, &callback);
-                    }
-                    StateMachineCallbackKind::OnStateMachineEnter => {
-                        if let Some(machine) = callback.machine.as_deref() {
-                            script.on_state_machine_enter(entity, machine);
-                        }
-                    }
-                    StateMachineCallbackKind::OnStateMachineExit => {
-                        if let Some(machine) = callback.machine.as_deref() {
-                            script.on_state_machine_exit(entity, machine);
-                        }
-                    }
-                    StateMachineCallbackKind::OnStateMove | StateMachineCallbackKind::OnStateIK => {
-                    }
-                }
-            }
-            let sampled_translation = entry.transform.translation;
-            let sampled_rotation = entry.transform.rotation;
-            let mut motion = entry.root_motion;
-            let existing_entity_bindings: Vec<SampledBinding> = child_bindings
-                .iter()
-                .find(|(e, _)| *e == entity)
-                .map(|(_, b)| b.clone())
-                .unwrap_or_default();
-            let mut skeleton_locals = build_skeleton_locals(&existing_entity_bindings);
-            for chain_paths in hook_entry.skeleton_chains.values() {
-                ensure_skeleton_path(&mut skeleton_locals, &chain_paths.root_path);
-                ensure_skeleton_path(&mut skeleton_locals, &chain_paths.mid_path);
-                ensure_skeleton_path(&mut skeleton_locals, &chain_paths.tip_path);
-            }
-            if let Some(ref look_path) = hook_entry.look_at_bone_path {
-                ensure_skeleton_path(&mut skeleton_locals, look_path);
-            }
-
-            let ik_layers = hook_entry.ik_layers.clone();
-            let mut pose = AnimatorIkPose {
-                body_position: Some(sampled_translation),
-                body_rotation: Some(sampled_rotation),
-                ..AnimatorIkPose::default()
-            };
-            populate_pose_from_skeleton(
-                &mut pose,
-                &entry.transform,
-                &skeleton_locals,
-                &hook_entry.skeleton_chains,
-                hook_entry.look_at_bone_path.as_deref(),
-            );
-            let mut ik_ran = false;
-            for layer_index in ik_layers {
-                if !entry.writes_transforms {
-                    break;
-                }
-                ik_ran = true;
-                populate_pose_from_skeleton(
-                    &mut pose,
-                    &entry.transform,
-                    &skeleton_locals,
-                    &hook_entry.skeleton_chains,
-                    hook_entry.look_at_bone_path.as_deref(),
-                );
-                entry.callbacks.push(StateMachineCallback {
-                    kind: StateMachineCallbackKind::OnStateIK,
-                    state_index: current_state_index(entry),
-                    state_name: String::new(),
-                    machine: None,
-                });
-                script.on_animator_ik(entity, layer_index, &mut pose);
-                pose.solve();
-                if let Some(body_position) = pose.body_position {
-                    entry.transform.translation = body_position;
-                }
-                if let Some(body_rotation) = pose.body_rotation {
-                    entry.transform.rotation = normalize_rotation(body_rotation);
-                }
-                apply_solved_ik_to_skeleton(
-                    &pose,
-                    &entry.transform,
-                    &mut skeleton_locals,
-                    &hook_entry.skeleton_chains,
-                    hook_entry.look_at_bone_path.as_deref(),
-                );
-            }
-            if ik_ran {
-                let ik_bindings = build_ik_child_bindings(
-                    &skeleton_locals,
-                    &hook_entry.skeleton_chains,
-                    hook_entry.look_at_bone_path.as_deref(),
-                );
-                if !ik_bindings.is_empty() {
-                    merge_child_bindings(&mut child_bindings, entity, ik_bindings);
-                }
-                hook_entry.last_ik_pose = Some(pose);
-            }
-            let ik_override_translation = if entry.transform.translation != sampled_translation {
-                Some(entry.transform.translation)
-            } else {
-                None
-            };
-            let ik_override_rotation = if entry.transform.rotation != sampled_rotation {
-                Some(entry.transform.rotation)
-            } else {
-                None
-            };
-            entry.callbacks.push(StateMachineCallback {
-                kind: StateMachineCallbackKind::OnStateMove,
-                state_index: current_state_index(entry),
-                state_name: String::new(),
-                machine: None,
-            });
-            if script.on_animator_move(entity, &mut motion) {
-                let mut moved_translation =
-                    add_vectors(previous_transform.translation, motion.delta_position);
-                if let Some(ik_pos) = ik_override_translation {
-                    for axis in 0..3 {
-                        if (ik_pos[axis] - sampled_translation[axis]).abs() > 1e-6 {
-                            moved_translation[axis] = ik_pos[axis];
-                        }
-                    }
-                }
-                entry.transform.translation = moved_translation;
-                entry.transform.rotation = ik_override_rotation.unwrap_or_else(|| {
-                    unitas_core::multiply_rotation(
-                        motion.delta_rotation,
-                        previous_transform.rotation,
-                    )
-                });
-            }
+            process_entity_hooks(entity, entry, hook_entry, &previous_transform, &mut child_bindings);
         }
         child_bindings
+    }
+}
+
+fn dispatch_state_machine_callbacks(
+    entity: EntityId,
+    callbacks: &[StateMachineCallback],
+    script: &mut dyn AnimatorScriptHooks,
+) {
+    for callback in callbacks {
+        match callback.kind {
+            StateMachineCallbackKind::OnStateEnter => script.on_state_enter(entity, callback),
+            StateMachineCallbackKind::OnStateUpdate => script.on_state_update(entity, callback),
+            StateMachineCallbackKind::OnStateExit => script.on_state_exit(entity, callback),
+            StateMachineCallbackKind::OnStateMachineEnter => {
+                if let Some(machine) = callback.machine.as_deref() {
+                    script.on_state_machine_enter(entity, machine);
+                }
+            }
+            StateMachineCallbackKind::OnStateMachineExit => {
+                if let Some(machine) = callback.machine.as_deref() {
+                    script.on_state_machine_exit(entity, machine);
+                }
+            }
+            StateMachineCallbackKind::OnStateMove | StateMachineCallbackKind::OnStateIK => {}
+        }
+    }
+}
+
+fn prepare_hook_skeleton_locals(
+    entity: EntityId,
+    hook_entry: &AnimatorHookEntry,
+    child_bindings: &[(EntityId, Vec<SampledBinding>)],
+) -> BTreeMap<String, Transform> {
+    let existing_entity_bindings: Vec<SampledBinding> = child_bindings
+        .iter()
+        .find(|(e, _)| *e == entity)
+        .map(|(_, b)| b.clone())
+        .unwrap_or_default();
+    let mut skeleton_locals = build_skeleton_locals(&existing_entity_bindings);
+    for chain_paths in hook_entry.skeleton_chains.values() {
+        ensure_skeleton_path(&mut skeleton_locals, &chain_paths.root_path);
+        ensure_skeleton_path(&mut skeleton_locals, &chain_paths.mid_path);
+        ensure_skeleton_path(&mut skeleton_locals, &chain_paths.tip_path);
+    }
+    if let Some(ref look_path) = hook_entry.look_at_bone_path {
+        ensure_skeleton_path(&mut skeleton_locals, look_path);
+    }
+    skeleton_locals
+}
+
+fn run_entity_ik_layers(
+    entity: EntityId,
+    entry: &mut EntityAnimatorEntry,
+    hook_entry: &mut AnimatorHookEntry,
+    skeleton_locals: &mut BTreeMap<String, Transform>,
+) -> Option<AnimatorIkPose> {
+    let ik_layers = hook_entry.ik_layers.clone();
+    let mut pose = AnimatorIkPose {
+        body_position: Some(entry.transform.translation),
+        body_rotation: Some(entry.transform.rotation),
+        ..AnimatorIkPose::default()
+    };
+    populate_pose_from_skeleton(
+        &mut pose,
+        &entry.transform,
+        skeleton_locals,
+        &hook_entry.skeleton_chains,
+        hook_entry.look_at_bone_path.as_deref(),
+    );
+    let mut ik_ran = false;
+    for layer_index in ik_layers {
+        if !entry.writes_transforms {
+            break;
+        }
+        let Some(script) = hook_entry.script.as_mut() else {
+            break;
+        };
+        ik_ran = true;
+        populate_pose_from_skeleton(
+            &mut pose,
+            &entry.transform,
+            skeleton_locals,
+            &hook_entry.skeleton_chains,
+            hook_entry.look_at_bone_path.as_deref(),
+        );
+        entry.callbacks.push(StateMachineCallback {
+            kind: StateMachineCallbackKind::OnStateIK,
+            state_index: current_state_index(entry),
+            state_name: String::new(),
+            machine: None,
+        });
+        script.on_animator_ik(entity, layer_index, &mut pose);
+        pose.solve();
+        if let Some(body_position) = pose.body_position {
+            entry.transform.translation = body_position;
+        }
+        if let Some(body_rotation) = pose.body_rotation {
+            entry.transform.rotation = normalize_rotation(body_rotation);
+        }
+        apply_solved_ik_to_skeleton(
+            &pose,
+            &entry.transform,
+            skeleton_locals,
+            &hook_entry.skeleton_chains,
+            hook_entry.look_at_bone_path.as_deref(),
+        );
+    }
+    if ik_ran { Some(pose) } else { None }
+}
+
+fn process_entity_hooks(
+    entity: EntityId,
+    entry: &mut EntityAnimatorEntry,
+    hook_entry: &mut AnimatorHookEntry,
+    previous_transform: &Transform,
+    child_bindings: &mut Vec<(EntityId, Vec<SampledBinding>)>,
+) {
+    let Some(script) = hook_entry.script.as_mut() else {
+        return;
+    };
+    let callbacks = entry.callbacks.clone();
+    dispatch_state_machine_callbacks(entity, &callbacks, script.as_mut());
+    let sampled_translation = entry.transform.translation;
+    let sampled_rotation = entry.transform.rotation;
+    let mut motion = entry.root_motion;
+    let mut skeleton_locals = prepare_hook_skeleton_locals(entity, hook_entry, child_bindings);
+    if let Some(pose) = run_entity_ik_layers(entity, entry, hook_entry, &mut skeleton_locals) {
+        let ik_bindings = build_ik_child_bindings(
+            &skeleton_locals,
+            &hook_entry.skeleton_chains,
+            hook_entry.look_at_bone_path.as_deref(),
+        );
+        if !ik_bindings.is_empty() {
+            merge_child_bindings(child_bindings, entity, ik_bindings);
+        }
+        hook_entry.last_ik_pose = Some(pose);
+    }
+    let ik_override_translation = (entry.transform.translation != sampled_translation)
+        .then_some(entry.transform.translation);
+    let ik_override_rotation =
+        (entry.transform.rotation != sampled_rotation).then_some(entry.transform.rotation);
+    entry.callbacks.push(StateMachineCallback {
+        kind: StateMachineCallbackKind::OnStateMove,
+        state_index: current_state_index(entry),
+        state_name: String::new(),
+        machine: None,
+    });
+    let Some(script) = hook_entry.script.as_mut() else {
+        return;
+    };
+    if script.on_animator_move(entity, &mut motion) {
+        let mut moved_translation =
+            add_vectors(previous_transform.translation, motion.delta_position);
+        if let Some(ik_pos) = ik_override_translation {
+            for axis in 0..3 {
+                if (ik_pos[axis] - sampled_translation[axis]).abs() > 1e-6 {
+                    moved_translation[axis] = ik_pos[axis];
+                }
+            }
+        }
+        entry.transform.translation = moved_translation;
+        entry.transform.rotation = ik_override_rotation.unwrap_or_else(|| {
+            unitas_core::multiply_rotation(motion.delta_rotation, previous_transform.rotation)
+        });
     }
 }
 
@@ -2298,6 +2368,26 @@ fn populate_pose_from_skeleton(
     }
 }
 
+fn set_bone_world_rotation(
+    root_transform: &Transform,
+    locals: &mut BTreeMap<String, Transform>,
+    bone_path: &str,
+    solved_world_rotation: [f32; 4],
+) {
+    let parent_world = compute_skeleton_world_transform(
+        root_transform,
+        locals,
+        parent_skeleton_path(bone_path),
+    );
+    let new_local = normalize_rotation(unitas_core::multiply_rotation(
+        conjugate_rotation(parent_world.rotation),
+        solved_world_rotation,
+    ));
+    if let Some(local) = locals.get_mut(bone_path) {
+        local.rotation = new_local;
+    }
+}
+
 fn apply_solved_ik_to_skeleton(
     pose: &AnimatorIkPose,
     root_transform: &Transform,
@@ -2316,44 +2406,24 @@ fn apply_solved_ik_to_skeleton(
         let (solved_root_world, solved_mid_world, solved_tip_world) =
             solved.solved_bone_rotations(root_world.rotation, mid_world.rotation);
 
-        let root_parent_world = compute_skeleton_world_transform(
+        set_bone_world_rotation(
             root_transform,
             locals,
-            parent_skeleton_path(&chain_paths.root_path),
-        );
-        let new_root_local = normalize_rotation(unitas_core::multiply_rotation(
-            conjugate_rotation(root_parent_world.rotation),
+            &chain_paths.root_path,
             solved_root_world,
-        ));
-        if let Some(root_local) = locals.get_mut(&chain_paths.root_path) {
-            root_local.rotation = new_root_local;
-        }
-
-        let mid_parent_world = compute_skeleton_world_transform(
+        );
+        set_bone_world_rotation(
             root_transform,
             locals,
-            parent_skeleton_path(&chain_paths.mid_path),
-        );
-        let new_mid_local = normalize_rotation(unitas_core::multiply_rotation(
-            conjugate_rotation(mid_parent_world.rotation),
+            &chain_paths.mid_path,
             solved_mid_world,
-        ));
-        if let Some(mid_local) = locals.get_mut(&chain_paths.mid_path) {
-            mid_local.rotation = new_mid_local;
-        }
-
-        let tip_parent_world = compute_skeleton_world_transform(
+        );
+        set_bone_world_rotation(
             root_transform,
             locals,
-            parent_skeleton_path(&chain_paths.tip_path),
-        );
-        let new_tip_local = normalize_rotation(unitas_core::multiply_rotation(
-            conjugate_rotation(tip_parent_world.rotation),
+            &chain_paths.tip_path,
             solved_tip_world,
-        ));
-        if let Some(tip_local) = locals.get_mut(&chain_paths.tip_path) {
-            tip_local.rotation = new_tip_local;
-        }
+        );
     }
 
     if let (Some(bone_path), Some(solved_look)) = (look_at_bone_path, pose.solved_look_at()) {
@@ -2362,18 +2432,7 @@ fn apply_solved_ik_to_skeleton(
             solved_look.head_rotation,
             head_world.rotation,
         ));
-        let head_parent_world = compute_skeleton_world_transform(
-            root_transform,
-            locals,
-            parent_skeleton_path(bone_path),
-        );
-        let new_head_local = normalize_rotation(unitas_core::multiply_rotation(
-            conjugate_rotation(head_parent_world.rotation),
-            new_head_world,
-        ));
-        if let Some(head_local) = locals.get_mut(bone_path) {
-            head_local.rotation = new_head_local;
-        }
+        set_bone_world_rotation(root_transform, locals, bone_path, new_head_world);
     }
 }
 
@@ -2597,6 +2656,40 @@ mod tests {
         std::fs::write(path, bytes)
     }
 
+    fn build_three_step_sprite_swap_controller(
+        guid_a: &str,
+        guid_b: &str,
+        missing_guid: &str,
+        target: &CurveBindingTarget,
+    ) -> Result<AnimatorController, Box<dyn std::error::Error>> {
+        let ref_a = AssetReference::from_hex(guid_a, 21300000).ok_or("invalid guid_a")?;
+        let ref_b = AssetReference::from_hex(guid_b, 21300000).ok_or("invalid guid_b")?;
+        let ref_missing =
+            AssetReference::from_hex(missing_guid, 21300099).ok_or("invalid missing_guid")?;
+        let clip = AnimationClip::new(
+            "Swap",
+            3.0,
+            60.0,
+            WrapMode::Once,
+            vec![CurveBinding::new(
+                target.clone(),
+                PropertyCurve::ObjectReference(ObjectReferenceCurve::new(vec![
+                    ObjectReferenceKey::new(0.0, ref_a),
+                    ObjectReferenceKey::new(1.0, ref_b),
+                    ObjectReferenceKey::new(2.0, ref_missing),
+                ])),
+            )],
+            Vec::new(),
+        );
+        Ok(AnimatorController::new(
+            "SwapCtrl",
+            Vec::new(),
+            vec![AnimatorState::new("Swap", StateMotion::Clip(clip))],
+            0,
+            Vec::new(),
+        ))
+    }
+
     #[test]
     fn ani_001_animation_world_resolves_sprite_swap_and_records_missing_sprite_diagnostic()
     -> Result<(), Box<dyn std::error::Error>> {
@@ -2614,42 +2707,18 @@ mod tests {
         let tex_b = dir.join("b.tga");
         write_test_tga(&tex_a, 16, 16, [255, 0, 0])?;
         write_test_tga(&tex_b, 32, 32, [0, 255, 0])?;
-        std::fs::write(
-            dir.join("a.tga.meta"),
-            format!("fileFormatVersion: 2\nguid: {guid_a}\nTextureImporter:\n  sRGBTexture: 0\n"),
-        )?;
-        std::fs::write(
-            dir.join("b.tga.meta"),
-            format!("fileFormatVersion: 2\nguid: {guid_b}\nTextureImporter:\n  sRGBTexture: 0\n"),
-        )?;
+        for (meta_name, guid) in [("a.tga.meta", guid_a), ("b.tga.meta", guid_b)] {
+            std::fs::write(
+                dir.join(meta_name),
+                format!(
+                    "fileFormatVersion: 2\nguid: {guid}\nTextureImporter:\n  sRGBTexture: 0\n"
+                ),
+            )?;
+        }
 
-        let ref_a = AssetReference::from_hex(guid_a, 21300000).ok_or("invalid guid_a")?;
-        let ref_b = AssetReference::from_hex(guid_b, 21300000).ok_or("invalid guid_b")?;
-        let ref_missing =
-            AssetReference::from_hex(missing_guid, 21300099).ok_or("invalid missing_guid")?;
         let target = CurveBindingTarget::new("", "SpriteRenderer", "m_Sprite");
-        let clip = AnimationClip::new(
-            "Swap",
-            3.0,
-            60.0,
-            WrapMode::Once,
-            vec![CurveBinding::new(
-                target.clone(),
-                PropertyCurve::ObjectReference(ObjectReferenceCurve::new(vec![
-                    ObjectReferenceKey::new(0.0, ref_a),
-                    ObjectReferenceKey::new(1.0, ref_b),
-                    ObjectReferenceKey::new(2.0, ref_missing),
-                ])),
-            )],
-            Vec::new(),
-        );
-        let controller = AnimatorController::new(
-            "SwapCtrl",
-            Vec::new(),
-            vec![AnimatorState::new("Swap", StateMotion::Clip(clip))],
-            0,
-            Vec::new(),
-        );
+        let controller =
+            build_three_step_sprite_swap_controller(guid_a, guid_b, missing_guid, &target)?;
 
         let mut world = AnimationWorld::new();
         world.register_sprite_asset(guid_a, &tex_a);

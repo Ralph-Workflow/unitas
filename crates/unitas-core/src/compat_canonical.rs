@@ -1,5 +1,8 @@
 use super::build_report;
-use super::{CompatibilityReport, CompatibilityState, ContentIdentity, Finding, Tier};
+use super::{
+    CompatibilityReport, CompatibilityState, CompatibilitySummary, ContentIdentity, Finding,
+    PackageSummary, Tier,
+};
 use std::cmp::Ordering;
 
 fn compare_content_identity(left: &ContentIdentity, right: &ContentIdentity) -> Ordering {
@@ -206,16 +209,11 @@ fn parse_optional_str(value: &str) -> Result<Option<String>, CanonicalReportPars
     ))
 }
 
-pub fn render_canonical(report: &CompatibilityReport) -> String {
-    let canonical =
-        build_canonical_report(&report.produced_by_unitas_version, report.findings.clone());
-    let summary = canonical.summary();
-    let mut out = String::new();
-    out.push_str("UNITAS_COMPAT_REPORT v1\n");
-    out.push_str(&format!(
-        "unitas_version: {}\n",
-        escape_canonical_str(&canonical.produced_by_unitas_version)
-    ));
+fn render_canonical_summary(
+    out: &mut String,
+    summary: &CompatibilitySummary,
+    packages_count: usize,
+) {
     out.push_str(&format!(
         "overall_state: {}\n",
         format_state(summary.overall_state)
@@ -241,8 +239,11 @@ pub fn render_canonical(report: &CompatibilityReport) -> String {
         "externally_unavailable_count: {}\n",
         summary.externally_unavailable_count
     ));
-    out.push_str(&format!("packages_count: {}\n", canonical.packages.len()));
-    for package in &canonical.packages {
+    out.push_str(&format!("packages_count: {packages_count}\n"));
+}
+
+fn render_canonical_packages(out: &mut String, packages: &[PackageSummary]) {
+    for package in packages {
         out.push_str("[package]\n");
         out.push_str(&format!(
             "package_name: {}\n",
@@ -256,55 +257,81 @@ pub fn render_canonical(report: &CompatibilityReport) -> String {
             ));
         }
     }
-    out.push_str(&format!("findings_count: {}\n", canonical.findings.len()));
-    for finding in &canonical.findings {
-        out.push_str("[finding]\n");
+}
+
+fn render_canonical_content(out: &mut String, content: &ContentIdentity) {
+    out.push_str(&format!(
+        "content.guid: {}\n",
+        format_optional_str(content.guid.as_deref())
+    ));
+    out.push_str(&format!(
+        "content.asset_path: {}\n",
+        format_optional_str(content.asset_path.as_deref())
+    ));
+    out.push_str(&format!(
+        "content.sub_asset_id: {}\n",
+        format_optional_str(content.sub_asset_id.as_deref())
+    ));
+    out.push_str(&format!(
+        "content.object_name: {}\n",
+        format_optional_str(content.object_name.as_deref())
+    ));
+}
+
+fn render_canonical_finding(out: &mut String, finding: &Finding) {
+    out.push_str("[finding]\n");
+    out.push_str(&format!(
+        "feature_id: {}\n",
+        escape_canonical_str(&finding.feature_id)
+    ));
+    out.push_str(&format!("tier: {}\n", format_tier(finding.tier)));
+    out.push_str(&format!("state: {}\n", format_state(finding.state)));
+    render_canonical_content(out, &finding.content);
+    out.push_str(&format!(
+        "behavior: {}\n",
+        escape_canonical_str(&finding.behavior)
+    ));
+    out.push_str(&format!(
+        "observable_consequence: {}\n",
+        escape_canonical_str(&finding.observable_consequence)
+    ));
+    for difference in &finding.relied_upon_unity_differences {
         out.push_str(&format!(
-            "feature_id: {}\n",
-            escape_canonical_str(&finding.feature_id)
+            "unity_difference: {}\n",
+            escape_canonical_str(difference)
         ));
-        out.push_str(&format!("tier: {}\n", format_tier(finding.tier)));
-        out.push_str(&format!("state: {}\n", format_state(finding.state)));
-        out.push_str(&format!(
-            "content.guid: {}\n",
-            format_optional_str(finding.content.guid.as_deref())
-        ));
-        out.push_str(&format!(
-            "content.asset_path: {}\n",
-            format_optional_str(finding.content.asset_path.as_deref())
-        ));
-        out.push_str(&format!(
-            "content.sub_asset_id: {}\n",
-            format_optional_str(finding.content.sub_asset_id.as_deref())
-        ));
-        out.push_str(&format!(
-            "content.object_name: {}\n",
-            format_optional_str(finding.content.object_name.as_deref())
-        ));
-        out.push_str(&format!(
-            "behavior: {}\n",
-            escape_canonical_str(&finding.behavior)
-        ));
-        out.push_str(&format!(
-            "observable_consequence: {}\n",
-            escape_canonical_str(&finding.observable_consequence)
-        ));
-        for difference in &finding.relied_upon_unity_differences {
-            out.push_str(&format!(
-                "unity_difference: {}\n",
-                escape_canonical_str(difference)
-            ));
-        }
-        for condition in &finding.conditions {
-            out.push_str(&format!("condition: {}\n", escape_canonical_str(condition)));
-        }
-        for related in &finding.related_findings {
-            out.push_str(&format!(
-                "related_finding: {}\n",
-                escape_canonical_str(related)
-            ));
-        }
     }
+    for condition in &finding.conditions {
+        out.push_str(&format!("condition: {}\n", escape_canonical_str(condition)));
+    }
+    for related in &finding.related_findings {
+        out.push_str(&format!(
+            "related_finding: {}\n",
+            escape_canonical_str(related)
+        ));
+    }
+}
+
+fn render_canonical_findings(out: &mut String, findings: &[Finding]) {
+    for finding in findings {
+        render_canonical_finding(out, finding);
+    }
+}
+
+pub fn render_canonical(report: &CompatibilityReport) -> String {
+    let canonical =
+        build_canonical_report(&report.produced_by_unitas_version, report.findings.clone());
+    let summary = canonical.summary();
+    let mut out = String::new();
+    out.push_str("UNITAS_COMPAT_REPORT v1\n");
+    out.push_str(&format!(
+        "unitas_version: {}\n",
+        escape_canonical_str(&canonical.produced_by_unitas_version)
+    ));
+    render_canonical_summary(&mut out, &summary, canonical.packages.len());
+    render_canonical_packages(&mut out, &canonical.packages);
+    out.push_str(&format!("findings_count: {}\n", canonical.findings.len()));
+    render_canonical_findings(&mut out, &canonical.findings);
     out
 }
 
@@ -398,40 +425,49 @@ enum ParseSection {
     Finding,
 }
 
-pub fn parse_canonical(text: &str) -> Result<CompatibilityReport, CanonicalReportParseError> {
-    let mut lines = text.lines().enumerate();
-    let Some((_, first_line)) = lines.next() else {
-        return Err(CanonicalReportParseError::MissingHeader);
-    };
-    if first_line.trim() != "UNITAS_COMPAT_REPORT v1" {
-        return Err(CanonicalReportParseError::MissingHeader);
+struct CanonicalParseState {
+    section: ParseSection,
+    findings: Vec<Finding>,
+    current_finding: Option<PendingFinding>,
+    unitas_version: Option<String>,
+}
+
+impl CanonicalParseState {
+    fn new() -> Self {
+        Self {
+            section: ParseSection::Header,
+            findings: Vec::new(),
+            current_finding: None,
+            unitas_version: None,
+        }
     }
 
-    let mut unitas_version: Option<String> = None;
-    let mut section = ParseSection::Header;
-    let mut findings: Vec<Finding> = Vec::new();
-    let mut current_finding: Option<PendingFinding> = None;
+    fn finish_pending(&mut self, line_number: usize) -> Result<(), CanonicalReportParseError> {
+        if let Some(pending) = self.current_finding.take() {
+            self.findings.push(pending.finish(line_number)?);
+        }
+        Ok(())
+    }
 
-    for (zero_index, raw_line) in lines {
-        let line_number = zero_index + 1;
+    fn consume_line(
+        &mut self,
+        raw_line: &str,
+        line_number: usize,
+    ) -> Result<(), CanonicalReportParseError> {
         let trimmed = raw_line.trim();
         if trimmed.is_empty() {
-            continue;
+            return Ok(());
         }
         if trimmed == "[package]" {
-            if let Some(pending) = current_finding.take() {
-                findings.push(pending.finish(line_number)?);
-            }
-            section = ParseSection::Package;
-            continue;
+            self.finish_pending(line_number)?;
+            self.section = ParseSection::Package;
+            return Ok(());
         }
         if trimmed == "[finding]" {
-            if let Some(pending) = current_finding.take() {
-                findings.push(pending.finish(line_number)?);
-            }
-            section = ParseSection::Finding;
-            current_finding = Some(PendingFinding::new());
-            continue;
+            self.finish_pending(line_number)?;
+            self.section = ParseSection::Finding;
+            self.current_finding = Some(PendingFinding::new());
+            return Ok(());
         }
         let Some((key, raw_value)) = raw_line.split_once(": ") else {
             return Err(CanonicalReportParseError::MalformedLine {
@@ -441,83 +477,134 @@ pub fn parse_canonical(text: &str) -> Result<CompatibilityReport, CanonicalRepor
         };
         let key = key.trim();
         if key == "findings_count" || key == "packages_count" {
-            continue;
+            return Ok(());
         }
-        match section {
-            ParseSection::Header => match key {
-                "unitas_version" => {
-                    unitas_version = Some(unescape_canonical_str(raw_value)?);
-                }
-                "overall_state"
-                | "total_findings"
-                | "present_findings"
-                | "absent_findings"
-                | "supported_count"
-                | "partially_supported_count"
-                | "platform_limited_count"
-                | "unknown_count"
-                | "unsupported_count"
-                | "externally_unavailable_count" => {}
-                _ => {
-                    return Err(CanonicalReportParseError::UnexpectedSectionLine {
-                        line_number,
-                        line: raw_line.to_string(),
-                    });
-                }
-            },
-            ParseSection::Package => match key {
-                "package_name" | "state" | "feature_id" => {}
-                _ => {
-                    return Err(CanonicalReportParseError::UnexpectedSectionLine {
-                        line_number,
-                        line: raw_line.to_string(),
-                    });
-                }
-            },
+        self.consume_key(key, raw_value, raw_line, line_number)
+    }
+
+    fn consume_key(
+        &mut self,
+        key: &str,
+        raw_value: &str,
+        raw_line: &str,
+        line_number: usize,
+    ) -> Result<(), CanonicalReportParseError> {
+        match self.section {
+            ParseSection::Header => self.parse_header(key, raw_value, raw_line, line_number)?,
+            ParseSection::Package => parse_package_line(key, raw_line, line_number)?,
             ParseSection::Finding => {
-                let Some(pending) = current_finding.as_mut() else {
+                let Some(pending) = self.current_finding.as_mut() else {
                     return Err(CanonicalReportParseError::UnexpectedSectionLine {
                         line_number,
                         line: raw_line.to_string(),
                     });
                 };
-                match key {
-                    "feature_id" => pending.feature_id = Some(unescape_canonical_str(raw_value)?),
-                    "tier" => pending.tier = Some(parse_tier(raw_value)?),
-                    "state" => pending.state = Some(parse_state(raw_value)?),
-                    "content.guid" => pending.guid = parse_optional_str(raw_value)?,
-                    "content.asset_path" => pending.asset_path = parse_optional_str(raw_value)?,
-                    "content.sub_asset_id" => pending.sub_asset_id = parse_optional_str(raw_value)?,
-                    "content.object_name" => pending.object_name = parse_optional_str(raw_value)?,
-                    "behavior" => pending.behavior = Some(unescape_canonical_str(raw_value)?),
-                    "observable_consequence" => {
-                        pending.observable_consequence = Some(unescape_canonical_str(raw_value)?);
-                    }
-                    "unity_difference" => pending
-                        .relied_upon_unity_differences
-                        .push(unescape_canonical_str(raw_value)?),
-                    "condition" => pending.conditions.push(unescape_canonical_str(raw_value)?),
-                    "related_finding" => pending
-                        .related_findings
-                        .push(unescape_canonical_str(raw_value)?),
-                    _ => {
-                        return Err(CanonicalReportParseError::UnexpectedSectionLine {
-                            line_number,
-                            line: raw_line.to_string(),
-                        });
-                    }
-                }
+                parse_finding_line(pending, key, raw_value, raw_line, line_number)?;
             }
         }
+        Ok(())
     }
 
-    if let Some(pending) = current_finding.take() {
-        findings.push(pending.finish(text.lines().count())?);
+    fn parse_header(
+        &mut self,
+        key: &str,
+        raw_value: &str,
+        raw_line: &str,
+        line_number: usize,
+    ) -> Result<(), CanonicalReportParseError> {
+        match key {
+            "unitas_version" => {
+                self.unitas_version = Some(unescape_canonical_str(raw_value)?);
+            }
+            "overall_state"
+            | "total_findings"
+            | "present_findings"
+            | "absent_findings"
+            | "supported_count"
+            | "partially_supported_count"
+            | "platform_limited_count"
+            | "unknown_count"
+            | "unsupported_count"
+            | "externally_unavailable_count" => {}
+            _ => {
+                return Err(CanonicalReportParseError::UnexpectedSectionLine {
+                    line_number,
+                    line: raw_line.to_string(),
+                });
+            }
+        }
+        Ok(())
+    }
+}
+
+fn parse_package_line(
+    key: &str,
+    raw_line: &str,
+    line_number: usize,
+) -> Result<(), CanonicalReportParseError> {
+    match key {
+        "package_name" | "state" | "feature_id" => Ok(()),
+        _ => Err(CanonicalReportParseError::UnexpectedSectionLine {
+            line_number,
+            line: raw_line.to_string(),
+        }),
+    }
+}
+
+fn parse_finding_line(
+    pending: &mut PendingFinding,
+    key: &str,
+    raw_value: &str,
+    raw_line: &str,
+    line_number: usize,
+) -> Result<(), CanonicalReportParseError> {
+    match key {
+        "feature_id" => pending.feature_id = Some(unescape_canonical_str(raw_value)?),
+        "tier" => pending.tier = Some(parse_tier(raw_value)?),
+        "state" => pending.state = Some(parse_state(raw_value)?),
+        "content.guid" => pending.guid = parse_optional_str(raw_value)?,
+        "content.asset_path" => pending.asset_path = parse_optional_str(raw_value)?,
+        "content.sub_asset_id" => pending.sub_asset_id = parse_optional_str(raw_value)?,
+        "content.object_name" => pending.object_name = parse_optional_str(raw_value)?,
+        "behavior" => pending.behavior = Some(unescape_canonical_str(raw_value)?),
+        "observable_consequence" => {
+            pending.observable_consequence = Some(unescape_canonical_str(raw_value)?);
+        }
+        "unity_difference" => pending
+            .relied_upon_unity_differences
+            .push(unescape_canonical_str(raw_value)?),
+        "condition" => pending.conditions.push(unescape_canonical_str(raw_value)?),
+        "related_finding" => pending
+            .related_findings
+            .push(unescape_canonical_str(raw_value)?),
+        _ => {
+            return Err(CanonicalReportParseError::UnexpectedSectionLine {
+                line_number,
+                line: raw_line.to_string(),
+            });
+        }
+    }
+    Ok(())
+}
+
+pub fn parse_canonical(text: &str) -> Result<CompatibilityReport, CanonicalReportParseError> {
+    let mut lines = text.lines().enumerate();
+    let Some((_, first_line)) = lines.next() else {
+        return Err(CanonicalReportParseError::MissingHeader);
+    };
+    if first_line.trim() != "UNITAS_COMPAT_REPORT v1" {
+        return Err(CanonicalReportParseError::MissingHeader);
     }
 
-    let Some(version) = unitas_version else {
+    let mut state = CanonicalParseState::new();
+    for (zero_index, raw_line) in lines {
+        state.consume_line(raw_line, zero_index + 1)?;
+    }
+    state.finish_pending(text.lines().count())?;
+
+    let Some(version) = state.unitas_version else {
         return Err(CanonicalReportParseError::MissingVersion);
     };
 
-    Ok(build_canonical_report(&version, findings))
+    Ok(build_canonical_report(&version, state.findings))
 }

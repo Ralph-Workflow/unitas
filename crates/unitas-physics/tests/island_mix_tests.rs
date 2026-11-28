@@ -35,6 +35,23 @@ fn desc(
 #[test]
 fn physics_lab_mix_does_not_panic() -> Result<(), unitas_physics::PhysicsError> {
     let mut world = World::new();
+    populate_physics_lab_static_and_fast(&mut world)?;
+    populate_physics_lab_bumper_and_platform(&mut world)?;
+    let mut angle = 0.0_f64;
+    for _ in 0..300 {
+        if ROTATE {
+            angle += 90.0_f64.to_radians() / 60.0;
+            let (s, c) = (angle / 2.0).sin_cos();
+            world.set_rotation(EntityId::new(6), [0.0, s, 0.0, c])?;
+        }
+        world.step(1.0 / 60.0)?;
+    }
+    Ok(())
+}
+
+fn populate_physics_lab_static_and_fast(
+    world: &mut World,
+) -> Result<(), unitas_physics::PhysicsError> {
     world.add_body(
         EntityId::new(1),
         desc(
@@ -78,6 +95,12 @@ fn physics_lab_mix_does_not_panic() -> Result<(), unitas_physics::PhysicsError> 
             ),
         )?;
     }
+    Ok(())
+}
+
+fn populate_physics_lab_bumper_and_platform(
+    world: &mut World,
+) -> Result<(), unitas_physics::PhysicsError> {
     if BUMPER {
         world.add_body(
             EntityId::new(4),
@@ -127,15 +150,6 @@ fn physics_lab_mix_does_not_panic() -> Result<(), unitas_physics::PhysicsError> 
                 CollisionDetectionMode3D::Discrete,
             ),
         )?;
-    }
-    let mut angle = 0.0_f64;
-    for _ in 0..300 {
-        if ROTATE {
-            angle += 90.0_f64.to_radians() / 60.0;
-            let (s, c) = (angle / 2.0).sin_cos();
-            world.set_rotation(EntityId::new(6), [0.0, s, 0.0, c])?;
-        }
-        world.step(1.0 / 60.0)?;
     }
     Ok(())
 }

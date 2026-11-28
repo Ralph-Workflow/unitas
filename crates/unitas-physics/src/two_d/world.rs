@@ -622,44 +622,13 @@ impl World2D {
 
         let all_ids: Vec<ColliderId2D> = self.colliders.keys().copied().collect();
         for other_id in all_ids {
-            if other_id == composite_collider {
-                continue;
-            }
-            let Some(other_col) = self.colliders.get(&other_id) else {
-                continue;
-            };
-            if !other_col.enabled || !other_col.active {
-                continue;
-            }
-            let same_owner = if comp_col.attached_body.is_some() {
-                other_col.attached_body == comp_col.attached_body
-            } else {
-                other_col.attached_body.is_none() && other_col.game_object == comp_col.game_object
-            };
-            if !same_owner {
-                continue;
-            }
-            let (other_center, other_angle) = self.collider_world_pose(other_col);
-            let rel_offset = inverse_transform_point2(other_center, comp_center, comp_angle);
-            let rel_angle = other_angle - comp_angle;
-
-            if let Some(tm) = self.tilemaps.get(&other_id) {
-                if tm.used_by_composite || other_col.used_by_composite {
-                    for tm_shape in tm.build_shapes() {
-                        merged_shapes.extend(shape_to_local_shapes_in_frame(
-                            &tm_shape, rel_offset, rel_angle,
-                        ));
-                    }
-                }
-                continue;
-            }
-
-            if other_col.used_by_composite {
-                merged_shapes.extend(shape_to_local_shapes_in_frame(
-                    &other_col.shape,
-                    rel_offset,
-                    rel_angle,
-                ));
+            if other_id != composite_collider {
+                self.collect_composite_member_shapes(
+                    other_id,
+                    &comp_col,
+                    (comp_center, comp_angle),
+                    &mut merged_shapes,
+                );
             }
         }
 
@@ -679,6 +648,51 @@ impl World2D {
             };
         }
         true
+    }
+
+    fn collect_composite_member_shapes(
+        &self,
+        other_id: ColliderId2D,
+        comp_col: &Collider2D,
+        comp_pose: ([f32; 2], f32),
+        merged_shapes: &mut Vec<Shape2D>,
+    ) {
+        let Some(other_col) = self.colliders.get(&other_id) else {
+            return;
+        };
+        if !other_col.enabled || !other_col.active {
+            return;
+        }
+        let same_owner = if comp_col.attached_body.is_some() {
+            other_col.attached_body == comp_col.attached_body
+        } else {
+            other_col.attached_body.is_none() && other_col.game_object == comp_col.game_object
+        };
+        if !same_owner {
+            return;
+        }
+        let (other_center, other_angle) = self.collider_world_pose(other_col);
+        let rel_offset = inverse_transform_point2(other_center, comp_pose.0, comp_pose.1);
+        let rel_angle = other_angle - comp_pose.1;
+
+        if let Some(tm) = self.tilemaps.get(&other_id) {
+            if tm.used_by_composite || other_col.used_by_composite {
+                for tm_shape in tm.build_shapes() {
+                    merged_shapes.extend(shape_to_local_shapes_in_frame(
+                        &tm_shape, rel_offset, rel_angle,
+                    ));
+                }
+            }
+            return;
+        }
+
+        if other_col.used_by_composite {
+            merged_shapes.extend(shape_to_local_shapes_in_frame(
+                &other_col.shape,
+                rel_offset,
+                rel_angle,
+            ));
+        }
     }
 
     pub fn attach_tilemap(&mut self, collider: ColliderId2D, tilemap: TilemapCollider2D) {
@@ -1399,120 +1413,187 @@ impl World2D {
                 if other_col_id == eff_col_id {
                     continue;
                 }
-                let Some(other_col) = self.colliders.get(other_col_id).cloned() else {
-                    continue;
-                };
-                if !self.is_collider_simulated(&other_col) {
-                    continue;
+                self.apply_effector_list_to_target(
+                    &eff_col,
+                    (eff_center, eff_angle),
+                    &eff_list,
+                    *other_col_id,
+                    dt,
+                );
+            }
+        }
+    }
+
+    fn apply_effector_list_to_target(
+        &mut self,
+        eff_col: &Collider2D,
+        eff_pose: ([f32; 2], f32),
+        eff_list: &[Effector2D],
+        other_col_id: ColliderId2D,
+        dt: f32,
+    ) {
+        let (eff_center, eff_angle) = eff_pose;
+        let Some(other_col) = self.colliders.get(&other_col_id).cloned() else {
+            return;
+        };
+        if !self.is_collider_simulated(&other_col) {
+            return;
+        }
+        let Some(other_body_id) = other_col.attached_body else {
+            return;
+        };
+        let (other_center, other_angle) = self.collider_world_pose(&other_col);
+        if compute_contact2d(
+            &eff_col.shape,
+            eff_center,
+            eff_angle,
+            &other_col.shape,
+            other_center,
+            other_angle,
+        )
+        .is_none()
+        {
+            return;
+        }
+        let other_layer = self.endpoint_for(&other_col).layer;
+        for effector in eff_list {
+            match effector {
+                Effector2D::Area(area) => {
+                    self.apply_area_effector_to_body(
+                        area,
+                        eff_angle,
+                        other_body_id,
+                        other_layer,
+                        dt,
+                    );
                 }
-                let Some(other_body_id) = other_col.attached_body else {
-                    continue;
-                };
-                let (other_center, other_angle) = self.collider_world_pose(&other_col);
-                if compute_contact2d(
-                    &eff_col.shape,
-                    eff_center,
-                    eff_angle,
-                    &other_col.shape,
-                    other_center,
-                    other_angle,
-                )
-                .is_none()
-                {
-                    continue;
+                Effector2D::Point(point_eff) => {
+                    self.apply_point_effector_to_body(
+                        point_eff,
+                        eff_center,
+                        other_center,
+                        other_body_id,
+                        other_layer,
+                        dt,
+                    );
                 }
-                let other_layer = self.endpoint_for(&other_col).layer;
-                for effector in &eff_list {
-                    match effector {
-                        Effector2D::Area(area) => {
-                            if !area.allows_layer(other_layer) {
-                                continue;
-                            }
-                            let force = area.force_vector(eff_angle);
-                            if let Some(body) = self.bodies.get_mut(&other_body_id) {
-                                if body.is_dynamic() && body.simulated {
-                                    body.add_force(force);
-                                    if area.drag > 0.0 {
-                                        let factor = (1.0 - area.drag * dt).max(0.0);
-                                        body.linear_velocity[0] *= factor;
-                                        body.linear_velocity[1] *= factor;
-                                    }
-                                    if area.angular_drag > 0.0 {
-                                        let factor = (1.0 - area.angular_drag * dt).max(0.0);
-                                        body.angular_velocity *= factor;
-                                    }
-                                }
-                            }
-                        }
-                        Effector2D::Point(point_eff) => {
-                            if !point_eff.allows_layer(other_layer) {
-                                continue;
-                            }
-                            let delta = sub2(other_center, eff_center);
-                            let dist = length2(delta);
-                            let dir = normalize2(delta).unwrap_or([1.0, 0.0]);
-                            let scaled_dist = (dist * point_eff.distance_scale).max(1.0);
-                            let mag = point_eff.force_magnitude / scaled_dist;
-                            let force = [dir[0] * mag, dir[1] * mag];
-                            if let Some(body) = self.bodies.get_mut(&other_body_id) {
-                                if body.is_dynamic() && body.simulated {
-                                    body.add_force(force);
-                                    if point_eff.drag > 0.0 {
-                                        let factor = (1.0 - point_eff.drag * dt).max(0.0);
-                                        body.linear_velocity[0] *= factor;
-                                        body.linear_velocity[1] *= factor;
-                                    }
-                                }
-                            }
-                        }
-                        Effector2D::Buoyancy(buoyancy) => {
-                            if !buoyancy.allows_layer(other_layer) {
-                                continue;
-                            }
-                            let surface_y = eff_center[1] + buoyancy.surface_level;
-                            let (min_y, max_y, area) = shape_vertical_bounds_and_area(
-                                &other_col.shape,
-                                other_center,
-                                other_angle,
-                            );
-                            if min_y >= surface_y || area <= 0.0 {
-                                continue;
-                            }
-                            let height = (max_y - min_y).max(1e-4);
-                            let submerged_fraction = ((surface_y - min_y) / height).clamp(0.0, 1.0);
-                            let displaced_volume = area * submerged_fraction;
-                            let grav_mag = length2(self.gravity);
-                            let effective_g = if grav_mag > 1e-5 { grav_mag } else { 9.81 };
-                            let upward_buoyancy =
-                                buoyancy.density.max(0.0) * displaced_volume * effective_g;
-                            let step_phase = (self.step_count as f32) * 0.7
-                                + (other_body_id.as_u64() as f32) * 1.3;
-                            let flow = buoyancy.flow_force_vector(step_phase);
-                            let total_force = [
-                                flow[0] * submerged_fraction,
-                                upward_buoyancy + flow[1] * submerged_fraction,
-                            ];
-                            if let Some(body) = self.bodies.get_mut(&other_body_id) {
-                                if body.is_dynamic() && body.simulated {
-                                    body.add_force(total_force);
-                                    if buoyancy.linear_drag > 0.0 {
-                                        let factor = (1.0
-                                            - buoyancy.linear_drag * submerged_fraction * dt)
-                                            .max(0.0);
-                                        body.linear_velocity[0] *= factor;
-                                        body.linear_velocity[1] *= factor;
-                                    }
-                                    if buoyancy.angular_drag > 0.0 {
-                                        let factor = (1.0
-                                            - buoyancy.angular_drag * submerged_fraction * dt)
-                                            .max(0.0);
-                                        body.angular_velocity *= factor;
-                                    }
-                                }
-                            }
-                        }
-                        Effector2D::Platform(_) | Effector2D::Surface(_) => {}
-                    }
+                Effector2D::Buoyancy(buoyancy) => {
+                    self.apply_buoyancy_effector_to_body(
+                        buoyancy,
+                        eff_center,
+                        (&other_col.shape, other_center, other_angle),
+                        other_body_id,
+                        other_layer,
+                        dt,
+                    );
+                }
+                Effector2D::Platform(_) | Effector2D::Surface(_) => {}
+            }
+        }
+    }
+
+    fn apply_area_effector_to_body(
+        &mut self,
+        area: &AreaEffector2D,
+        eff_angle: f32,
+        other_body_id: BodyId2D,
+        other_layer: u8,
+        dt: f32,
+    ) {
+        if !area.allows_layer(other_layer) {
+            return;
+        }
+        let force = area.force_vector(eff_angle);
+        if let Some(body) = self.bodies.get_mut(&other_body_id) {
+            if body.is_dynamic() && body.simulated {
+                body.add_force(force);
+                if area.drag > 0.0 {
+                    let factor = (1.0 - area.drag * dt).max(0.0);
+                    body.linear_velocity[0] *= factor;
+                    body.linear_velocity[1] *= factor;
+                }
+                if area.angular_drag > 0.0 {
+                    let factor = (1.0 - area.angular_drag * dt).max(0.0);
+                    body.angular_velocity *= factor;
+                }
+            }
+        }
+    }
+
+    fn apply_point_effector_to_body(
+        &mut self,
+        point_eff: &PointEffector2D,
+        eff_center: [f32; 2],
+        other_center: [f32; 2],
+        other_body_id: BodyId2D,
+        other_layer: u8,
+        dt: f32,
+    ) {
+        if !point_eff.allows_layer(other_layer) {
+            return;
+        }
+        let delta = sub2(other_center, eff_center);
+        let dist = length2(delta);
+        let dir = normalize2(delta).unwrap_or([1.0, 0.0]);
+        let scaled_dist = (dist * point_eff.distance_scale).max(1.0);
+        let mag = point_eff.force_magnitude / scaled_dist;
+        let force = [dir[0] * mag, dir[1] * mag];
+        if let Some(body) = self.bodies.get_mut(&other_body_id) {
+            if body.is_dynamic() && body.simulated {
+                body.add_force(force);
+                if point_eff.drag > 0.0 {
+                    let factor = (1.0 - point_eff.drag * dt).max(0.0);
+                    body.linear_velocity[0] *= factor;
+                    body.linear_velocity[1] *= factor;
+                }
+            }
+        }
+    }
+
+    fn apply_buoyancy_effector_to_body(
+        &mut self,
+        buoyancy: &BuoyancyEffector2D,
+        eff_center: [f32; 2],
+        other_geom: (&Shape2D, [f32; 2], f32),
+        other_body_id: BodyId2D,
+        other_layer: u8,
+        dt: f32,
+    ) {
+        if !buoyancy.allows_layer(other_layer) {
+            return;
+        }
+        let (other_shape, other_center, other_angle) = other_geom;
+        let surface_y = eff_center[1] + buoyancy.surface_level;
+        let (min_y, max_y, area) =
+            shape_vertical_bounds_and_area(other_shape, other_center, other_angle);
+        if min_y >= surface_y || area <= 0.0 {
+            return;
+        }
+        let height = (max_y - min_y).max(1e-4);
+        let submerged_fraction = ((surface_y - min_y) / height).clamp(0.0, 1.0);
+        let displaced_volume = area * submerged_fraction;
+        let grav_mag = length2(self.gravity);
+        let effective_g = if grav_mag > 1e-5 { grav_mag } else { 9.81 };
+        let upward_buoyancy = buoyancy.density.max(0.0) * displaced_volume * effective_g;
+        let step_phase = (self.step_count as f32) * 0.7 + (other_body_id.as_u64() as f32) * 1.3;
+        let flow = buoyancy.flow_force_vector(step_phase);
+        let total_force = [
+            flow[0] * submerged_fraction,
+            upward_buoyancy + flow[1] * submerged_fraction,
+        ];
+        if let Some(body) = self.bodies.get_mut(&other_body_id) {
+            if body.is_dynamic() && body.simulated {
+                body.add_force(total_force);
+                if buoyancy.linear_drag > 0.0 {
+                    let factor =
+                        (1.0 - buoyancy.linear_drag * submerged_fraction * dt).max(0.0);
+                    body.linear_velocity[0] *= factor;
+                    body.linear_velocity[1] *= factor;
+                }
+                if buoyancy.angular_drag > 0.0 {
+                    let factor =
+                        (1.0 - buoyancy.angular_drag * submerged_fraction * dt).max(0.0);
+                    body.angular_velocity *= factor;
                 }
             }
         }
@@ -1548,6 +1629,7 @@ impl World2D {
     }
 
     fn integrate_bodies(&mut self, dt: f32) {
+        let gravity = self.gravity;
         let mut continuous_ids = Vec::new();
         for body in self.bodies.values_mut() {
             if !body.simulated {
@@ -1557,67 +1639,12 @@ impl World2D {
             body.previous_rotation = body.rotation;
             match body.body_type {
                 BodyType2D::Dynamic => {
-                    if body.sleeping {
-                        body.accumulated_force = [0.0, 0.0];
-                        body.accumulated_torque = 0.0;
-                        continue;
-                    }
-                    let inv_mass = body.inverse_mass();
-                    let ax =
-                        self.gravity[0] * body.gravity_scale + body.accumulated_force[0] * inv_mass;
-                    let ay =
-                        self.gravity[1] * body.gravity_scale + body.accumulated_force[1] * inv_mass;
-                    body.linear_velocity[0] += ax * dt;
-                    body.linear_velocity[1] += ay * dt;
-                    if body.linear_drag > 0.0 {
-                        let damp = (1.0 - body.linear_drag * dt).max(0.0);
-                        body.linear_velocity[0] *= damp;
-                        body.linear_velocity[1] *= damp;
-                    }
-                    body.angular_velocity += body.accumulated_torque * inv_mass * dt;
-                    if body.angular_drag > 0.0 {
-                        let damp = (1.0 - body.angular_drag * dt).max(0.0);
-                        body.angular_velocity *= damp;
-                    }
-                    if body.freeze_rotation {
-                        body.angular_velocity = 0.0;
-                        body.move_target_rotation = None;
-                    }
-                    if let Some(target_pos) = body.move_target_position.take() {
-                        body.position = target_pos;
-                    } else {
-                        body.position[0] += body.linear_velocity[0] * dt;
-                        body.position[1] += body.linear_velocity[1] * dt;
-                    }
-                    if let Some(target_rot) = body.move_target_rotation.take() {
-                        body.rotation = target_rot;
-                    } else if !body.freeze_rotation {
-                        body.rotation += body.angular_velocity * dt;
-                    }
-                    body.accumulated_force = [0.0, 0.0];
-                    body.accumulated_torque = 0.0;
-                    if body.collision_detection_mode == CollisionDetectionMode2D::Continuous {
+                    if integrate_dynamic_body_2d(body, gravity, dt) {
                         continuous_ids.push(body.id);
                     }
                 }
                 BodyType2D::Kinematic => {
-                    if let Some(target_pos) = body.move_target_position.take() {
-                        if dt > 1e-6 {
-                            let dx = target_pos[0] - body.position[0];
-                            let dy = target_pos[1] - body.position[1];
-                            body.linear_velocity = [dx / dt, dy / dt];
-                        }
-                        body.position = target_pos;
-                    } else {
-                        body.position[0] += body.linear_velocity[0] * dt;
-                        body.position[1] += body.linear_velocity[1] * dt;
-                    }
-                    if let Some(target_rot) = body.move_target_rotation.take() {
-                        body.rotation = target_rot;
-                    } else {
-                        body.rotation += body.angular_velocity * dt;
-                    }
-                    if body.collision_detection_mode == CollisionDetectionMode2D::Continuous {
+                    if integrate_kinematic_body_2d(body, dt) {
                         continuous_ids.push(body.id);
                     }
                 }
@@ -1646,85 +1673,18 @@ impl World2D {
             return;
         };
 
-        let own_colliders: Vec<Collider2D> = self
-            .colliders
-            .values()
-            .filter(|c| {
-                c.attached_body == Some(body_id) && !c.is_trigger && self.is_collider_simulated(c)
-            })
-            .cloned()
-            .collect();
+        let (own_colliders, other_colliders) = self.partition_ccd_colliders(body_id);
         if own_colliders.is_empty() {
             return;
         }
 
-        let other_colliders: Vec<Collider2D> = self
-            .colliders
-            .values()
-            .filter(|c| {
-                c.attached_body != Some(body_id) && !c.is_trigger && self.is_collider_simulated(c)
-            })
-            .cloned()
-            .collect();
-
         let mut earliest_advance: Option<f32> = None;
-
         for own in &own_colliders {
-            let ep_own = self.endpoint_for(own);
-            let own_start = transform_point2(own.offset, prev_pos, rot);
-            let own_radius = shape_sweep_radius(&own.shape);
-
-            for other in &other_colliders {
-                let pair_key = ordered_pair(own.id, other.id);
-                if self.ignored_pairs.contains(&pair_key)
-                    || self.pass_through_pairs.contains(&pair_key)
-                {
-                    continue;
-                }
-                let ep_other = self.endpoint_for(other);
-                if !self
-                    .collision_matrix
-                    .is_enabled(ep_own.layer as usize, ep_other.layer as usize)
-                {
-                    continue;
-                }
-                let (other_center, other_angle) = self.collider_world_pose(other);
-                if compute_contact2d(
-                    &own.shape,
-                    own_start,
-                    rot + own.rotation,
-                    &other.shape,
-                    other_center,
-                    other_angle,
-                )
-                .is_some()
-                {
-                    continue;
-                }
-                if let Some((hit_dist, _, hit_normal)) = raycast_shape2d(
-                    own_start,
-                    dir,
-                    travel + own_radius,
-                    &other.shape,
-                    other_center,
-                    other_angle,
-                    false,
-                ) {
-                    if let Some(plat) = self.platform_effector_for(other) {
-                        if !plat.allows_layer(ep_own.layer)
-                            || plat.should_pass_through(
-                                other_angle,
-                                hit_normal,
-                                [dir[0] * travel, dir[1] * travel],
-                            )
-                        {
-                            continue;
-                        }
-                    }
-                    let advance = (hit_dist - own_radius * 0.9).clamp(0.0, travel);
-                    if earliest_advance.is_none_or(|best| advance < best) {
-                        earliest_advance = Some(advance);
-                    }
+            if let Some(advance) =
+                self.earliest_ccd_advance_for_collider(own, (prev_pos, rot), (dir, travel), &other_colliders)
+            {
+                if earliest_advance.is_none_or(|best| advance < best) {
+                    earliest_advance = Some(advance);
                 }
             }
         }
@@ -1737,6 +1697,91 @@ impl World2D {
                 ];
             }
         }
+    }
+
+    fn partition_ccd_colliders(&self, body_id: BodyId2D) -> (Vec<Collider2D>, Vec<Collider2D>) {
+        let mut own = Vec::new();
+        let mut other = Vec::new();
+        for c in self.colliders.values() {
+            if c.is_trigger || !self.is_collider_simulated(c) {
+                continue;
+            }
+            if c.attached_body == Some(body_id) {
+                own.push(c.clone());
+            } else {
+                other.push(c.clone());
+            }
+        }
+        (own, other)
+    }
+
+    fn earliest_ccd_advance_for_collider(
+        &self,
+        own: &Collider2D,
+        body_pose: ([f32; 2], f32),
+        motion: ([f32; 2], f32),
+        other_colliders: &[Collider2D],
+    ) -> Option<f32> {
+        let (prev_pos, rot) = body_pose;
+        let (dir, travel) = motion;
+        let ep_own = self.endpoint_for(own);
+        let own_start = transform_point2(own.offset, prev_pos, rot);
+        let own_radius = shape_sweep_radius(&own.shape);
+        let mut earliest_advance: Option<f32> = None;
+
+        for other in other_colliders {
+            let pair_key = ordered_pair(own.id, other.id);
+            if self.ignored_pairs.contains(&pair_key) || self.pass_through_pairs.contains(&pair_key)
+            {
+                continue;
+            }
+            let ep_other = self.endpoint_for(other);
+            if !self
+                .collision_matrix
+                .is_enabled(ep_own.layer as usize, ep_other.layer as usize)
+            {
+                continue;
+            }
+            let (other_center, other_angle) = self.collider_world_pose(other);
+            if compute_contact2d(
+                &own.shape,
+                own_start,
+                rot + own.rotation,
+                &other.shape,
+                other_center,
+                other_angle,
+            )
+            .is_some()
+            {
+                continue;
+            }
+            if let Some((hit_dist, _, hit_normal)) = raycast_shape2d(
+                own_start,
+                dir,
+                travel + own_radius,
+                &other.shape,
+                other_center,
+                other_angle,
+                false,
+            ) {
+                if let Some(plat) = self.platform_effector_for(other) {
+                    if !plat.allows_layer(ep_own.layer)
+                        || plat.should_pass_through(
+                            other_angle,
+                            hit_normal,
+                            [dir[0] * travel, dir[1] * travel],
+                        )
+                    {
+                        continue;
+                    }
+                }
+                let advance = (hit_dist - own_radius * 0.9).clamp(0.0, travel);
+                if earliest_advance.is_none_or(|best| advance < best) {
+                    earliest_advance = Some(advance);
+                }
+            }
+        }
+        earliest_advance
     }
 
     fn platform_effector_for(&self, collider: &Collider2D) -> Option<PlatformEffector2D> {
@@ -1937,6 +1982,67 @@ fn shape_sweep_radius(shape: &Shape2D) -> f32 {
     }
 }
 
+fn integrate_dynamic_body_2d(body: &mut RigidBody2D, gravity: [f32; 2], dt: f32) -> bool {
+    if body.sleeping {
+        body.accumulated_force = [0.0, 0.0];
+        body.accumulated_torque = 0.0;
+        return false;
+    }
+    let inv_mass = body.inverse_mass();
+    let ax = gravity[0] * body.gravity_scale + body.accumulated_force[0] * inv_mass;
+    let ay = gravity[1] * body.gravity_scale + body.accumulated_force[1] * inv_mass;
+    body.linear_velocity[0] += ax * dt;
+    body.linear_velocity[1] += ay * dt;
+    if body.linear_drag > 0.0 {
+        let damp = (1.0 - body.linear_drag * dt).max(0.0);
+        body.linear_velocity[0] *= damp;
+        body.linear_velocity[1] *= damp;
+    }
+    body.angular_velocity += body.accumulated_torque * inv_mass * dt;
+    if body.angular_drag > 0.0 {
+        let damp = (1.0 - body.angular_drag * dt).max(0.0);
+        body.angular_velocity *= damp;
+    }
+    if body.freeze_rotation {
+        body.angular_velocity = 0.0;
+        body.move_target_rotation = None;
+    }
+    if let Some(target_pos) = body.move_target_position.take() {
+        body.position = target_pos;
+    } else {
+        body.position[0] += body.linear_velocity[0] * dt;
+        body.position[1] += body.linear_velocity[1] * dt;
+    }
+    if let Some(target_rot) = body.move_target_rotation.take() {
+        body.rotation = target_rot;
+    } else if !body.freeze_rotation {
+        body.rotation += body.angular_velocity * dt;
+    }
+    body.accumulated_force = [0.0, 0.0];
+    body.accumulated_torque = 0.0;
+    body.collision_detection_mode == CollisionDetectionMode2D::Continuous
+}
+
+fn integrate_kinematic_body_2d(body: &mut RigidBody2D, dt: f32) -> bool {
+    if let Some(target_pos) = body.move_target_position.take() {
+        if dt > 1e-6 {
+            let dx = target_pos[0] - body.position[0];
+            let dy = target_pos[1] - body.position[1];
+            body.linear_velocity = [dx / dt, dy / dt];
+        }
+        body.position = target_pos;
+    } else {
+        body.position[0] += body.linear_velocity[0] * dt;
+        body.position[1] += body.linear_velocity[1] * dt;
+    }
+    if let Some(target_rot) = body.move_target_rotation.take() {
+        body.rotation = target_rot;
+    } else {
+        body.rotation += body.angular_velocity * dt;
+    }
+    body.collision_detection_mode == CollisionDetectionMode2D::Continuous
+}
+
 fn shape_vertical_bounds_and_area(
     shape: &Shape2D,
     center: [f32; 2],
@@ -1948,55 +2054,53 @@ fn shape_vertical_bounds_and_area(
             (center[1] - r, center[1] + r, std::f32::consts::PI * r * r)
         }
         Shape2D::Box { half_extents } => {
-            let hx = half_extents[0].max(0.0);
-            let hy = half_extents[1].max(0.0);
-            let locals = [[-hx, -hy], [hx, -hy], [hx, hy], [-hx, hy]];
-            let mut min_y = f32::INFINITY;
-            let mut max_y = f32::NEG_INFINITY;
-            for p in &locals {
-                let wp = transform_point2(*p, center, angle);
-                min_y = min_y.min(wp[1]);
-                max_y = max_y.max(wp[1]);
-            }
-            (min_y, max_y, 4.0 * hx * hy)
+            box_vertical_bounds_and_area(*half_extents, center, angle)
         }
         Shape2D::Edge { start, end } => {
             let a = transform_point2(*start, center, angle);
             let b = transform_point2(*end, center, angle);
             (a[1].min(b[1]), a[1].max(b[1]), 0.0)
         }
-        Shape2D::Capsule { .. } => {
+        Shape2D::Capsule { .. } | Shape2D::Polygon { .. } => {
             let Some(verts) = shape_vertices_world(shape, center, angle) else {
                 return (center[1], center[1], 0.0);
             };
-            polygon_vertical_bounds_and_area(&verts)
-        }
-        Shape2D::Polygon { vertices } => {
-            if vertices.len() < 3 {
-                return (center[1], center[1], 0.0);
+            if verts.len() < 3 {
+                (center[1], center[1], 0.0)
+            } else {
+                polygon_vertical_bounds_and_area(&verts)
             }
-            let mut verts = Vec::with_capacity(vertices.len());
-            for v in vertices {
-                verts.push(transform_point2(*v, center, angle));
-            }
-            polygon_vertical_bounds_and_area(&verts)
         }
         Shape2D::Composite { shapes } => {
             if shapes.is_empty() {
                 return (center[1], center[1], 0.0);
             }
-            let mut min_y = f32::INFINITY;
-            let mut max_y = f32::NEG_INFINITY;
-            let mut total_area = 0.0f32;
-            for sub in shapes {
-                let (s_min, s_max, s_area) = shape_vertical_bounds_and_area(sub, center, angle);
-                min_y = min_y.min(s_min);
-                max_y = max_y.max(s_max);
-                total_area += s_area;
-            }
-            (min_y, max_y, total_area)
+            shapes.iter().fold(
+                (f32::INFINITY, f32::NEG_INFINITY, 0.0f32),
+                |(min_y, max_y, area), sub| {
+                    let (s_min, s_max, s_area) = shape_vertical_bounds_and_area(sub, center, angle);
+                    (min_y.min(s_min), max_y.max(s_max), area + s_area)
+                },
+            )
         }
     }
+}
+
+fn box_vertical_bounds_and_area(
+    half_extents: [f32; 2],
+    center: [f32; 2],
+    angle: f32,
+) -> (f32, f32, f32) {
+    let hx = half_extents[0].max(0.0);
+    let hy = half_extents[1].max(0.0);
+    let (min_y, max_y) = [[-hx, -hy], [hx, -hy], [hx, hy], [-hx, hy]].iter().fold(
+        (f32::INFINITY, f32::NEG_INFINITY),
+        |(min_y, max_y), p| {
+            let wy = transform_point2(*p, center, angle)[1];
+            (min_y.min(wy), max_y.max(wy))
+        },
+    );
+    (min_y, max_y, 4.0 * hx * hy)
 }
 
 fn ordered_pair(a: ColliderId2D, b: ColliderId2D) -> (ColliderId2D, ColliderId2D) {

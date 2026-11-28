@@ -378,6 +378,30 @@ pub fn decode_audio(bytes: &[u8]) -> Result<AudioClip, AudioError> {
 }
 
 pub fn parse_wav(bytes: &[u8]) -> Result<AudioClip, AudioError> {
+    reject_non_wav_containers(bytes)?;
+    validate_riff_header(bytes)?;
+
+    let (fmt_fields, data_slice) = read_wav_chunks(bytes)?;
+
+    let Some(fmt) = fmt_fields else {
+        return Err(AudioError::InvalidWav("missing fmt chunk".to_string()));
+    };
+    validate_wav_format(fmt)?;
+
+    let samples = decode_pcm_samples(data_slice, fmt.channels)?;
+
+    Ok(AudioClip::new(fmt.channels, fmt.sample_rate, samples))
+}
+
+#[derive(Clone, Copy)]
+struct WavFormat {
+    audio_format: u16,
+    channels: u16,
+    sample_rate: u32,
+    bits_per_sample: u16,
+}
+
+fn reject_non_wav_containers(bytes: &[u8]) -> Result<(), AudioError> {
     if bytes.starts_with(b"OggS") {
         return Err(AudioError::UnsupportedFormat("OGG container".to_string()));
     }
@@ -394,6 +418,10 @@ pub fn parse_wav(bytes: &[u8]) -> Result<AudioClip, AudioError> {
     if bytes.starts_with(b"fLaC") {
         return Err(AudioError::UnsupportedFormat("FLAC audio".to_string()));
     }
+    Ok(())
+}
+
+fn validate_riff_header(bytes: &[u8]) -> Result<(), AudioError> {
     if bytes.len() < 12 {
         return Err(AudioError::InvalidWav(
             "buffer shorter than 12-byte RIFF header".to_string(),
@@ -404,9 +432,12 @@ pub fn parse_wav(bytes: &[u8]) -> Result<AudioClip, AudioError> {
             "missing RIFF/WAVE header".to_string(),
         ));
     }
+    Ok(())
+}
 
+fn read_wav_chunks(bytes: &[u8]) -> Result<(Option<WavFormat>, Option<&[u8]>), AudioError> {
     let mut offset = 12usize;
-    let mut fmt_fields: Option<(u16, u16, u32, u16)> = None;
+    let mut fmt_fields: Option<WavFormat> = None;
     let mut data_slice: Option<&[u8]> = None;
 
     while offset + 8 <= bytes.len() {
@@ -428,32 +459,7 @@ pub fn parse_wav(bytes: &[u8]) -> Result<AudioClip, AudioError> {
         }
 
         if chunk_id == b"fmt " {
-            if chunk_size < 16 {
-                return Err(AudioError::InvalidWav(
-                    "fmt chunk smaller than 16 bytes".to_string(),
-                ));
-            }
-            let Some(audio_format) = read_u16_le(bytes, payload_start) else {
-                return Err(AudioError::InvalidWav(
-                    "failed to read audio_format".to_string(),
-                ));
-            };
-            let Some(channels) = read_u16_le(bytes, payload_start + 2) else {
-                return Err(AudioError::InvalidWav(
-                    "failed to read channels".to_string(),
-                ));
-            };
-            let Some(sample_rate) = read_u32_le(bytes, payload_start + 4) else {
-                return Err(AudioError::InvalidWav(
-                    "failed to read sample_rate".to_string(),
-                ));
-            };
-            let Some(bits_per_sample) = read_u16_le(bytes, payload_start + 14) else {
-                return Err(AudioError::InvalidWav(
-                    "failed to read bits_per_sample".to_string(),
-                ));
-            };
-            fmt_fields = Some((audio_format, channels, sample_rate, bits_per_sample));
+            fmt_fields = Some(read_wav_format_chunk(bytes, payload_start, chunk_size)?);
         } else if chunk_id == b"data" {
             data_slice = bytes.get(payload_start..payload_end);
         }
@@ -462,30 +468,75 @@ pub fn parse_wav(bytes: &[u8]) -> Result<AudioClip, AudioError> {
         offset = payload_end.saturating_add(pad);
     }
 
-    let Some((audio_format, channels, sample_rate, bits_per_sample)) = fmt_fields else {
-        return Err(AudioError::InvalidWav("missing fmt chunk".to_string()));
+    Ok((fmt_fields, data_slice))
+}
+
+fn read_wav_format_chunk(
+    bytes: &[u8],
+    payload_start: usize,
+    chunk_size: usize,
+) -> Result<WavFormat, AudioError> {
+    if chunk_size < 16 {
+        return Err(AudioError::InvalidWav(
+            "fmt chunk smaller than 16 bytes".to_string(),
+        ));
+    }
+    let Some(audio_format) = read_u16_le(bytes, payload_start) else {
+        return Err(AudioError::InvalidWav(
+            "failed to read audio_format".to_string(),
+        ));
     };
-    if audio_format != 1 {
+    let Some(channels) = read_u16_le(bytes, payload_start + 2) else {
+        return Err(AudioError::InvalidWav(
+            "failed to read channels".to_string(),
+        ));
+    };
+    let Some(sample_rate) = read_u32_le(bytes, payload_start + 4) else {
+        return Err(AudioError::InvalidWav(
+            "failed to read sample_rate".to_string(),
+        ));
+    };
+    let Some(bits_per_sample) = read_u16_le(bytes, payload_start + 14) else {
+        return Err(AudioError::InvalidWav(
+            "failed to read bits_per_sample".to_string(),
+        ));
+    };
+    Ok(WavFormat {
+        audio_format,
+        channels,
+        sample_rate,
+        bits_per_sample,
+    })
+}
+
+fn validate_wav_format(fmt: WavFormat) -> Result<(), AudioError> {
+    if fmt.audio_format != 1 {
         return Err(AudioError::UnsupportedFormat(format!(
-            "WAV audio_format {audio_format} (only PCM format 1 is supported)"
+            "WAV audio_format {} (only PCM format 1 is supported)",
+            fmt.audio_format
         )));
     }
-    if channels != 1 && channels != 2 {
+    if fmt.channels != 1 && fmt.channels != 2 {
         return Err(AudioError::UnsupportedFormat(format!(
-            "WAV channels {channels} (only mono 1 or stereo 2 supported)"
+            "WAV channels {} (only mono 1 or stereo 2 supported)",
+            fmt.channels
         )));
     }
-    if bits_per_sample != 16 {
+    if fmt.bits_per_sample != 16 {
         return Err(AudioError::UnsupportedFormat(format!(
-            "WAV bits_per_sample {bits_per_sample} (only 16-bit PCM supported)"
+            "WAV bits_per_sample {} (only 16-bit PCM supported)",
+            fmt.bits_per_sample
         )));
     }
-    if sample_rate == 0 {
+    if fmt.sample_rate == 0 {
         return Err(AudioError::InvalidWav(
             "WAV sample_rate must be positive".to_string(),
         ));
     }
+    Ok(())
+}
 
+fn decode_pcm_samples(data_slice: Option<&[u8]>, channels: u16) -> Result<Vec<f32>, AudioError> {
     let Some(raw_data) = data_slice else {
         return Err(AudioError::InvalidWav("missing data chunk".to_string()));
     };
@@ -504,8 +555,7 @@ pub fn parse_wav(bytes: &[u8]) -> Result<AudioClip, AudioError> {
         };
         samples.push((f32::from(pcm) / 32768.0).clamp(-1.0, 1.0));
     }
-
-    Ok(AudioClip::new(channels, sample_rate, samples))
+    Ok(samples)
 }
 
 #[repr(i32)]
@@ -1520,49 +1570,57 @@ impl AudioWorld {
         let mut any_completed = false;
 
         for entity in entities {
-            let duration = self.effective_duration(entity);
-            let sample_rate = self.source_sample_rate(entity);
-            let pitch = f64::from(self.effective_pitch(entity)).max(0.0);
-            let Some(source) = self.sources.get_mut(&entity) else {
-                continue;
-            };
-            if source.state != AudioSourceState::Playing
-                && source.state != AudioSourceState::Virtualized
-            {
-                continue;
+            if self.advance_source(entity, scaled_dt, scale) {
+                any_completed = true;
             }
-            if self.gameplay_paused && source.group != AudioMixerGroup::Menu {
-                continue;
-            }
-            let dt = if source.ignore_time_scale || source.group == AudioMixerGroup::Menu {
-                scaled_dt
-            } else {
-                scaled_dt * scale
-            };
-            let delta = dt * pitch;
-            if delta <= 0.0 {
-                continue;
-            }
-            source.time += delta;
-            if let Some(d) = duration {
-                if d > 0.0 && source.time >= d {
-                    if source.looping && !source.one_shot_active {
-                        source.time %= d;
-                    } else {
-                        source.time = d;
-                        source.wants_play = false;
-                        source.one_shot_active = false;
-                        source.state = AudioSourceState::Completed;
-                        any_completed = true;
-                    }
-                }
-            }
-            source.sample_cursor = source.time * f64::from(sample_rate);
         }
 
         if any_completed {
             self.recompute_virtualization();
         }
+    }
+
+    fn advance_source(&mut self, entity: EntityId, scaled_dt: f64, scale: f64) -> bool {
+        let duration = self.effective_duration(entity);
+        let sample_rate = self.source_sample_rate(entity);
+        let pitch = f64::from(self.effective_pitch(entity)).max(0.0);
+        let Some(source) = self.sources.get_mut(&entity) else {
+            return false;
+        };
+        if source.state != AudioSourceState::Playing
+            && source.state != AudioSourceState::Virtualized
+        {
+            return false;
+        }
+        if self.gameplay_paused && source.group != AudioMixerGroup::Menu {
+            return false;
+        }
+        let dt = if source.ignore_time_scale || source.group == AudioMixerGroup::Menu {
+            scaled_dt
+        } else {
+            scaled_dt * scale
+        };
+        let delta = dt * pitch;
+        if delta <= 0.0 {
+            return false;
+        }
+        source.time += delta;
+        let mut completed = false;
+        if let Some(d) = duration {
+            if d > 0.0 && source.time >= d {
+                if source.looping && !source.one_shot_active {
+                    source.time %= d;
+                } else {
+                    source.time = d;
+                    source.wants_play = false;
+                    source.one_shot_active = false;
+                    source.state = AudioSourceState::Completed;
+                    completed = true;
+                }
+            }
+        }
+        source.sample_cursor = source.time * f64::from(sample_rate);
+        completed
     }
 
     pub fn mix(&mut self, n_frames: usize) -> Vec<f32> {
@@ -1622,42 +1680,85 @@ impl AudioWorld {
         if self.inaudible_reason(entity).is_some() {
             return false;
         }
-        let Some((gain_l, gain_r)) = self.source_gains(entity) else {
+        let Some((gain_l, gain_r)) = self.render_gains(entity, group) else {
             return false;
         };
-        let bus = self.bus_gain(group);
-        if bus <= 0.0 {
-            return false;
-        }
-        let (gain_l, gain_r) = (gain_l * bus, gain_r * bus);
         if let Some(stream_id) = music {
-            let Some(stream) = self.music_streams.get_mut(&stream_id) else {
-                return false;
-            };
-            let Some(source) = self.sources.get_mut(&entity) else {
-                return false;
-            };
-            let mut chain = self.filters.get_mut(&entity);
-            let looping = source.looping && !source.one_shot_active;
-            for frame_out in render_offset..n_frames {
-                let Some((sample_l, sample_r)) = stream.next_frame(looping) else {
-                    source.wants_play = false;
-                    source.one_shot_active = false;
-                    source.state = AudioSourceState::Completed;
-                    return true;
-                };
-                let (sample_l, sample_r) =
-                    apply_filter_chain(chain.as_deref_mut(), sample_l, sample_r);
-                output[frame_out * OUTPUT_CHANNELS] += sample_l * gain_l;
-                output[frame_out * OUTPUT_CHANNELS + 1] += sample_r * gain_r;
-                source.sample_cursor += 1.0;
-                source.time = source.sample_cursor / f64::from(stream.sample_rate());
-            }
-            return false;
+            return self.render_music_source(
+                entity,
+                stream_id,
+                output,
+                render_offset,
+                n_frames,
+                (gain_l, gain_r),
+            );
         }
         let Some(clip_id) = clip_id else {
             return false;
         };
+        self.render_clip_source(
+            entity,
+            clip_id,
+            output,
+            render_offset,
+            n_frames,
+            (gain_l, gain_r),
+        )
+    }
+
+    fn render_gains(&self, entity: EntityId, group: AudioMixerGroup) -> Option<(f32, f32)> {
+        let (gain_l, gain_r) = self.source_gains(entity)?;
+        let bus = self.bus_gain(group);
+        if bus <= 0.0 {
+            return None;
+        }
+        Some((gain_l * bus, gain_r * bus))
+    }
+
+    fn render_music_source(
+        &mut self,
+        entity: EntityId,
+        stream_id: MusicStreamId,
+        output: &mut [f32],
+        render_offset: usize,
+        n_frames: usize,
+        gains: (f32, f32),
+    ) -> bool {
+        let (gain_l, gain_r) = gains;
+        let Some(stream) = self.music_streams.get_mut(&stream_id) else {
+            return false;
+        };
+        let Some(source) = self.sources.get_mut(&entity) else {
+            return false;
+        };
+        let mut chain = self.filters.get_mut(&entity);
+        let looping = source.looping && !source.one_shot_active;
+        for frame_out in render_offset..n_frames {
+            let Some((sample_l, sample_r)) = stream.next_frame(looping) else {
+                source.wants_play = false;
+                source.one_shot_active = false;
+                source.state = AudioSourceState::Completed;
+                return true;
+            };
+            let (sample_l, sample_r) = apply_filter_chain(chain.as_deref_mut(), sample_l, sample_r);
+            output[frame_out * OUTPUT_CHANNELS] += sample_l * gain_l;
+            output[frame_out * OUTPUT_CHANNELS + 1] += sample_r * gain_r;
+            source.sample_cursor += 1.0;
+            source.time = source.sample_cursor / f64::from(stream.sample_rate());
+        }
+        false
+    }
+
+    fn render_clip_source(
+        &mut self,
+        entity: EntityId,
+        clip_id: AudioClipId,
+        output: &mut [f32],
+        render_offset: usize,
+        n_frames: usize,
+        gains: (f32, f32),
+    ) -> bool {
+        let (gain_l, gain_r) = gains;
         let step = f64::from(self.effective_pitch(entity)).max(0.0);
         let Some(clip) = self.clips.get(&clip_id) else {
             return false;
@@ -1674,29 +1775,10 @@ impl AudioWorld {
         let mut chain = self.filters.get_mut(&entity);
 
         for frame_out in render_offset..n_frames {
-            let mut frame_idx = source.sample_cursor.floor() as usize;
-            if frame_idx >= total_frames {
-                if source.looping && !source.one_shot_active {
-                    frame_idx %= total_frames;
-                    source.sample_cursor %= total_frames as f64;
-                } else {
-                    source.time = clip_duration;
-                    source.sample_cursor = total_frames as f64;
-                    source.wants_play = false;
-                    source.one_shot_active = false;
-                    source.state = AudioSourceState::Completed;
-                    return true;
-                }
-            }
-
-            let (sample_l, sample_r) = if clip_channels == 1 {
-                let sample = clip.samples.get(frame_idx).copied().unwrap_or(0.0);
-                (sample, sample)
-            } else {
-                let left = clip.samples.get(frame_idx * 2).copied().unwrap_or(0.0);
-                let right = clip.samples.get(frame_idx * 2 + 1).copied().unwrap_or(0.0);
-                (left, right)
+            let Some(frame_idx) = clip_frame_index(source, total_frames, clip_duration) else {
+                return true;
             };
+            let (sample_l, sample_r) = clip_frame_samples(clip, frame_idx, clip_channels);
             let (sample_l, sample_r) = apply_filter_chain(chain.as_deref_mut(), sample_l, sample_r);
 
             output[frame_out * OUTPUT_CHANNELS] += sample_l * gain_l;
@@ -1820,6 +1902,39 @@ impl AudioWorld {
                 }
             }
         }
+    }
+}
+
+fn clip_frame_index(
+    source: &mut AudioSource,
+    total_frames: usize,
+    clip_duration: f64,
+) -> Option<usize> {
+    let mut frame_idx = source.sample_cursor.floor() as usize;
+    if frame_idx >= total_frames {
+        if source.looping && !source.one_shot_active {
+            frame_idx %= total_frames;
+            source.sample_cursor %= total_frames as f64;
+        } else {
+            source.time = clip_duration;
+            source.sample_cursor = total_frames as f64;
+            source.wants_play = false;
+            source.one_shot_active = false;
+            source.state = AudioSourceState::Completed;
+            return None;
+        }
+    }
+    Some(frame_idx)
+}
+
+fn clip_frame_samples(clip: &AudioClip, frame_idx: usize, channels: u16) -> (f32, f32) {
+    if channels == 1 {
+        let sample = clip.samples.get(frame_idx).copied().unwrap_or(0.0);
+        (sample, sample)
+    } else {
+        let left = clip.samples.get(frame_idx * 2).copied().unwrap_or(0.0);
+        let right = clip.samples.get(frame_idx * 2 + 1).copied().unwrap_or(0.0);
+        (left, right)
     }
 }
 
@@ -2098,41 +2213,51 @@ mod tests {
         world.set_max_distance(src_3d, 11.0);
         world.play(src_3d, false);
 
+        assert_gain_falls_with_distance(&mut world, src_3d);
+        assert_pan_follows_azimuth(&mut world, src_3d);
+        assert_2d_source_ignores_distance(&mut world);
+    }
+
+    fn assert_gain_falls_with_distance(world: &mut AudioWorld, entity: EntityId) {
         let distances = [0.0f32, 1.0, 3.5, 6.0, 8.5, 11.0];
         let mut prev_total = f32::MAX;
         for d in distances {
-            world.set_source_position(src_3d, [0.0, 0.0, d]);
-            let (left, right) = world.source_gains(src_3d).unwrap_or((0.0, 0.0));
+            world.set_source_position(entity, [0.0, 0.0, d]);
+            let (left, right) = world.source_gains(entity).unwrap_or((0.0, 0.0));
             let total = left + right;
             assert!(total <= prev_total + 1e-6);
             prev_total = total;
         }
         assert!(prev_total.abs() < 1e-6);
         assert_eq!(
-            world.inaudible_reason(src_3d),
+            world.inaudible_reason(entity),
             Some(SilenceReason::OutOfRange)
         );
+    }
 
+    fn assert_pan_follows_azimuth(world: &mut AudioWorld, entity: EntityId) {
         let azimuth_x = [-5.0f32, -2.0, 0.0, 2.0, 5.0];
         let mut prev_pan_ratio = -1.0f32;
         for x in azimuth_x {
-            world.set_source_position(src_3d, [x, 0.0, 5.0]);
-            let (left, right) = world.source_gains(src_3d).unwrap_or((0.0, 0.0));
+            world.set_source_position(entity, [x, 0.0, 5.0]);
+            let (left, right) = world.source_gains(entity).unwrap_or((0.0, 0.0));
             let total = left + right;
             assert!(total > 0.0);
             let pan_ratio = right / total;
             assert!(pan_ratio > prev_pan_ratio);
             prev_pan_ratio = pan_ratio;
         }
-        world.set_source_position(src_3d, [-5.0, 0.0, 0.0]);
-        let (full_l_left, full_l_right) = world.source_gains(src_3d).unwrap_or((0.0, 0.0));
+        world.set_source_position(entity, [-5.0, 0.0, 0.0]);
+        let (full_l_left, full_l_right) = world.source_gains(entity).unwrap_or((0.0, 0.0));
         assert!(full_l_left > 0.0);
         assert!(full_l_right.abs() < 1e-6);
-        world.set_source_position(src_3d, [5.0, 0.0, 0.0]);
-        let (full_r_left, full_r_right) = world.source_gains(src_3d).unwrap_or((0.0, 0.0));
+        world.set_source_position(entity, [5.0, 0.0, 0.0]);
+        let (full_r_left, full_r_right) = world.source_gains(entity).unwrap_or((0.0, 0.0));
         assert!(full_r_left.abs() < 1e-6);
         assert!(full_r_right > 0.0);
+    }
 
+    fn assert_2d_source_ignores_distance(world: &mut AudioWorld) {
         let src_2d = EntityId::new(21);
         world.ensure_source(src_2d);
         world.set_spatial_blend(src_2d, 0.0);
@@ -2303,8 +2428,7 @@ mod tests {
         Ok(())
     }
 
-    #[test]
-    fn group_gains_apply_only_to_their_own_bus() {
+    fn setup_group_gains_world() -> (AudioWorld, EntityId, EntityId) {
         let mut world = AudioWorld::new();
         assert_eq!(world.master_volume(), 1.0);
         assert_eq!(world.group_volume(AudioMixerGroup::Sfx), 1.0);
@@ -2325,7 +2449,12 @@ mod tests {
         world.set_source_group(menu, AudioMixerGroup::Menu);
         assert_eq!(world.source_group(menu), AudioMixerGroup::Menu);
         assert_eq!(world.source_group(sfx), AudioMixerGroup::Sfx);
+        (world, sfx, menu)
+    }
 
+    #[test]
+    fn group_gains_apply_only_to_their_own_bus() {
+        let (mut world, _sfx, _menu) = setup_group_gains_world();
         let baseline = world.mix(4);
 
         world.set_group_volume(AudioMixerGroup::Music, 0.1);
@@ -2357,8 +2486,7 @@ mod tests {
         }
     }
 
-    #[test]
-    fn gameplay_pause_silences_music_and_sfx_keeps_menu_and_freezes_gameplay() {
+    fn setup_gameplay_pause_world() -> (AudioWorld, EntityId, EntityId, EntityId) {
         let mut world = AudioWorld::new();
         let clip_id = world.register_clip(AudioClip {
             channels: 1,
@@ -2378,6 +2506,12 @@ mod tests {
         for entity in [music_entity, sfx_entity, menu_entity] {
             world.play(entity, false);
         }
+        (world, music_entity, sfx_entity, menu_entity)
+    }
+
+    #[test]
+    fn gameplay_pause_silences_music_and_sfx_keeps_menu_and_freezes_gameplay() {
+        let (mut world, music_entity, sfx_entity, menu_entity) = setup_gameplay_pause_world();
 
         let active = world.mix(2);
         for frame in 0..2 {
@@ -2670,6 +2804,12 @@ mod tests {
         let mut world = AudioWorld::new();
         world.set_listener([0.0, 0.0, 0.0], [0.0, 0.0, 1.0]);
 
+        let (log_src, lin_src) = setup_log_and_linear_rolloff(&mut world);
+        assert_log_and_linear_attenuation(&mut world, log_src, lin_src);
+        assert_custom_rolloff(&mut world);
+    }
+
+    fn setup_log_and_linear_rolloff(world: &mut AudioWorld) -> (EntityId, EntityId) {
         let log_src = EntityId::new(80);
         world.ensure_source(log_src);
         assert_eq!(world.rolloff_mode(log_src), RolloffMode::Logarithmic);
@@ -2687,6 +2827,14 @@ mod tests {
         world.set_max_distance(lin_src, 20.0);
         world.play(lin_src, false);
 
+        (log_src, lin_src)
+    }
+
+    fn assert_log_and_linear_attenuation(
+        world: &mut AudioWorld,
+        log_src: EntityId,
+        lin_src: EntityId,
+    ) {
         for entity in [log_src, lin_src] {
             world.set_source_position(entity, [0.0, 0.0, 2.0]);
             let (l, r) = world.source_gains(entity).unwrap_or((0.0, 0.0));
@@ -2707,7 +2855,9 @@ mod tests {
         world.set_source_position(log_src, [0.0, 0.0, 8.0]);
         let (log8_l, log8_r) = world.source_gains(log_src).unwrap_or((0.0, 0.0));
         assert!(((log8_l + log8_r) - 0.25).abs() < 1e-6);
+    }
 
+    fn assert_custom_rolloff(world: &mut AudioWorld) {
         let custom_src = EntityId::new(82);
         world.ensure_source(custom_src);
         world.set_spatial_blend(custom_src, 1.0);

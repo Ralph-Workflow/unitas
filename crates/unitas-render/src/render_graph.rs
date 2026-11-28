@@ -167,8 +167,6 @@ impl RenderGraph {
             .iter()
             .find(|pass| pass.kind == RenderPassKind::Transparent)
             .map_or(RenderTargetKind::OffscreenColorDepth, |pass| pass.target);
-        // The sprite pass draws into the colour target, so it has to run
-        // before the pass that reads the target back.
         let index = self
             .passes
             .iter()
