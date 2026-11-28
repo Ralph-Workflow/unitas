@@ -3,7 +3,10 @@ use std::collections::HashMap;
 use unitas_asset::scene::{UiBinding, UiElementComponent};
 use unitas_core::EntityId;
 
-use crate::canvas::{CanvasState, TextLayoutConfig, TextOverride, UiDrawItem};
+use crate::canvas::{
+    CanvasState, InputFieldEndEditEvent, InputFieldValueChangedEvent, TextLayoutConfig,
+    TextOverride, UiDrawItem, UiInputFieldComponent,
+};
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct ButtonState {
@@ -53,6 +56,57 @@ impl UiComponents {
 
     pub fn canvas(&self) -> &CanvasState {
         &self.canvas
+    }
+
+    pub fn canvas_mut(&mut self) -> &mut CanvasState {
+        &mut self.canvas
+    }
+
+    pub fn set_input_field(&mut self, field: UiInputFieldComponent, screen_size: [f32; 2]) {
+        self.canvas
+            .ensure_canvas_and_rect(field.entity, screen_size);
+        self.canvas.set_input_field(field);
+    }
+
+    pub fn input_field(&self, entity: EntityId) -> Option<&UiInputFieldComponent> {
+        self.canvas.input_field(entity)
+    }
+
+    pub fn set_input_field_text(&mut self, entity: EntityId, text: &str, notify: bool) -> bool {
+        self.canvas.set_input_field_text(entity, text, notify)
+    }
+
+    pub fn set_input_field_placeholder(&mut self, entity: EntityId, placeholder: &str) -> bool {
+        self.canvas.set_input_field_placeholder(entity, placeholder)
+    }
+
+    pub fn set_input_field_interactable(&mut self, entity: EntityId, interactable: bool) -> bool {
+        self.canvas
+            .set_input_field_interactable(entity, interactable)
+    }
+
+    pub fn set_input_field_character_limit(&mut self, entity: EntityId, limit: usize) -> bool {
+        self.canvas.set_input_field_character_limit(entity, limit)
+    }
+
+    pub fn set_input_field_caret_position(&mut self, entity: EntityId, caret: usize) -> bool {
+        self.canvas.set_input_field_caret_position(entity, caret)
+    }
+
+    pub fn focus_input_field(&mut self, entity: EntityId, focused: bool) -> bool {
+        self.canvas.focus_input_field(entity, focused)
+    }
+
+    pub fn hit_input_field(&self, screen_size: [f32; 2], point: (f32, f32)) -> Option<EntityId> {
+        self.canvas.hit_test_input_field(point, screen_size)
+    }
+
+    pub fn take_input_field_value_changed(&mut self) -> Vec<InputFieldValueChangedEvent> {
+        self.canvas.take_input_field_value_changed()
+    }
+
+    pub fn take_input_field_end_edit(&mut self) -> Vec<InputFieldEndEditEvent> {
+        self.canvas.take_input_field_end_edit()
     }
 
     pub fn set_text(&mut self, entity: EntityId, text: &str) -> bool {
@@ -116,7 +170,10 @@ impl UiComponents {
             self.canvas
                 .element_rect(element.entity(), screen_size)
                 .is_some_and(|(rect_px, _)| rect_contains(rect_px, point))
-        })
+        }) || self
+            .canvas
+            .hit_test_input_field(point, screen_size)
+            .is_some()
     }
 }
 

@@ -133,7 +133,8 @@ pub const FAMILIAR_BEHAVIOR_DIFFERENCES: &[FamiliarBehaviorDifferenceEntry] = &[
         feature_id: "MED-001",
         owning_spec: "ui-audio-input.md",
         differences: &[
-            "VideoPlayer and VideoClip decoding, render-target presentation, audio track routing, and streaming media playback are not implemented and are reported as Unsupported.",
+            "VideoClip import probes MP4/MOV/WebM/IVF container metadata into cooked cache artifacts and VideoPlayer decodes cooked clips to RGBA frames on a worker thread via dynamically loaded system FFmpeg libraries (libavformat, libavcodec, libavutil, libswscale), presenting frames onto the target entity's sprite surface; when host FFmpeg shared libraries are unavailable or on WebAssembly targets, VideoPlayer reports a platform-limited diagnostic.",
+            "Audio-track routing from video containers into the AudioMixer, camera near/far plane and arbitrary material-property render modes, DSP/game clock drift resynchronization, and HTTP/HLS/DASH network streaming are not implemented.",
         ],
     },
     FamiliarBehaviorDifferenceEntry {

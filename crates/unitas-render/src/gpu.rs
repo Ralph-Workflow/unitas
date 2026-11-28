@@ -9,10 +9,12 @@ use crate::glyphs::{
     TextPipeline, TexturedQuad, VerticalAlign,
 };
 use crate::image::{Image, Rgba8};
+use crate::light_2d::{create_lights_2d_buffer, pack_lights_2d, LIGHTS_2D_BYTES};
 use crate::math::{Mat4, Vec3};
 use crate::mesh::{Mesh, MeshAttributes};
 use crate::model::{
-    effective_alpha, BlendMode, DirectionalLight, Material, MaterialInstance, MeshInstance,
+    effective_alpha, BlendMode, DirectionalLight, Light2D, Material, MaterialInstance,
+    MeshInstance, MAX_LIGHTS_2D,
 };
 use crate::render_graph::{PostChain, RenderGraph, RenderPassKind};
 use crate::shadow::{light_view_projection, shadow_map_size, ShadowSettings};
@@ -234,6 +236,7 @@ struct UniformState {
     capacity: usize,
     global_bind_group: wgpu::BindGroup,
     instance_bind_group: wgpu::BindGroup,
+    lights_2d_buffer: wgpu::Buffer,
 }
 
 struct SurfaceState {
@@ -301,6 +304,7 @@ pub struct Renderer {
     surface: Mutex<Option<SurfaceState>>,
     text: Mutex<TextState>,
     sprites: Mutex<Vec<Sprite>>,
+    lights_2d: Mutex<Vec<Light2D>>,
     lighting: Mutex<SceneLightingState>,
     sprite_quad: (Mesh, MeshAttributes),
     v_sync_count: AtomicU32,
@@ -511,6 +515,7 @@ impl Renderer {
             surface: Mutex::new(None),
             text: Mutex::new(text),
             sprites: Mutex::new(Vec::new()),
+            lights_2d: Mutex::new(Vec::new()),
             lighting: Mutex::new(SceneLightingState {
                 lights: Vec::new(),
                 ambient: [0.0, 0.0, 0.0],
@@ -571,6 +576,17 @@ impl Renderer {
         state.lights.clear();
         state.lights.extend_from_slice(lights);
         state.ambient = ambient;
+    }
+
+    /// Replaces the 2D light list the sprite pass applies to the frame.
+    ///
+    /// At most 16 lights are used per frame; lights past that cap are ignored.
+    /// An empty list leaves the sprite pass unlit, rendering exactly as it
+    /// does without the 2D light buffer.
+    pub fn set_lights_2d(&self, lights: &[Light2D]) {
+        let mut state = lock(&self.lights_2d);
+        state.clear();
+        state.extend(lights.iter().take(MAX_LIGHTS_2D).copied());
     }
 
     pub fn scene_lights(&self) -> Vec<GpuLight> {
@@ -1309,6 +1325,14 @@ impl Renderer {
         self.queue
             .write_buffer(&state.buffer, 0, bytemuck::cast_slice::<f32, u8>(&globals));
 
+        let lights_2d = lock(&self.lights_2d).clone();
+        let packed_lights_2d = pack_lights_2d(&lights_2d);
+        self.queue.write_buffer(
+            &state.lights_2d_buffer,
+            0,
+            bytemuck::cast_slice::<f32, u8>(&packed_lights_2d),
+        );
+
         let mut instance_data: Vec<f32> = vec![0.0; SLOT_FLOATS * total];
         for (index, item) in items.iter().enumerate() {
             let start = index * SLOT_FLOATS;
@@ -1784,17 +1808,28 @@ fn create_uniforms(
         usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         mapped_at_creation: false,
     });
+    let lights_2d_buffer = create_lights_2d_buffer(device);
     let global_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
         label: Some("globals"),
         layout: global_layout,
-        entries: &[wgpu::BindGroupEntry {
-            binding: 0,
-            resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
-                buffer: &buffer,
-                offset: 0,
-                size: wgpu::BufferSize::new((GLOBAL_FLOATS * 4) as u64),
-            }),
-        }],
+        entries: &[
+            wgpu::BindGroupEntry {
+                binding: 0,
+                resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                    buffer: &buffer,
+                    offset: 0,
+                    size: wgpu::BufferSize::new((GLOBAL_FLOATS * 4) as u64),
+                }),
+            },
+            wgpu::BindGroupEntry {
+                binding: 1,
+                resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                    buffer: &lights_2d_buffer,
+                    offset: 0,
+                    size: wgpu::BufferSize::new(LIGHTS_2D_BYTES),
+                }),
+            },
+        ],
     });
     let instance_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
         label: Some("instance"),
@@ -1813,6 +1848,7 @@ fn create_uniforms(
         capacity,
         global_bind_group,
         instance_bind_group,
+        lights_2d_buffer,
     }
 }
 

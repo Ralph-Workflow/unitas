@@ -6,9 +6,13 @@ use unitas_asset::scene::{
 };
 use unitas_core::EntityId;
 use unitas_render::Rgba8;
-use unitas_render::ui_pass::{UiTarget, composite_ui};
+use unitas_render::ui_pass::{GlyphTextPainter, UiTarget, composite_ui};
 use unitas_runtime::canvas::{
-    CanvasRect, CanvasState, UiDrawItem, canvas_scale_factor, resolve_canvas_rect,
+    CanvasRect, CanvasState, InputFieldEndEditEvent, InputFieldValueChangedEvent, UiDrawItem,
+    UiInputFieldComponent, canvas_scale_factor, resolve_canvas_rect,
+};
+use unitas_runtime::input::{
+    InputState, KEY_BACKSPACE, KEY_DELETE, KEY_ESCAPE, KEY_LEFT_ARROW, KEY_RETURN, KEY_RIGHT_ARROW,
 };
 
 const UI_SCENE: &str = "%YAML 1.1
@@ -258,4 +262,274 @@ fn canvas_disabled_elements_are_skipped() -> Result<(), Box<dyn Error>> {
     assert_eq!(items.len(), 1);
     assert!(items[0].text.is_some());
     Ok(())
+}
+
+#[test]
+fn input_field_handles_char_entry_caret_movement_deletion_and_submit_cancel_events() {
+    let screen_size = [400.0, 200.0];
+    let field_entity = EntityId::new(42);
+    let mut state = CanvasState::new(UiBinding {
+        canvases: Vec::new(),
+        rect_transforms: Vec::new(),
+        elements: Vec::new(),
+        layout_groups: Vec::new(),
+        content_size_fitters: Vec::new(),
+    });
+    state.ensure_canvas_and_rect(field_entity, screen_size);
+    state.set_input_field(UiInputFieldComponent {
+        entity: field_entity,
+        placeholder: String::from("Enter name..."),
+        character_limit: 5,
+        ..UiInputFieldComponent::default()
+    });
+    assert!(state.focus_input_field(field_entity, true));
+
+    let mut input = InputState::new();
+    for ch in ['A', 'B', 'D', 'E'] {
+        input.queue_char_event(ch);
+    }
+    input.begin_frame(1.0 / 60.0);
+    state.handle_focus(&input, screen_size);
+
+    assert_eq!(
+        state.input_field(field_entity).map(|f| f.text.as_str()),
+        Some("ABDE")
+    );
+    assert_eq!(
+        state.input_field(field_entity).map(|f| f.caret_position),
+        Some(4)
+    );
+    assert_eq!(
+        state.take_input_field_value_changed(),
+        vec![
+            InputFieldValueChangedEvent {
+                entity: field_entity,
+                text: String::from("A"),
+            },
+            InputFieldValueChangedEvent {
+                entity: field_entity,
+                text: String::from("AB"),
+            },
+            InputFieldValueChangedEvent {
+                entity: field_entity,
+                text: String::from("ABD"),
+            },
+            InputFieldValueChangedEvent {
+                entity: field_entity,
+                text: String::from("ABDE"),
+            },
+        ]
+    );
+
+    input.queue_key_event(KEY_LEFT_ARROW, true);
+    input.begin_frame(1.0 / 60.0);
+    state.handle_focus(&input, screen_size);
+    input.queue_key_event(KEY_LEFT_ARROW, false);
+    input.queue_key_event(KEY_LEFT_ARROW, true);
+    input.begin_frame(1.0 / 60.0);
+    state.handle_focus(&input, screen_size);
+    input.queue_key_event(KEY_LEFT_ARROW, false);
+    assert_eq!(
+        state.input_field(field_entity).map(|f| f.caret_position),
+        Some(2)
+    );
+
+    input.queue_char_event('C');
+    input.queue_char_event('X');
+    input.begin_frame(1.0 / 60.0);
+    state.handle_focus(&input, screen_size);
+    assert_eq!(
+        state.input_field(field_entity).map(|f| f.text.as_str()),
+        Some("ABCDE")
+    );
+    assert_eq!(
+        state.input_field(field_entity).map(|f| f.caret_position),
+        Some(3)
+    );
+    assert_eq!(
+        state.take_input_field_value_changed(),
+        vec![InputFieldValueChangedEvent {
+            entity: field_entity,
+            text: String::from("ABCDE"),
+        }]
+    );
+
+    input.queue_key_event(KEY_BACKSPACE, true);
+    input.begin_frame(1.0 / 60.0);
+    state.handle_focus(&input, screen_size);
+    input.queue_key_event(KEY_BACKSPACE, false);
+    assert_eq!(
+        state.input_field(field_entity).map(|f| f.text.as_str()),
+        Some("ABDE")
+    );
+    assert_eq!(
+        state.input_field(field_entity).map(|f| f.caret_position),
+        Some(2)
+    );
+
+    input.queue_key_event(KEY_DELETE, true);
+    input.begin_frame(1.0 / 60.0);
+    state.handle_focus(&input, screen_size);
+    input.queue_key_event(KEY_DELETE, false);
+    assert_eq!(
+        state.input_field(field_entity).map(|f| f.text.as_str()),
+        Some("ABE")
+    );
+
+    input.queue_key_event(KEY_RIGHT_ARROW, true);
+    input.begin_frame(1.0 / 60.0);
+    state.handle_focus(&input, screen_size);
+    input.queue_key_event(KEY_RIGHT_ARROW, false);
+    assert_eq!(
+        state.input_field(field_entity).map(|f| f.caret_position),
+        Some(3)
+    );
+    let _ = state.take_input_field_value_changed();
+
+    input.queue_key_event(KEY_RETURN, true);
+    input.begin_frame(1.0 / 60.0);
+    state.handle_focus(&input, screen_size);
+    input.queue_key_event(KEY_RETURN, false);
+    assert_eq!(
+        state.take_input_field_end_edit(),
+        vec![InputFieldEndEditEvent {
+            entity: field_entity,
+            text: String::from("ABE"),
+            canceled: false,
+        }]
+    );
+
+    input.queue_char_event('Z');
+    input.begin_frame(1.0 / 60.0);
+    state.handle_focus(&input, screen_size);
+    assert_eq!(
+        state.input_field(field_entity).map(|f| f.text.as_str()),
+        Some("ABEZ")
+    );
+    let _ = state.take_input_field_value_changed();
+
+    input.queue_key_event(KEY_ESCAPE, true);
+    input.begin_frame(1.0 / 60.0);
+    state.handle_focus(&input, screen_size);
+    input.queue_key_event(KEY_ESCAPE, false);
+    assert_eq!(
+        state.input_field(field_entity).map(|f| f.text.as_str()),
+        Some("ABE")
+    );
+    assert_eq!(
+        state.input_field(field_entity).map(|f| f.was_canceled),
+        Some(true)
+    );
+    assert_eq!(
+        state.take_input_field_value_changed(),
+        vec![InputFieldValueChangedEvent {
+            entity: field_entity,
+            text: String::from("ABE"),
+        }]
+    );
+    assert_eq!(
+        state.take_input_field_end_edit(),
+        vec![InputFieldEndEditEvent {
+            entity: field_entity,
+            text: String::from("ABE"),
+            canceled: true,
+        }]
+    );
+}
+
+#[test]
+fn input_field_headless_canvas_capture_renders_entered_text_and_caret() {
+    let screen_size = [320.0, 120.0];
+    let field_entity = EntityId::new(11);
+    let button_entity = EntityId::new(22);
+    let mut state = CanvasState::new(UiBinding {
+        canvases: Vec::new(),
+        rect_transforms: Vec::new(),
+        elements: vec![UiElementComponent::Button(
+            unitas_asset::scene::UiButtonComponent {
+                entity: button_entity,
+                interactable: true,
+                target_graphic: None,
+            },
+        )],
+        layout_groups: Vec::new(),
+        content_size_fitters: Vec::new(),
+    });
+    state.ensure_canvas_and_rect(field_entity, screen_size);
+    state.ensure_canvas_and_rect(button_entity, screen_size);
+    state.set_input_field(UiInputFieldComponent {
+        entity: field_entity,
+        placeholder: String::from("Type here"),
+        ..UiInputFieldComponent::default()
+    });
+    assert!(state.focus_input_field(field_entity, true));
+
+    let mut painter = GlyphTextPainter::new();
+    let empty_focused_items = state.draw_items(screen_size);
+    let mut empty_focused_img = Rgba8::new(320, 120);
+    {
+        let mut target = UiTarget {
+            image: &mut empty_focused_img,
+            ids: None,
+        };
+        composite_ui(&mut target, &empty_focused_items, 1, Some(&mut painter));
+    }
+
+    let mut input = InputState::new();
+    for ch in "Hello".chars() {
+        input.queue_char_event(ch);
+    }
+    input.begin_frame(1.0 / 60.0);
+    state.handle_focus(&input, screen_size);
+
+    let typed_focused_items = state.draw_items(screen_size);
+    assert!(typed_focused_items.len() >= 7);
+    let caret_item = &typed_focused_items[2];
+    assert!(caret_item.text.is_none());
+    assert_eq!(caret_item.color, [1.0, 1.0, 1.0, 1.0]);
+
+    let mut typed_focused_img = Rgba8::new(320, 120);
+    {
+        let mut target = UiTarget {
+            image: &mut typed_focused_img,
+            ids: None,
+        };
+        composite_ui(&mut target, &typed_focused_items, 1, Some(&mut painter));
+    }
+
+    assert_ne!(empty_focused_img.pixels, typed_focused_img.pixels);
+    let caret_cx = (caret_item.rect_px[0] + caret_item.rect_px[2] * 0.5) as u32;
+    let caret_cy = (caret_item.rect_px[1] + caret_item.rect_px[3] * 0.5) as u32;
+    assert_eq!(
+        typed_focused_img.get_pixel(caret_cx, caret_cy),
+        [255, 255, 255, 255]
+    );
+
+    let text_rect = typed_focused_items[1].rect_px;
+    let glyph_x0 = text_rect[0].floor() as u32;
+    let glyph_x1 = (caret_item.rect_px[0].floor() as u32).saturating_sub(1);
+    let glyph_y0 = text_rect[1].floor() as u32;
+    let glyph_y1 = (text_rect[1] + text_rect[3]).ceil() as u32;
+    let has_rendered_glyph_pixels = (glyph_y0..glyph_y1).any(|y| {
+        (glyph_x0..glyph_x1).any(|x| {
+            let px = typed_focused_img.get_pixel(x, y);
+            px[0] > 100 && px[1] > 100 && px[2] > 100
+        })
+    });
+    assert!(has_rendered_glyph_pixels);
+
+    state.set_focused_button(Some(button_entity));
+    let unfocused_items = state.draw_items(screen_size);
+    let mut unfocused_img = Rgba8::new(320, 120);
+    {
+        let mut target = UiTarget {
+            image: &mut unfocused_img,
+            ids: None,
+        };
+        composite_ui(&mut target, &unfocused_items, 1, Some(&mut painter));
+    }
+    assert_ne!(
+        unfocused_img.get_pixel(caret_cx, caret_cy),
+        [255, 255, 255, 255]
+    );
 }

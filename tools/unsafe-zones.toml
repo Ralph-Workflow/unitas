@@ -16,10 +16,10 @@ language = "rust"
 purpose = "Stable C ABI of the unitas runtime invoked from C# through P/Invoke; the exported C symbols are named with #[unsafe(export_name = ...)] at their definition site so the ABI survives compiler changes"
 invariants = [
   "C symbols are named only with #[unsafe(export_name = ...)] inside the ffi_export! macro; no linker-level symbol aliasing of mangled names",
-  "the crate contains three unsafe blocks: the two libloading calls in the runtime dylib loader, which are the only way to obtain a host-owned function pointer from a shared library, and the raw-pointer write that fills a caller-owned collision summary struct",
+  "the crate contains forty-one unsafe blocks: the two libloading calls in the runtime dylib loader, the raw-pointer write that fills a caller-owned collision summary struct, and thirty-eight single-operation unsafe blocks in the runtime FFmpeg video decoder for libloading library open/symbol lookup and C ABI calls/pointer reads across libavformat, libavcodec, libavutil, and libswscale",
   "exported symbol names are part of the cross-language ABI consumed by bridge/ and editor/ DllImports and must not drift",
 ]
-unsafe_block_count = 3
+unsafe_block_count = 41
 
 [[zones]]
 path = "crates/unitas-dotnet"

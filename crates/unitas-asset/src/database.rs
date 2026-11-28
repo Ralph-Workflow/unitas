@@ -1014,6 +1014,17 @@ fn build_preview_summary(
             );
         }
     }
+    if family == Some(RecognizedAssetFamily::Video) {
+        let label = rel_path.display().to_string();
+        if let Ok(meta) = crate::video_import::probe_video_stream(bytes, &label) {
+            return format!(
+                "{class_name} ({}x{}, {:.2} fps, {byte_size} bytes)",
+                meta.width,
+                meta.height,
+                meta.frame_rate()
+            );
+        }
+    }
     format!("{class_name} ({byte_size} bytes)")
 }
 

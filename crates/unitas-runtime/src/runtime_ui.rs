@@ -5,7 +5,10 @@ use unitas_asset::scene::{
 use unitas_core::EntityId;
 
 use super::{DEFAULT_UI_REFERENCE_RESOLUTION, Runtime};
-use crate::canvas::{TextLayoutConfig, UiDrawItem};
+use crate::canvas::{
+    InputFieldEndEditEvent, InputFieldValueChangedEvent, TextLayoutConfig, UiDrawItem,
+    UiInputFieldComponent,
+};
 
 impl Runtime {
     pub fn ui_screen_size(&self) -> [f32; 2] {
@@ -153,7 +156,140 @@ impl Runtime {
     }
 
     pub fn take_ui_clicks(&mut self) -> Vec<u64> {
-        std::mem::take(&mut self.pending_ui_clicks)
+        let mut clicks = std::mem::take(&mut self.pending_ui_clicks);
+        for scene in &mut self.scenes {
+            clicks.extend(scene.ui.canvas_mut().take_focused_clicks());
+        }
+        clicks
+    }
+
+    fn resolve_ui_scene_index(&self, entity: EntityId) -> Option<usize> {
+        self.scenes
+            .iter()
+            .position(|s| {
+                s.graph.contains(entity)
+                    || s.ui.input_field(entity).is_some()
+                    || s.ui
+                        .canvas()
+                        .binding()
+                        .rect_transforms
+                        .iter()
+                        .any(|r| r.entity == entity)
+            })
+            .or(self.active_scene)
+    }
+
+    pub fn set_ui_input_field(&mut self, field: UiInputFieldComponent) -> bool {
+        if field.entity.as_u64() == 0 {
+            return false;
+        }
+        let screen_size = self.ui_screen_size();
+        let Some(idx) = self.resolve_ui_scene_index(field.entity) else {
+            return false;
+        };
+        let Some(scene) = self.scenes.get_mut(idx) else {
+            return false;
+        };
+        scene.ui.set_input_field(field, screen_size);
+        true
+    }
+
+    pub fn ui_input_field(&self, object_id: u64) -> Option<&UiInputFieldComponent> {
+        if object_id == 0 {
+            return None;
+        }
+        let entity = EntityId::new(object_id);
+        self.scenes
+            .iter()
+            .find_map(|scene| scene.ui.input_field(entity))
+    }
+
+    pub fn set_ui_input_field_text(&mut self, object_id: u64, text: &str, notify: bool) -> bool {
+        if object_id == 0 {
+            return false;
+        }
+        let entity = EntityId::new(object_id);
+        self.scenes
+            .iter_mut()
+            .any(|scene| scene.ui.set_input_field_text(entity, text, notify))
+    }
+
+    pub fn set_ui_input_field_placeholder(&mut self, object_id: u64, placeholder: &str) -> bool {
+        if object_id == 0 {
+            return false;
+        }
+        let entity = EntityId::new(object_id);
+        self.scenes
+            .iter_mut()
+            .any(|scene| scene.ui.set_input_field_placeholder(entity, placeholder))
+    }
+
+    pub fn set_ui_input_field_interactable(&mut self, object_id: u64, interactable: bool) -> bool {
+        if object_id == 0 {
+            return false;
+        }
+        let entity = EntityId::new(object_id);
+        self.scenes
+            .iter_mut()
+            .any(|scene| scene.ui.set_input_field_interactable(entity, interactable))
+    }
+
+    pub fn set_ui_input_field_character_limit(&mut self, object_id: u64, limit: usize) -> bool {
+        if object_id == 0 {
+            return false;
+        }
+        let entity = EntityId::new(object_id);
+        self.scenes
+            .iter_mut()
+            .any(|scene| scene.ui.set_input_field_character_limit(entity, limit))
+    }
+
+    pub fn set_ui_input_field_caret_position(&mut self, object_id: u64, caret: usize) -> bool {
+        if object_id == 0 {
+            return false;
+        }
+        let entity = EntityId::new(object_id);
+        self.scenes
+            .iter_mut()
+            .any(|scene| scene.ui.set_input_field_caret_position(entity, caret))
+    }
+
+    pub fn focus_ui_input_field(&mut self, object_id: u64, focused: bool) -> bool {
+        if object_id == 0 {
+            return false;
+        }
+        let entity = EntityId::new(object_id);
+        self.scenes
+            .iter_mut()
+            .any(|scene| scene.ui.focus_input_field(entity, focused))
+    }
+
+    pub fn is_ui_input_field_focused(&self, object_id: u64) -> bool {
+        if object_id == 0 {
+            return false;
+        }
+        let entity = EntityId::new(object_id);
+        let screen_size = self.ui_screen_size();
+        self.scenes.iter().any(|scene| {
+            scene.ui.input_field(entity).is_some()
+                && scene.ui.canvas().focused_button(screen_size) == Some(entity)
+        })
+    }
+
+    pub fn take_ui_input_field_value_changed(&mut self) -> Vec<InputFieldValueChangedEvent> {
+        let mut events = Vec::new();
+        for scene in &mut self.scenes {
+            events.extend(scene.ui.take_input_field_value_changed());
+        }
+        events
+    }
+
+    pub fn take_ui_input_field_end_edit(&mut self) -> Vec<InputFieldEndEditEvent> {
+        let mut events = Vec::new();
+        for scene in &mut self.scenes {
+            events.extend(scene.ui.take_input_field_end_edit());
+        }
+        events
     }
 
     fn ui_reference_resolution(&self) -> [f32; 2] {
@@ -175,8 +311,20 @@ impl Runtime {
             .iter()
             .rev()
             .find_map(|scene| scene.ui.hit_button(screen_size, pointer.position));
+        let hovered_input_field = self
+            .scenes
+            .iter()
+            .rev()
+            .find_map(|scene| scene.ui.hit_input_field(screen_size, pointer.position));
         if pointer.primary_pressed {
             self.ui_pressed_button = hovered;
+            if let Some(field_entity) = hovered_input_field {
+                for scene in &mut self.scenes {
+                    if scene.ui.input_field(field_entity).is_some() {
+                        let _ = scene.ui.focus_input_field(field_entity, true);
+                    }
+                }
+            }
         }
         if self.ui_pressed_button.is_some() && self.ui_pressed_button != hovered {
             self.ui_pressed_button = None;
@@ -188,6 +336,19 @@ impl Runtime {
                 self.pending_ui_clicks.push(pressed.as_u64());
             }
             self.ui_pressed_button = None;
+        }
+        let mut active_scene_idx = None;
+        for (idx, scene) in self.scenes.iter().enumerate() {
+            let focusables = scene.ui.canvas().focusable_buttons(screen_size);
+            if !focusables.is_empty() {
+                active_scene_idx = Some(idx);
+                break;
+            }
+        }
+        if let Some(idx) = active_scene_idx
+            && let Some(scene) = self.scenes.get_mut(idx)
+        {
+            let _ = scene.ui.canvas_mut().handle_focus(&self.input, screen_size);
         }
     }
 }

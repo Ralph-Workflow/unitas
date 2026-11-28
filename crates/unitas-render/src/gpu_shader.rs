@@ -29,7 +29,20 @@ struct MaterialParams {
     params: vec4<f32>,
 };
 
+struct Light2DUniform {
+    color_intensity: vec4<f32>,
+    position_radius: vec4<f32>,
+    direction_angles: vec4<f32>,
+    kind: vec4<f32>,
+};
+
+struct Lights2D {
+    count: vec4<f32>,
+    lights: array<Light2DUniform, 16>,
+};
+
 @group(0) @binding(0) var<uniform> globals: Globals;
+@group(0) @binding(1) var<uniform> lights_2d: Lights2D;
 @group(1) @binding(0) var<uniform> inst: InstanceData;
 @group(2) @binding(0) var albedo_tex: texture_2d<f32>;
 @group(2) @binding(1) var normal_tex: texture_2d<f32>;
@@ -183,10 +196,54 @@ fn fs_unlit(vs_out: VertexOut) -> @location(0) vec4<f32> {
     return vec4<f32>(vs_out.color, vs_out.alpha);
 }
 
+fn sprite_light(world_xy: vec2<f32>) -> vec3<f32> {
+    var light = vec3<f32>(0.0);
+    let count = u32(round(lights_2d.count.x));
+    for (var index: u32 = 0u; index < 16u; index = index + 1u) {
+        if (index >= count) {
+            break;
+        }
+        let source = lights_2d.lights[index];
+        let intensity = source.color_intensity.w;
+        if (intensity <= 0.0) {
+            continue;
+        }
+        if (source.kind.x < 0.5) {
+            light = light + source.color_intensity.rgb * intensity;
+            continue;
+        }
+        let to_light = source.position_radius.xy - world_xy;
+        let distance = length(to_light);
+        let inner = source.position_radius.z;
+        let outer = source.position_radius.w;
+        var falloff = 0.0;
+        if (distance <= inner) {
+            falloff = 1.0;
+        } else if (outer > inner && distance < outer) {
+            falloff = 1.0 - (distance - inner) / (outer - inner);
+        }
+        if (source.kind.x >= 1.5) {
+            let to_fragment = -to_light;
+            let span = length(to_fragment);
+            let facing = select(0.0, dot(to_fragment / span, source.direction_angles.xy), span > 1e-8);
+            let cos_outer = cos(radians(source.direction_angles.w));
+            let cos_inner = cos(radians(source.direction_angles.z));
+            var cone = 0.0;
+            if (facing >= cos_outer) {
+                cone = clamp((facing - cos_outer) / max(cos_inner - cos_outer, 1e-5), 0.0, 1.0);
+            }
+            falloff = falloff * cone;
+        }
+        light = light + source.color_intensity.rgb * (intensity * falloff);
+    }
+    return light;
+}
+
 @fragment
 fn fs_sprite(vs_out: VertexOut) -> @location(0) vec4<f32> {
     let texel = textureSample(albedo_tex, material_sampler, vs_out.uv);
-    return vec4<f32>(texel.rgb * vs_out.color, texel.a * vs_out.alpha);
+    let light = sprite_light(vs_out.world_pos.xy);
+    return vec4<f32>(texel.rgb * vs_out.color * (vec3<f32>(1.0) + light), texel.a * vs_out.alpha);
 }
 
 struct CaptureOut {
@@ -214,7 +271,8 @@ fn fs_capture_unlit(vs_out: VertexOut) -> CaptureOut {
 fn fs_capture_sprite(vs_out: VertexOut) -> CaptureOut {
     var out: CaptureOut;
     let texel = textureSample(albedo_tex, material_sampler, vs_out.uv);
-    out.color = vec4<f32>(texel.rgb * vs_out.color, texel.a * vs_out.alpha);
+    let light = sprite_light(vs_out.world_pos.xy);
+    out.color = vec4<f32>(texel.rgb * vs_out.color * (vec3<f32>(1.0) + light), texel.a * vs_out.alpha);
     out.id = 0u;
     return out;
 }

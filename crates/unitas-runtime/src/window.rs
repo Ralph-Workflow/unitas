@@ -600,6 +600,11 @@ impl ApplicationHandler for WindowApp<'_> {
                     return;
                 }
                 apply_key_event(self.runtime.input_mut(), event.physical_key, event.state);
+                if event.state == ElementState::Pressed
+                    && let Some(text) = event.text.as_deref()
+                {
+                    apply_text_input(self.runtime.input_mut(), text);
+                }
             }
             WindowEvent::MouseInput { state, button, .. } => {
                 apply_mouse_button(self.runtime.input_mut(), button, state);
@@ -673,6 +678,8 @@ pub fn key_code_from_winit(code: KeyCode) -> Option<u32> {
         KeyCode::ArrowDown => KEY_DOWN_ARROW,
         KeyCode::ArrowRight => KEY_RIGHT_ARROW,
         KeyCode::ArrowLeft => KEY_LEFT_ARROW,
+        KeyCode::Home => crate::canvas::KEY_HOME,
+        KeyCode::End => crate::canvas::KEY_END,
         KeyCode::ShiftLeft => KEY_LEFT_SHIFT,
         KeyCode::ShiftRight => KEY_RIGHT_SHIFT,
         KeyCode::ControlLeft => KEY_LEFT_CONTROL,
@@ -703,6 +710,14 @@ pub fn apply_key_event(input: &mut InputState, physical_key: PhysicalKey, state:
         return;
     };
     input.inject_key(key, state == ElementState::Pressed);
+}
+
+pub fn apply_text_input(input: &mut InputState, text: &str) {
+    for ch in text.chars() {
+        if !ch.is_control() {
+            input.queue_char_event(ch);
+        }
+    }
 }
 
 pub fn apply_mouse_button(input: &mut InputState, button: MouseButton, state: ElementState) {

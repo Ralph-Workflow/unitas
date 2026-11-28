@@ -1,4 +1,6 @@
+#[macro_use]
 mod abi;
+pub mod abi_video;
 pub mod animation;
 pub mod canvas;
 pub mod capture;
@@ -18,6 +20,7 @@ pub mod presenter;
 pub mod resources;
 mod runtime;
 mod runtime_objects;
+mod runtime_script;
 mod scene_query;
 pub mod scriptable_object;
 pub mod scripting;
@@ -25,9 +28,11 @@ pub mod terrain;
 pub mod timeline;
 pub mod trails;
 pub mod ui;
+pub mod video;
 pub mod window;
 
 pub use abi::*;
+pub use abi_video::*;
 pub use animation::{AnimationRuntimeDiagnostic, AnimationWorld, EntityAnimatorEntry};
 pub use canvas::{CanvasRect, CanvasState, SpriteRef, UiDrawItem};
 #[cfg(not(target_arch = "wasm32"))]
@@ -57,3 +62,7 @@ pub use runtime::{
     Runtime, ScriptInstance, unitas_runtime_bind_destroy_channel, unitas_runtime_mark_destroyed,
 };
 pub use unitas_physics::BodyRole;
+pub use video::{
+    DecodedVideoClip, VideoDecodeError, VideoEvents, VideoPlayerSnapshot, VideoPlayerState,
+    decode_cooked_video, ffmpeg_libraries_available,
+};

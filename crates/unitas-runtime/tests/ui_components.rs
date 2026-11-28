@@ -4,6 +4,7 @@
 use std::error::Error;
 use std::path::{Path, PathBuf};
 
+use unitas_runtime::input::{KEY_RETURN, KEY_TAB};
 use unitas_runtime::{
     PRIMARY_MOUSE_BUTTON, Runtime, test_read_path_buffer, test_read_render_buffer,
     test_write_path_buffer, unitas_runtime_input_mouse_button_event,
@@ -318,6 +319,33 @@ fn a_click_away_from_the_button_is_not_dispatched() -> Result<(), Box<dyn Error>
     runtime.input_mouse_button_event(PRIMARY_MOUSE_BUTTON, false);
     runtime.tick(TICK_DELTA)?;
     assert!(runtime.take_ui_clicks().is_empty());
+
+    let _ = std::fs::remove_dir_all(&temp_dir);
+    Ok(())
+}
+
+#[test]
+fn keyboard_focus_and_enter_submit_the_focused_button() -> Result<(), Box<dyn Error>> {
+    let (temp_dir, scene_path) = write_scene("focus")?;
+    let mut runtime = Runtime::new()?;
+    runtime.load_scene(&scene_path)?;
+    let button = entity_id(&runtime, "PlayButton")?;
+
+    runtime.tick(TICK_DELTA)?;
+    runtime.input_key_event(KEY_TAB, true);
+    runtime.tick(TICK_DELTA)?;
+    runtime.input_key_event(KEY_TAB, false);
+    runtime.tick(TICK_DELTA)?;
+    assert!(
+        runtime.take_ui_clicks().is_empty(),
+        "moving the focus onto a button must not click it"
+    );
+
+    runtime.input_key_event(KEY_RETURN, true);
+    runtime.tick(TICK_DELTA)?;
+    runtime.input_key_event(KEY_RETURN, false);
+    runtime.tick(TICK_DELTA)?;
+    assert_eq!(runtime.take_ui_clicks(), vec![button]);
 
     let _ = std::fs::remove_dir_all(&temp_dir);
     Ok(())

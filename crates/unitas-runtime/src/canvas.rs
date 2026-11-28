@@ -15,12 +15,83 @@ use unitas_render::ui_pass::{
 use crate::input::{
     GAMEPAD_AXIS_LEFT_X, GAMEPAD_AXIS_LEFT_Y, GAMEPAD_BUTTON_DPAD_DOWN, GAMEPAD_BUTTON_DPAD_LEFT,
     GAMEPAD_BUTTON_DPAD_RIGHT, GAMEPAD_BUTTON_DPAD_UP, GAMEPAD_BUTTON_SOUTH, InputState,
-    KEY_DOWN_ARROW, KEY_LEFT_ARROW, KEY_LEFT_SHIFT, KEY_RETURN, KEY_RIGHT_ARROW, KEY_RIGHT_SHIFT,
-    KEY_SPACE, KEY_TAB, KEY_UP_ARROW, STATE_PRESSED,
+    KEY_BACKSPACE, KEY_DELETE, KEY_DOWN_ARROW, KEY_ESCAPE, KEY_LEFT_ARROW, KEY_LEFT_SHIFT,
+    KEY_RETURN, KEY_RIGHT_ARROW, KEY_RIGHT_SHIFT, KEY_SPACE, KEY_TAB, KEY_UP_ARROW, STATE_PRESSED,
 };
 use crate::ui::UiTextItem;
 
 pub use unitas_render::ui_pass::SpriteRef;
+
+pub const KEY_HOME: u32 = 278;
+pub const KEY_END: u32 = 279;
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct UiInputFieldComponent {
+    pub entity: EntityId,
+    pub text: String,
+    pub placeholder: String,
+    pub caret_position: usize,
+    pub interactable: bool,
+    pub character_limit: usize,
+    pub color: [f32; 4],
+    pub placeholder_color: [f32; 4],
+    pub background_color: [f32; 4],
+    pub font_size: f32,
+    pub enabled: bool,
+    pub editing_original_text: Option<String>,
+    pub was_canceled: bool,
+}
+
+impl Default for UiInputFieldComponent {
+    fn default() -> Self {
+        Self {
+            entity: EntityId::new(0),
+            text: String::new(),
+            placeholder: String::new(),
+            caret_position: 0,
+            interactable: true,
+            character_limit: 0,
+            color: [1.0, 1.0, 1.0, 1.0],
+            placeholder_color: [0.6, 0.6, 0.6, 0.85],
+            background_color: [0.16, 0.18, 0.24, 1.0],
+            font_size: 16.0,
+            enabled: true,
+            editing_original_text: None,
+            was_canceled: false,
+        }
+    }
+}
+
+impl UiInputFieldComponent {
+    pub fn clamp_caret(text: &str, pos: usize) -> usize {
+        let clamped = pos.min(text.len());
+        if text.is_char_boundary(clamped) {
+            return clamped;
+        }
+        let mut idx = clamped;
+        while idx > 0 && !text.is_char_boundary(idx) {
+            idx -= 1;
+        }
+        idx
+    }
+
+    pub fn char_count(&self) -> usize {
+        self.text.chars().count()
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct InputFieldValueChangedEvent {
+    pub entity: EntityId,
+    pub text: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct InputFieldEndEditEvent {
+    pub entity: EntityId,
+    pub text: String,
+    pub canceled: bool,
+}
 
 const MAX_HIERARCHY_DEPTH: usize = 64;
 const FOCUS_BORDER_THICKNESS: f32 = 2.0;
@@ -368,6 +439,10 @@ pub struct CanvasState {
     pending_clicks: Vec<u64>,
     element_enabled: HashMap<EntityId, bool>,
     button_interactable: HashMap<EntityId, bool>,
+    input_fields: HashMap<EntityId, UiInputFieldComponent>,
+    input_field_order: Vec<EntityId>,
+    pending_value_changed: Vec<InputFieldValueChangedEvent>,
+    pending_end_edit: Vec<InputFieldEndEditEvent>,
     layout_group_overrides: RwLock<HashMap<EntityId, UiLayoutGroupComponent>>,
     fitter_overrides: RwLock<HashMap<EntityId, UiContentSizeFitterComponent>>,
 }
@@ -387,6 +462,10 @@ impl CanvasState {
             pending_clicks: Vec::new(),
             element_enabled: HashMap::new(),
             button_interactable: HashMap::new(),
+            input_fields: HashMap::new(),
+            input_field_order: Vec::new(),
+            pending_value_changed: Vec::new(),
+            pending_end_edit: Vec::new(),
             layout_group_overrides: RwLock::new(HashMap::new()),
             fitter_overrides: RwLock::new(HashMap::new()),
         }
@@ -394,6 +473,170 @@ impl CanvasState {
 
     pub fn binding(&self) -> &UiBinding {
         &self.binding
+    }
+
+    pub fn ensure_canvas_and_rect(&mut self, entity: EntityId, screen_size: [f32; 2]) {
+        if self.binding.canvases.is_empty() {
+            let canvas_entity = EntityId::new(u64::MAX - 1);
+            self.binding.canvases.push(CanvasComponent {
+                entity: canvas_entity,
+                render_mode: CanvasRenderMode::ScreenSpaceOverlay,
+                sorting_order: 0,
+                scaler: None,
+            });
+            let canvas_rect = RectTransformComponent {
+                entity: canvas_entity,
+                parent: None,
+                anchor_min: [0.5, 0.5],
+                anchor_max: [0.5, 0.5],
+                anchored_position: [0.0, 0.0],
+                size_delta: screen_size,
+                pivot: [0.5, 0.5],
+            };
+            self.binding.rect_transforms.push(canvas_rect.clone());
+            self.rects.insert(canvas_entity, canvas_rect);
+        }
+        if !self.rects.contains_key(&entity) {
+            let parent = self.binding.canvases.first().map(|c| c.entity);
+            let rect = RectTransformComponent {
+                entity,
+                parent,
+                anchor_min: [0.5, 0.5],
+                anchor_max: [0.5, 0.5],
+                anchored_position: [0.0, 0.0],
+                size_delta: [240.0, 36.0],
+                pivot: [0.5, 0.5],
+            };
+            self.binding.rect_transforms.push(rect.clone());
+            self.rects.insert(entity, rect);
+        }
+    }
+
+    pub fn set_input_field(&mut self, mut field: UiInputFieldComponent) {
+        field.caret_position =
+            UiInputFieldComponent::clamp_caret(&field.text, field.caret_position);
+        let entity = field.entity;
+        if let Some(existing) = self.input_fields.get(&entity)
+            && field.editing_original_text.is_none()
+        {
+            field.editing_original_text = existing.editing_original_text.clone();
+        }
+        if !self.input_field_order.contains(&entity) {
+            self.input_field_order.push(entity);
+        }
+        self.input_fields.insert(entity, field);
+    }
+
+    pub fn input_field(&self, entity: EntityId) -> Option<&UiInputFieldComponent> {
+        self.input_fields.get(&entity)
+    }
+
+    pub fn input_field_mut(&mut self, entity: EntityId) -> Option<&mut UiInputFieldComponent> {
+        self.input_fields.get_mut(&entity)
+    }
+
+    pub fn set_input_field_text(&mut self, entity: EntityId, text: &str, notify: bool) -> bool {
+        let Some(field) = self.input_fields.get_mut(&entity) else {
+            return false;
+        };
+        let mut truncated = text.to_string();
+        if field.character_limit > 0 && truncated.chars().count() > field.character_limit {
+            truncated = truncated.chars().take(field.character_limit).collect();
+        }
+        let changed = field.text != truncated;
+        field.text = truncated;
+        field.caret_position = field.text.len();
+        if changed && notify {
+            self.pending_value_changed
+                .push(InputFieldValueChangedEvent {
+                    entity,
+                    text: field.text.clone(),
+                });
+        }
+        true
+    }
+
+    pub fn set_input_field_placeholder(&mut self, entity: EntityId, placeholder: &str) -> bool {
+        let Some(field) = self.input_fields.get_mut(&entity) else {
+            return false;
+        };
+        field.placeholder = placeholder.to_string();
+        true
+    }
+
+    pub fn set_input_field_interactable(&mut self, entity: EntityId, interactable: bool) -> bool {
+        let Some(field) = self.input_fields.get_mut(&entity) else {
+            return false;
+        };
+        field.interactable = interactable;
+        if !interactable && self.focused == Some(entity) {
+            field.editing_original_text = None;
+            self.focused = None;
+        }
+        true
+    }
+
+    pub fn set_input_field_character_limit(&mut self, entity: EntityId, limit: usize) -> bool {
+        let Some(field) = self.input_fields.get_mut(&entity) else {
+            return false;
+        };
+        field.character_limit = limit;
+        if limit > 0 && field.text.chars().count() > limit {
+            field.text = field.text.chars().take(limit).collect();
+            field.caret_position =
+                UiInputFieldComponent::clamp_caret(&field.text, field.caret_position);
+        }
+        true
+    }
+
+    pub fn set_input_field_caret_position(&mut self, entity: EntityId, caret: usize) -> bool {
+        let Some(field) = self.input_fields.get_mut(&entity) else {
+            return false;
+        };
+        field.caret_position = UiInputFieldComponent::clamp_caret(&field.text, caret);
+        true
+    }
+
+    pub fn focus_input_field(&mut self, entity: EntityId, focused: bool) -> bool {
+        let Some(field) = self.input_fields.get_mut(&entity) else {
+            return false;
+        };
+        if focused {
+            if !field.interactable || !field.enabled {
+                return false;
+            }
+            if field.editing_original_text.is_none() {
+                field.editing_original_text = Some(field.text.clone());
+            }
+            field.was_canceled = false;
+            field.caret_position =
+                UiInputFieldComponent::clamp_caret(&field.text, field.text.len());
+            self.focused = Some(entity);
+            true
+        } else {
+            let was_editing = field.editing_original_text.take().is_some();
+            if self.focused == Some(entity) {
+                self.focused = None;
+            }
+            if was_editing {
+                let text = field.text.clone();
+                let canceled = field.was_canceled;
+                self.pending_end_edit.push(InputFieldEndEditEvent {
+                    entity,
+                    text,
+                    canceled,
+                });
+            }
+            true
+        }
+    }
+
+    pub fn take_input_field_value_changed(&mut self) -> Vec<InputFieldValueChangedEvent> {
+        std::mem::take(&mut self.pending_value_changed)
+    }
+
+    pub fn take_input_field_end_edit(&mut self) -> Vec<InputFieldEndEditEvent> {
+        std::mem::take(&mut self.pending_end_edit)
     }
 
     pub fn set_element_enabled(&mut self, entity: EntityId, enabled: bool) {
@@ -405,6 +648,19 @@ impl CanvasState {
     }
 
     pub fn set_focused_button(&mut self, entity: Option<EntityId>) {
+        if let Some(prev) = self.focused
+            && Some(prev) != entity
+            && let Some(prev_field) = self.input_fields.get_mut(&prev)
+        {
+            prev_field.editing_original_text = None;
+        }
+        if let Some(target) = entity
+            && let Some(field) = self.input_fields.get_mut(&target)
+            && field.editing_original_text.is_none()
+        {
+            field.editing_original_text = Some(field.text.clone());
+            field.was_canceled = false;
+        }
         self.focused = entity;
     }
 
@@ -438,6 +694,14 @@ impl CanvasState {
                 focusables.push(button.entity);
             }
         }
+        for &entity in &self.input_field_order {
+            if let Some(field) = self.input_fields.get(&entity)
+                && self.is_input_field_focusable(field, screen_size)
+                && !focusables.contains(&entity)
+            {
+                focusables.push(entity);
+            }
+        }
         focusables
     }
 
@@ -455,6 +719,33 @@ impl CanvasState {
     pub fn hit_test_button(&self, position: (f32, f32), screen_size: [f32; 2]) -> Option<EntityId> {
         let (px, py) = position;
         for entity in self.focusable_buttons(screen_size).into_iter().rev() {
+            if self.input_fields.contains_key(&entity) {
+                continue;
+            }
+            let Some((rect, _)) = self.element_rect(entity, screen_size) else {
+                continue;
+            };
+            if px >= rect[0] && py >= rect[1] && px <= rect[0] + rect[2] && py <= rect[1] + rect[3]
+            {
+                return Some(entity);
+            }
+        }
+        None
+    }
+
+    pub fn hit_test_input_field(
+        &self,
+        position: (f32, f32),
+        screen_size: [f32; 2],
+    ) -> Option<EntityId> {
+        let (px, py) = position;
+        for &entity in self.input_field_order.iter().rev() {
+            let Some(field) = self.input_fields.get(&entity) else {
+                continue;
+            };
+            if !self.is_input_field_focusable(field, screen_size) {
+                continue;
+            }
             let Some((rect, _)) = self.element_rect(entity, screen_size) else {
                 continue;
             };
@@ -472,6 +763,13 @@ impl CanvasState {
             .focused
             .filter(|id| focusables.contains(id))
             .or_else(|| focusables.first().copied());
+        if let Some(target) = current
+            && let Some(field) = self.input_fields.get_mut(&target)
+            && field.editing_original_text.is_none()
+        {
+            field.editing_original_text = Some(field.text.clone());
+            field.was_canceled = false;
+        }
         self.focused = current;
 
         let stick_x = input.gamepad_axis(GAMEPAD_AXIS_LEFT_X);
@@ -487,13 +785,28 @@ impl CanvasState {
                 input.is_key_down(KEY_LEFT_SHIFT) || input.is_key_down(KEY_RIGHT_SHIFT);
             if input.is_key_pressed(KEY_TAB) {
                 let step = if shift_down { -1 } else { 1 };
-                self.focused = Some(step_focus(&focusables, current, step));
-            } else if let Some(direction) =
-                navigation_direction(input, [prev_x, prev_y], [horizontal, vertical])
-            {
-                self.focused =
-                    Some(self.navigate_direction(&focusables, current, direction, screen_size));
+                let next = step_focus(&focusables, current, step);
+                self.set_focused_button(Some(next));
+                let _ = input.flush_queued_chars();
+                return Vec::new();
             }
+        }
+
+        if let Some(focused_id) = self.focused
+            && self.input_fields.contains_key(&focused_id)
+        {
+            self.handle_input_field_editing(focused_id, input);
+            return Vec::new();
+        }
+
+        let _ = input.flush_queued_chars();
+
+        if !focusables.is_empty()
+            && let Some(direction) =
+                navigation_direction(input, [prev_x, prev_y], [horizontal, vertical])
+        {
+            let next = self.navigate_direction(&focusables, current, direction, screen_size);
+            self.set_focused_button(Some(next));
         }
 
         let submit = input
@@ -503,11 +816,101 @@ impl CanvasState {
             || input.is_key_pressed(KEY_SPACE)
             || input.is_gamepad_button_pressed(GAMEPAD_BUTTON_SOUTH);
         let mut clicked = Vec::new();
-        if submit && let Some(entity) = self.focused {
+        if submit
+            && let Some(entity) = self.focused
+            && !self.input_fields.contains_key(&entity)
+        {
             self.pending_clicks.push(entity.as_u64());
             clicked.push(entity);
         }
         clicked
+    }
+
+    fn handle_input_field_editing(&mut self, entity: EntityId, input: &InputState) {
+        let chars = input.flush_queued_chars();
+        let Some(field) = self.input_fields.get_mut(&entity) else {
+            return;
+        };
+        if field.editing_original_text.is_none() {
+            field.editing_original_text = Some(field.text.clone());
+            field.was_canceled = false;
+        }
+        field.caret_position =
+            UiInputFieldComponent::clamp_caret(&field.text, field.caret_position);
+
+        for ch in chars {
+            if field.character_limit == 0 || field.text.chars().count() < field.character_limit {
+                field.text.insert(field.caret_position, ch);
+                field.caret_position += ch.len_utf8();
+                self.pending_value_changed
+                    .push(InputFieldValueChangedEvent {
+                        entity,
+                        text: field.text.clone(),
+                    });
+            }
+        }
+
+        if input.is_key_pressed(KEY_BACKSPACE) && field.caret_position > 0 {
+            let prev = prev_char_boundary(&field.text, field.caret_position);
+            field.text.replace_range(prev..field.caret_position, "");
+            field.caret_position = prev;
+            self.pending_value_changed
+                .push(InputFieldValueChangedEvent {
+                    entity,
+                    text: field.text.clone(),
+                });
+        }
+
+        if input.is_key_pressed(KEY_DELETE) && field.caret_position < field.text.len() {
+            let next = next_char_boundary(&field.text, field.caret_position);
+            field.text.replace_range(field.caret_position..next, "");
+            self.pending_value_changed
+                .push(InputFieldValueChangedEvent {
+                    entity,
+                    text: field.text.clone(),
+                });
+        }
+
+        if input.is_key_pressed(KEY_LEFT_ARROW) && field.caret_position > 0 {
+            field.caret_position = prev_char_boundary(&field.text, field.caret_position);
+        }
+        if input.is_key_pressed(KEY_RIGHT_ARROW) && field.caret_position < field.text.len() {
+            field.caret_position = next_char_boundary(&field.text, field.caret_position);
+        }
+        if input.is_key_pressed(KEY_HOME) {
+            field.caret_position = 0;
+        }
+        if input.is_key_pressed(KEY_END) {
+            field.caret_position = field.text.len();
+        }
+
+        if input.is_key_pressed(KEY_RETURN) {
+            field.was_canceled = false;
+            field.editing_original_text = Some(field.text.clone());
+            self.pending_end_edit.push(InputFieldEndEditEvent {
+                entity,
+                text: field.text.clone(),
+                canceled: false,
+            });
+        } else if input.is_key_pressed(KEY_ESCAPE) {
+            field.was_canceled = true;
+            if let Some(original) = field.editing_original_text.clone()
+                && field.text != original
+            {
+                field.text = original;
+                field.caret_position = field.text.len();
+                self.pending_value_changed
+                    .push(InputFieldValueChangedEvent {
+                        entity,
+                        text: field.text.clone(),
+                    });
+            }
+            self.pending_end_edit.push(InputFieldEndEditEvent {
+                entity,
+                text: field.text.clone(),
+                canceled: true,
+            });
+        }
     }
 
     pub fn draw_items(&self, screen_size: [f32; 2]) -> Vec<UiDrawItem> {
@@ -595,7 +998,27 @@ impl CanvasState {
                 UiElementComponent::Button(_) => {}
             }
         }
-        if let Some(focused_id) = self.focused_button(screen_size)
+        let focused_id = self.focused_button(screen_size);
+        for &entity in &self.input_field_order {
+            let Some(field) = self.input_fields.get(&entity) else {
+                continue;
+            };
+            if !self.is_element_enabled(entity, field.enabled) || !self.is_hierarchy_visible(entity)
+            {
+                continue;
+            }
+            let Some((rect_px, scale)) = resolved_rects.get(&entity).copied() else {
+                continue;
+            };
+            self.push_input_field_draw_items(
+                field,
+                rect_px,
+                scale,
+                focused_id == Some(entity),
+                &mut items,
+            );
+        }
+        if let Some(focused_id) = focused_id
             && let Some((rect_px, scale)) = resolved_rects.get(&focused_id).copied()
         {
             let thickness = (FOCUS_BORDER_THICKNESS * scale).round().max(1.0);
@@ -611,6 +1034,95 @@ impl CanvasState {
             }
         }
         items
+    }
+
+    fn push_input_field_draw_items(
+        &self,
+        field: &UiInputFieldComponent,
+        rect_px: [f32; 4],
+        scale: f32,
+        is_focused: bool,
+        items: &mut Vec<UiDrawItem>,
+    ) {
+        let has_image =
+            self.binding.elements.iter().any(
+                |el| matches!(el, UiElementComponent::Image(img) if img.entity == field.entity),
+            );
+        if !has_image {
+            items.push(UiDrawItem {
+                rect_px,
+                color: field.background_color,
+                sprite: None,
+                text: None,
+                text_layout: TextLayoutConfig::default(),
+                text_clip_rect: None,
+            });
+        }
+        let pad_x = (6.0 * scale).min(rect_px[2] * 0.25);
+        let pad_y = (4.0 * scale).min(rect_px[3] * 0.2);
+        let text_rect = [
+            rect_px[0] + pad_x,
+            rect_px[1] + pad_y,
+            (rect_px[2] - 2.0 * pad_x).max(0.0),
+            (rect_px[3] - 2.0 * pad_y).max(0.0),
+        ];
+        let font_px = (field.font_size * scale).max(1.0);
+        let (display_text, text_color) = if !field.text.is_empty() {
+            (field.text.as_str(), field.color)
+        } else {
+            (field.placeholder.as_str(), field.placeholder_color)
+        };
+        if !display_text.is_empty() {
+            items.push(UiDrawItem {
+                rect_px: text_rect,
+                color: text_color,
+                sprite: None,
+                text: Some(UiTextItem {
+                    text: display_text.to_string(),
+                    x: text_rect[0],
+                    y: text_rect[1],
+                    size_px: font_px,
+                    color: text_color,
+                }),
+                text_layout: TextLayoutConfig::default(),
+                text_clip_rect: Some(rect_px),
+            });
+        }
+        if is_focused {
+            let caret_idx = UiInputFieldComponent::clamp_caret(&field.text, field.caret_position);
+            let prefix = &field.text[..caret_idx];
+            let prefix_width = measure_text_preferred(prefix, font_px, field.color)[0];
+            let caret_w = (2.0 * scale).round().max(2.0);
+            let caret_h = font_px.min(text_rect[3]).max(4.0);
+            let max_x = (text_rect[0] + text_rect[2] - caret_w).max(text_rect[0]);
+            let caret_x = (text_rect[0] + prefix_width).min(max_x);
+            let caret_y = text_rect[1];
+            items.push(UiDrawItem {
+                rect_px: [caret_x, caret_y, caret_w, caret_h],
+                color: field.color,
+                sprite: None,
+                text: None,
+                text_layout: TextLayoutConfig::default(),
+                text_clip_rect: Some(rect_px),
+            });
+        }
+    }
+
+    fn is_input_field_focusable(
+        &self,
+        field: &UiInputFieldComponent,
+        screen_size: [f32; 2],
+    ) -> bool {
+        if !field.interactable || !self.is_element_enabled(field.entity, field.enabled) {
+            return false;
+        }
+        let Some((rect_px, _)) = self.element_rect(field.entity, screen_size) else {
+            return false;
+        };
+        if rect_px[2] <= 0.0 || rect_px[3] <= 0.0 {
+            return false;
+        }
+        self.is_hierarchy_visible(field.entity)
     }
 
     fn is_element_enabled(&self, entity: EntityId, default_enabled: bool) -> bool {
@@ -981,6 +1493,30 @@ fn step_focus(focusables: &[EntityId], current: Option<EntityId>, step: i32) -> 
         .unwrap_or(0);
     let next = (index as i32 + step).rem_euclid(focusables.len() as i32) as usize;
     focusables[next]
+}
+
+fn prev_char_boundary(text: &str, pos: usize) -> usize {
+    let mut idx = pos.min(text.len());
+    if idx == 0 {
+        return 0;
+    }
+    idx -= 1;
+    while idx > 0 && !text.is_char_boundary(idx) {
+        idx -= 1;
+    }
+    idx
+}
+
+fn next_char_boundary(text: &str, pos: usize) -> usize {
+    let mut idx = pos.min(text.len());
+    if idx >= text.len() {
+        return text.len();
+    }
+    idx += 1;
+    while idx < text.len() && !text.is_char_boundary(idx) {
+        idx += 1;
+    }
+    idx
 }
 
 fn navigation_direction(

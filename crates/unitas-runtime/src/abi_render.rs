@@ -1,16 +1,17 @@
 use std::path::PathBuf;
 
 use unitas_asset::scene::SpriteDrawMode;
+use unitas_render::Light2DKind;
 
 use super::{
     CAMERA_BLOB_FLOATS, CAMERA_BLOB_SIZE, EntityId, RenderCameraParams, Vec3, path_buffer_offset,
     read_f32_le, read_u32_le, with_runtime_state,
 };
 
-/// The floats a sprite state travels in: colour, sorting layer and order, the
-/// flips, the enabled flag, the texture flag and the texture size in pixels.
 const SPRITE_STATE_FLOATS: usize = 12;
 const SPRITE_STATE_BYTES: usize = SPRITE_STATE_FLOATS * 4;
+const LIGHT2D_STATE_FLOATS: usize = 14;
+const LIGHT2D_STATE_BYTES: usize = LIGHT2D_STATE_FLOATS * 4;
 
 ffi_export! {
 pub extern "C" fn unitas_runtime_render_buffer(handle: u64, capacity: u64) -> u64 {
@@ -752,6 +753,328 @@ pub extern "C" fn unitas_runtime_sprite_get_state(
             state.set_error("not found: the entity draws no sprite");
             return -3;
         };
+        for (index, value) in values.iter().enumerate() {
+            let start = offset + index * 4;
+            state.path_buffer[start..start + 4].copy_from_slice(&value.to_le_bytes());
+        }
+        state.clear_error();
+        0
+    }) {
+        Ok(code) => code,
+        Err(code) => code,
+    }
+}
+}
+
+fn light2d_kind_from_u32(value: u32) -> Option<Light2DKind> {
+    match value {
+        0 => Some(Light2DKind::Global),
+        1 => Some(Light2DKind::Point),
+        2 => Some(Light2DKind::Spot),
+        _ => None,
+    }
+}
+
+fn light2d_kind_to_u32(kind: Light2DKind) -> u32 {
+    match kind {
+        Light2DKind::Global => 0,
+        Light2DKind::Point => 1,
+        Light2DKind::Spot => 2,
+    }
+}
+
+ffi_export! {
+pub extern "C" fn unitas_runtime_render_light2d_create(handle: u64, entity: u64) -> u64 {
+    with_runtime_state(handle, |state| {
+        let entity_id = (entity != 0).then(|| EntityId::new(entity));
+        state.clear_error();
+        state.runtime.create_render_light_2d(entity_id)
+    })
+    .unwrap_or_default()
+}
+}
+
+ffi_export! {
+pub extern "C" fn unitas_runtime_render_light2d_destroy(handle: u64, light: u64) -> i32 {
+    match with_runtime_state(handle, |state| {
+        if state.runtime.destroy_render_light_2d(light) {
+            state.clear_error();
+            0
+        } else {
+            state.set_error("-1 unknown handle: light2d handle is not valid");
+            -1
+        }
+    }) {
+        Ok(code) => code,
+        Err(code) => code,
+    }
+}
+}
+
+ffi_export! {
+pub extern "C" fn unitas_runtime_render_light2d_set_kind(
+    handle: u64,
+    light: u64,
+    kind: u32,
+) -> i32 {
+    let Some(parsed) = light2d_kind_from_u32(kind) else {
+        return match with_runtime_state(handle, |state| {
+            state.set_error("-2 invalid argument: light2d kind is out of range");
+            -2
+        }) {
+            Ok(code) => code,
+            Err(code) => code,
+        };
+    };
+    match with_runtime_state(handle, |state| {
+        if state.runtime.set_render_light_2d_kind(light, parsed) {
+            state.clear_error();
+            0
+        } else {
+            state.set_error("-1 unknown handle: light2d handle is not valid");
+            -1
+        }
+    }) {
+        Ok(code) => code,
+        Err(code) => code,
+    }
+}
+}
+
+ffi_export! {
+pub extern "C" fn unitas_runtime_render_light2d_get_kind(handle: u64, light: u64) -> i32 {
+    match with_runtime_state(handle, |state| {
+        if let Some(entry) = state.runtime.render_light_2d(light) {
+            state.clear_error();
+            light2d_kind_to_u32(entry.kind) as i32
+        } else {
+            state.set_error("-1 unknown handle: light2d handle is not valid");
+            -1
+        }
+    }) {
+        Ok(code) => code,
+        Err(code) => code,
+    }
+}
+}
+
+ffi_export! {
+pub extern "C" fn unitas_runtime_render_light2d_set_color(
+    handle: u64,
+    light: u64,
+    red: f32,
+    green: f32,
+    blue: f32,
+) -> i32 {
+    if !red.is_finite() || !green.is_finite() || !blue.is_finite() {
+        return -2;
+    }
+    match with_runtime_state(handle, |state| {
+        if state
+            .runtime
+            .set_render_light_2d_color(light, [red, green, blue])
+        {
+            state.clear_error();
+            0
+        } else {
+            state.set_error("-1 unknown handle: light2d handle is not valid");
+            -1
+        }
+    }) {
+        Ok(code) => code,
+        Err(code) => code,
+    }
+}
+}
+
+ffi_export! {
+pub extern "C" fn unitas_runtime_render_light2d_set_intensity(
+    handle: u64,
+    light: u64,
+    intensity: f32,
+) -> i32 {
+    if !intensity.is_finite() {
+        return -2;
+    }
+    match with_runtime_state(handle, |state| {
+        if state.runtime.set_render_light_2d_intensity(light, intensity) {
+            state.clear_error();
+            0
+        } else {
+            state.set_error("-1 unknown handle: light2d handle is not valid");
+            -1
+        }
+    }) {
+        Ok(code) => code,
+        Err(code) => code,
+    }
+}
+}
+
+ffi_export! {
+pub extern "C" fn unitas_runtime_render_light2d_set_radii(
+    handle: u64,
+    light: u64,
+    inner_radius: f32,
+    outer_radius: f32,
+) -> i32 {
+    if !inner_radius.is_finite() || !outer_radius.is_finite() {
+        return -2;
+    }
+    match with_runtime_state(handle, |state| {
+        if state
+            .runtime
+            .set_render_light_2d_radii(light, inner_radius, outer_radius)
+        {
+            state.clear_error();
+            0
+        } else {
+            state.set_error("-1 unknown handle: light2d handle is not valid");
+            -1
+        }
+    }) {
+        Ok(code) => code,
+        Err(code) => code,
+    }
+}
+}
+
+ffi_export! {
+pub extern "C" fn unitas_runtime_render_light2d_set_angles(
+    handle: u64,
+    light: u64,
+    inner_angle_deg: f32,
+    outer_angle_deg: f32,
+) -> i32 {
+    if !inner_angle_deg.is_finite() || !outer_angle_deg.is_finite() {
+        return -2;
+    }
+    match with_runtime_state(handle, |state| {
+        if state
+            .runtime
+            .set_render_light_2d_angles(light, inner_angle_deg, outer_angle_deg)
+        {
+            state.clear_error();
+            0
+        } else {
+            state.set_error("-1 unknown handle: light2d handle is not valid");
+            -1
+        }
+    }) {
+        Ok(code) => code,
+        Err(code) => code,
+    }
+}
+}
+
+ffi_export! {
+pub extern "C" fn unitas_runtime_render_light2d_set_position(
+    handle: u64,
+    light: u64,
+    x: f32,
+    y: f32,
+) -> i32 {
+    if !x.is_finite() || !y.is_finite() {
+        return -2;
+    }
+    match with_runtime_state(handle, |state| {
+        if state.runtime.set_render_light_2d_position(light, [x, y]) {
+            state.clear_error();
+            0
+        } else {
+            state.set_error("-1 unknown handle: light2d handle is not valid");
+            -1
+        }
+    }) {
+        Ok(code) => code,
+        Err(code) => code,
+    }
+}
+}
+
+ffi_export! {
+pub extern "C" fn unitas_runtime_render_light2d_set_direction(
+    handle: u64,
+    light: u64,
+    x: f32,
+    y: f32,
+) -> i32 {
+    if !x.is_finite() || !y.is_finite() {
+        return -2;
+    }
+    match with_runtime_state(handle, |state| {
+        if state.runtime.set_render_light_2d_direction(light, [x, y]) {
+            state.clear_error();
+            0
+        } else {
+            state.set_error("-1 unknown handle: light2d handle is not valid");
+            -1
+        }
+    }) {
+        Ok(code) => code,
+        Err(code) => code,
+    }
+}
+}
+
+ffi_export! {
+pub extern "C" fn unitas_runtime_render_light2d_set_enabled(
+    handle: u64,
+    light: u64,
+    enabled: u8,
+) -> i32 {
+    match with_runtime_state(handle, |state| {
+        if state
+            .runtime
+            .set_render_light_2d_enabled(light, enabled != 0)
+        {
+            state.clear_error();
+            0
+        } else {
+            state.set_error("-1 unknown handle: light2d handle is not valid");
+            -1
+        }
+    }) {
+        Ok(code) => code,
+        Err(code) => code,
+    }
+}
+}
+
+ffi_export! {
+pub extern "C" fn unitas_runtime_render_light2d_get_state(
+    handle: u64,
+    light: u64,
+    blob: *mut f32,
+) -> i32 {
+    if blob.is_null() {
+        return -2;
+    }
+    match with_runtime_state(handle, |state| {
+        let Some(offset) = path_buffer_offset(state, blob as usize, LIGHT2D_STATE_BYTES) else {
+            state.set_error("-2 invalid argument: output buffer is out of range");
+            return -2;
+        };
+        let Some(entry) = state.runtime.render_light_2d(light) else {
+            state.set_error("-1 unknown handle: light2d handle is not valid");
+            return -1;
+        };
+        let values: [f32; LIGHT2D_STATE_FLOATS] = [
+            light2d_kind_to_u32(entry.kind) as f32,
+            entry.color[0],
+            entry.color[1],
+            entry.color[2],
+            entry.intensity,
+            entry.position[0],
+            entry.position[1],
+            entry.direction[0],
+            entry.direction[1],
+            entry.inner_radius,
+            entry.outer_radius,
+            entry.inner_angle_deg,
+            entry.outer_angle_deg,
+            f32::from(u8::from(entry.enabled)),
+        ];
         for (index, value) in values.iter().enumerate() {
             let start = offset + index * 4;
             state.path_buffer[start..start + 4].copy_from_slice(&value.to_le_bytes());

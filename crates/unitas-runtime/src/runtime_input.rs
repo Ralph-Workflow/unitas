@@ -1,5 +1,50 @@
+use std::collections::HashMap;
+use std::sync::{Mutex, OnceLock};
+
 use super::Runtime;
 use crate::input::InputState;
+
+type CharQueueMap = HashMap<usize, (Vec<char>, Vec<char>)>;
+
+static CHAR_QUEUES: OnceLock<Mutex<CharQueueMap>> = OnceLock::new();
+
+fn char_queues() -> &'static Mutex<CharQueueMap> {
+    CHAR_QUEUES.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+impl InputState {
+    pub fn queue_char_event(&mut self, ch: char) {
+        if ch.is_control() {
+            return;
+        }
+        let key = std::ptr::from_ref(self) as usize;
+        if let Ok(mut map) = char_queues().lock() {
+            map.entry(key).or_default().0.push(ch);
+        }
+    }
+
+    pub fn inject_char(&mut self, ch: char) {
+        self.queue_char_event(ch);
+    }
+
+    pub(crate) fn flush_queued_chars(&self) -> Vec<char> {
+        let key = std::ptr::from_ref(self) as usize;
+        let Ok(mut map) = char_queues().lock() else {
+            return Vec::new();
+        };
+        let Some(entry) = map.get_mut(&key) else {
+            return Vec::new();
+        };
+        if !entry.0.is_empty() {
+            entry.1 = std::mem::take(&mut entry.0);
+        }
+        std::mem::take(&mut entry.1)
+    }
+
+    pub fn take_frame_chars(&self) -> Vec<char> {
+        self.flush_queued_chars()
+    }
+}
 
 impl Runtime {
     pub fn input(&self) -> &InputState {
@@ -12,6 +57,10 @@ impl Runtime {
 
     pub fn input_key_event(&mut self, key: u32, pressed: bool) {
         self.input.queue_key_event(key, pressed);
+    }
+
+    pub fn input_char_event(&mut self, ch: char) {
+        self.input.queue_char_event(ch);
     }
 
     pub fn input_mouse_button_event(&mut self, button: u32, pressed: bool) {

@@ -25,6 +25,7 @@ pub mod texture;
 pub mod trail;
 pub mod trust;
 pub mod unity_yaml;
+pub mod video_import;
 
 pub use collision::{CollisionCookError, CollisionMesh};
 

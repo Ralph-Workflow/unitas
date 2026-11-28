@@ -95,6 +95,38 @@ impl GpuLight {
     }
 }
 
+/// The shape of a 2D light applied to the sprite pass.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Light2DKind {
+    #[default]
+    Global,
+    Point,
+    Spot,
+}
+
+/// A 2D light in the world XY plane, applied to the sprite pass.
+///
+/// A global light tints every sprite with `color * intensity`. A point light
+/// falls off linearly from full strength inside `inner_radius` to nothing at
+/// `outer_radius`, measured in world units from `position`. A spot light adds
+/// a cone around `direction` whose half angles are `inner_angle_deg` and
+/// `outer_angle_deg`, so the light is at full strength inside the inner cone
+/// and fades to nothing at the outer cone.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct Light2D {
+    pub kind: Light2DKind,
+    pub color: [f32; 3],
+    pub intensity: f32,
+    pub position: [f32; 2],
+    pub direction: [f32; 2],
+    pub inner_radius: f32,
+    pub outer_radius: f32,
+    pub inner_angle_deg: f32,
+    pub outer_angle_deg: f32,
+}
+
+pub const MAX_LIGHTS_2D: usize = 16;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum BlendMode {
     #[default]

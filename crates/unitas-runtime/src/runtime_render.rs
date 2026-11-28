@@ -11,7 +11,8 @@ use unitas_core::{EntityId, IDENTITY_ROTATION, SceneGraph, Transform, rotate_vec
 use unitas_render::image::{Image, Rgba8};
 use unitas_render::ui_pass::{GlyphTextPainter, UiTarget, composite_ui};
 use unitas_render::{
-    Camera, DirectionalLight, Mat4, Mesh, MeshAttributes, Renderer, Vec3, cube,
+    Camera, DirectionalLight, Light2D, Light2DKind, MAX_LIGHTS_2D, Mat4, Mesh, MeshAttributes,
+    Renderer, Vec3, cube,
     gpu::{GpuLight, GpuLightKind, MAX_GPU_LIGHTS},
     look_at,
 };
@@ -122,6 +123,43 @@ pub struct RenderLight {
     pub spot_angle_deg: f32,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct RenderLight2D {
+    pub entity: Option<EntityId>,
+    pub kind: Light2DKind,
+    pub color: [f32; 3],
+    pub intensity: f32,
+    pub position: [f32; 2],
+    pub direction: [f32; 2],
+    pub inner_radius: f32,
+    pub outer_radius: f32,
+    pub inner_angle_deg: f32,
+    pub outer_angle_deg: f32,
+    pub enabled: bool,
+    pub position_override: bool,
+    pub direction_override: bool,
+}
+
+impl RenderLight2D {
+    pub fn new(entity: Option<EntityId>) -> Self {
+        Self {
+            entity,
+            kind: Light2DKind::Point,
+            color: [1.0, 1.0, 1.0],
+            intensity: 1.0,
+            position: [0.0, 0.0],
+            direction: [0.0, 1.0],
+            inner_radius: 0.0,
+            outer_radius: 1.0,
+            inner_angle_deg: 180.0,
+            outer_angle_deg: 180.0,
+            enabled: true,
+            position_override: false,
+            direction_override: false,
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct RenderSprite {
     pub entity: EntityId,
@@ -162,6 +200,7 @@ pub struct RenderWorld {
     cameras: HashMap<u64, RenderCamera>,
     renderers: HashMap<u64, RenderRenderer>,
     lights: HashMap<u64, RenderLight>,
+    lights_2d: HashMap<u64, RenderLight2D>,
     ambient: [f32; 3],
     sprites: Vec<RenderSprite>,
     sprite_asset_paths: HashMap<String, PathBuf>,
@@ -181,6 +220,7 @@ impl Default for RenderWorld {
             cameras: HashMap::new(),
             renderers: HashMap::new(),
             lights: HashMap::new(),
+            lights_2d: HashMap::new(),
             ambient: [0.0; 3],
             sprites: Vec::new(),
             sprite_asset_paths: HashMap::new(),
@@ -379,6 +419,123 @@ impl Runtime {
 
     pub(crate) fn update_render_light_full(&mut self, handle: u64, updated: RenderLight) -> bool {
         match self.render.lights.get_mut(&handle) {
+            Some(light) => {
+                let entity = light.entity;
+                *light = updated;
+                light.entity = entity;
+                true
+            }
+            None => false,
+        }
+    }
+
+    pub fn create_render_light_2d(&mut self, entity: Option<EntityId>) -> u64 {
+        let handle = self.render.allocate();
+        self.render
+            .lights_2d
+            .insert(handle, RenderLight2D::new(entity));
+        handle
+    }
+
+    pub fn destroy_render_light_2d(&mut self, handle: u64) -> bool {
+        self.render.lights_2d.remove(&handle).is_some()
+    }
+
+    pub fn render_light_2d(&self, handle: u64) -> Option<RenderLight2D> {
+        self.render.lights_2d.get(&handle).copied()
+    }
+
+    pub fn set_render_light_2d_kind(&mut self, handle: u64, kind: Light2DKind) -> bool {
+        match self.render.lights_2d.get_mut(&handle) {
+            Some(light) => {
+                light.kind = kind;
+                true
+            }
+            None => false,
+        }
+    }
+
+    pub fn set_render_light_2d_color(&mut self, handle: u64, color: [f32; 3]) -> bool {
+        match self.render.lights_2d.get_mut(&handle) {
+            Some(light) => {
+                light.color = color;
+                true
+            }
+            None => false,
+        }
+    }
+
+    pub fn set_render_light_2d_intensity(&mut self, handle: u64, intensity: f32) -> bool {
+        match self.render.lights_2d.get_mut(&handle) {
+            Some(light) => {
+                light.intensity = intensity;
+                true
+            }
+            None => false,
+        }
+    }
+
+    pub fn set_render_light_2d_radii(&mut self, handle: u64, inner: f32, outer: f32) -> bool {
+        match self.render.lights_2d.get_mut(&handle) {
+            Some(light) => {
+                light.inner_radius = inner;
+                light.outer_radius = outer;
+                true
+            }
+            None => false,
+        }
+    }
+
+    pub fn set_render_light_2d_angles(
+        &mut self,
+        handle: u64,
+        inner_deg: f32,
+        outer_deg: f32,
+    ) -> bool {
+        match self.render.lights_2d.get_mut(&handle) {
+            Some(light) => {
+                light.inner_angle_deg = inner_deg;
+                light.outer_angle_deg = outer_deg;
+                true
+            }
+            None => false,
+        }
+    }
+
+    pub fn set_render_light_2d_position(&mut self, handle: u64, position: [f32; 2]) -> bool {
+        match self.render.lights_2d.get_mut(&handle) {
+            Some(light) => {
+                light.position = position;
+                light.position_override = true;
+                true
+            }
+            None => false,
+        }
+    }
+
+    pub fn set_render_light_2d_direction(&mut self, handle: u64, direction: [f32; 2]) -> bool {
+        match self.render.lights_2d.get_mut(&handle) {
+            Some(light) => {
+                light.direction = direction;
+                light.direction_override = true;
+                true
+            }
+            None => false,
+        }
+    }
+
+    pub fn set_render_light_2d_enabled(&mut self, handle: u64, enabled: bool) -> bool {
+        match self.render.lights_2d.get_mut(&handle) {
+            Some(light) => {
+                light.enabled = enabled;
+                true
+            }
+            None => false,
+        }
+    }
+
+    pub fn update_render_light_2d(&mut self, handle: u64, updated: RenderLight2D) -> bool {
+        match self.render.lights_2d.get_mut(&handle) {
             Some(light) => {
                 let entity = light.entity;
                 *light = updated;
@@ -602,6 +759,9 @@ impl Runtime {
             .lights
             .retain(|_, light| !in_scene(light.entity));
         self.render
+            .lights_2d
+            .retain(|_, light| !in_scene(light.entity));
+        self.render
             .sprites
             .retain(|sprite| !in_scene(Some(sprite.entity)));
         self.render
@@ -718,6 +878,52 @@ impl Runtime {
                 spot_angle_deg: light.spot_angle_deg,
             });
             if collected.len() >= MAX_GPU_LIGHTS {
+                break;
+            }
+        }
+        collected
+    }
+
+    pub fn lights_2d(&self) -> Vec<Light2D> {
+        let mut handles: Vec<u64> = self.render.lights_2d.keys().copied().collect();
+        handles.sort_unstable();
+        let mut collected = Vec::new();
+        for handle in handles {
+            let Some(light) = self.render.lights_2d.get(&handle) else {
+                continue;
+            };
+            if !light.enabled {
+                continue;
+            }
+            let transform = light.entity.and_then(|e| self.world_transform_of(e));
+            let position = match (light.position_override, transform.as_ref()) {
+                (false, Some(tf)) => [tf.translation[0], tf.translation[1]],
+                _ => light.position,
+            };
+            let direction = match (light.direction_override, transform.as_ref()) {
+                (false, Some(tf)) => {
+                    let up = rotate_vector(tf.rotation, [0.0, 1.0, 0.0]);
+                    let len = (up[0] * up[0] + up[1] * up[1]).sqrt();
+                    if len > 1e-8 {
+                        [up[0] / len, up[1] / len]
+                    } else {
+                        light.direction
+                    }
+                }
+                _ => light.direction,
+            };
+            collected.push(Light2D {
+                kind: light.kind,
+                color: light.color,
+                intensity: light.intensity,
+                position,
+                direction,
+                inner_radius: light.inner_radius,
+                outer_radius: light.outer_radius,
+                inner_angle_deg: light.inner_angle_deg,
+                outer_angle_deg: light.outer_angle_deg,
+            });
+            if collected.len() >= MAX_LIGHTS_2D {
                 break;
             }
         }
@@ -1183,6 +1389,7 @@ impl Runtime {
         }
         let renderer = self.gpu_renderer()?;
         renderer.set_sprites(self.sprite_instances());
+        renderer.set_lights_2d(&self.lights_2d());
         renderer.set_scene_lighting(&self.lights(), self.ambient());
         let mut presenter = crate::presenter::GpuFramePresenter::new(renderer);
         presenter.set_meshes(scene_gpu_meshes(self));
@@ -1230,6 +1437,7 @@ impl Runtime {
         }
         let renderer = self.gpu_renderer()?;
         renderer.set_sprites(self.sprite_instances());
+        renderer.set_lights_2d(&self.lights_2d());
         renderer.set_scene_lighting(&self.lights(), self.ambient());
         let mut presenter = crate::presenter::GpuFramePresenter::new(renderer);
         presenter.set_meshes(scene_gpu_meshes(self));
@@ -1266,6 +1474,7 @@ impl Runtime {
         }
         let renderer = self.gpu_renderer()?;
         renderer.set_sprites(self.sprite_instances());
+        renderer.set_lights_2d(&self.lights_2d());
         renderer.set_scene_lighting(&self.lights(), self.ambient());
         let mut presenter = crate::presenter::GpuFramePresenter::new(renderer);
         presenter.bind_scene(self);

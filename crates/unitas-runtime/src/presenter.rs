@@ -19,8 +19,8 @@ use unitas_audio::output::DeviceOutput;
 use unitas_core::{EntityId, Transform, rotate_vector};
 use unitas_render::{
     BlendMode, Camera, CanvasRect, DEFAULT_MATERIAL, DirectionalLight, GpuMaterialInstance, Image,
-    Mat4, Material, Mesh, MeshAttributes, PostSettings, RenderError, RenderScene, Renderer,
-    ShadowSettings, SurfaceFrame, TextOverlayItem, Vec3, gpu::GpuLight, look_at,
+    Light2D, Mat4, Material, Mesh, MeshAttributes, PostSettings, RenderError, RenderScene,
+    Renderer, ShadowSettings, SurfaceFrame, TextOverlayItem, Vec3, gpu::GpuLight, look_at,
 };
 #[cfg(feature = "device")]
 use winit::window::Window;
@@ -737,6 +737,7 @@ pub struct GpuFramePresenter<'a> {
     camera_binding: GpuCameraBinding,
     light: DirectionalLight,
     lights: Vec<GpuLight>,
+    lights_2d: Vec<Light2D>,
     ambient: [f32; 3],
     #[cfg(feature = "device")]
     audio_output: Option<DeviceOutput>,
@@ -766,6 +767,7 @@ impl<'a> GpuFramePresenter<'a> {
                 intensity: 0.85,
             },
             lights: Vec::new(),
+            lights_2d: Vec::new(),
             ambient: [0.0, 0.0, 0.0],
             #[cfg(feature = "device")]
             audio_output: None,
@@ -810,6 +812,7 @@ impl<'a> GpuFramePresenter<'a> {
         }
         self.set_light(runtime.directional_light());
         self.set_lights(runtime.lights());
+        self.set_lights_2d(runtime.lights_2d());
         self.set_ambient(runtime.ambient());
         self.set_shadow_settings(shadow_settings_for_runtime(runtime));
         self.set_post_settings(post_settings_for_runtime(runtime));
@@ -864,6 +867,14 @@ impl<'a> GpuFramePresenter<'a> {
 
     pub fn lights(&self) -> &[GpuLight] {
         &self.lights
+    }
+
+    pub fn set_lights_2d(&mut self, lights: Vec<Light2D>) {
+        self.lights_2d = lights;
+    }
+
+    pub fn lights_2d(&self) -> &[Light2D] {
+        &self.lights_2d
     }
 
     pub fn set_ambient(&mut self, ambient: [f32; 3]) {
@@ -1045,7 +1056,13 @@ impl<'a> GpuFramePresenter<'a> {
         } else {
             self.ambient
         };
+        let lights_2d = if self.lights_2d.is_empty() {
+            runtime.lights_2d()
+        } else {
+            self.lights_2d.clone()
+        };
         self.renderer.set_scene_lighting(&lights, ambient);
+        self.renderer.set_lights_2d(&lights_2d);
         let scene = RenderScene {
             camera: &camera,
             view,
@@ -1208,7 +1225,13 @@ impl<'a> GpuFramePresenter<'a> {
             self.ambient
         };
         let (canvas_rects, canvas_texts) = self.canvas_elements(runtime, width, height);
+        let lights_2d = if self.lights_2d.is_empty() {
+            runtime.lights_2d()
+        } else {
+            self.lights_2d.clone()
+        };
         self.renderer.set_scene_lighting(&lights, ambient);
+        self.renderer.set_lights_2d(&lights_2d);
         let scene = RenderScene {
             camera: &camera,
             view,
@@ -1242,6 +1265,7 @@ impl<'a> GpuFramePresenter<'a> {
                 resolve_camera_and_view(&self.camera_binding, runtime, width, height);
             let instances = collect_gpu_material_instances_from(&self.meshes, runtime);
             self.renderer.set_scene_lighting(&lights, ambient);
+            self.renderer.set_lights_2d(&lights_2d);
             match self.renderer.render_offscreen_materials_rgba_with_overlay(
                 &instances,
                 RenderScene {

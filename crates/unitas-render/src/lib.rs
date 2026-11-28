@@ -3,6 +3,7 @@ pub mod capture;
 pub mod glyphs;
 pub mod gpu;
 pub mod image;
+mod light_2d;
 pub mod math;
 pub mod mesh;
 pub mod model;
@@ -27,8 +28,8 @@ pub use image::{Image, Rgba8};
 pub use math::{Mat4, Vec3, Vec4};
 pub use mesh::{cube, uv_sphere, Mesh, MeshAttributes};
 pub use model::{
-    effective_alpha, BlendMode, DirectionalLight, Material, MaterialInstance, MeshInstance,
-    DEFAULT_MATERIAL,
+    effective_alpha, BlendMode, DirectionalLight, Light2D, Light2DKind, Material, MaterialInstance,
+    MeshInstance, DEFAULT_MATERIAL, MAX_LIGHTS_2D,
 };
 pub use render_graph::{
     PostChain, PostPassKind, RenderGraph, RenderGraphPass, RenderPassKind, RenderTargetKind,

@@ -2099,11 +2099,24 @@ pub const OWNED_FEATURE_CAPABILITIES: &[OwnedFeatureCapability] = &[
                 missing: None,
             },
             OwnedCapabilityPart {
-                behavior: "SpriteAtlas packing and runtime atlas binding, SortingGroup, SpriteMask, 2D lights, Grid and Tilemap/TilemapRenderer, PixelPerfectCamera, and 2D SpriteSkin deformation are rendered",
+                behavior: "2D lights (Global, Point, and Spot Light2D components) light sprites in the GPU sprite pass with radial and angular falloff and leave zero-light scenes byte-identical",
+                location: "crates/unitas-render/src/light_2d.rs",
+                evidence: &[
+                    "crates/unitas-render/src/light_2d.rs::point_light_brightens_the_sprite_next_to_it",
+                    "crates/unitas-render/src/light_2d.rs::global_light_tints_the_sprite",
+                    "crates/unitas-render/src/light_2d.rs::spot_light_lights_the_sprite_inside_its_cone",
+                    "crates/unitas-render/src/light_2d.rs::no_2d_lights_leave_the_sprite_pass_byte_identical",
+                    "crates/unitas-runtime/tests/light_2d_tests.rs::light_2d_abi_roundtrip_and_invalid_argument_handling",
+                    "crates/unitas-runtime/tests/light_2d_tests.rs::light_2d_extraction_uses_entity_world_transform_and_brightens_captured_sprite",
+                ],
+                missing: None,
+            },
+            OwnedCapabilityPart {
+                behavior: "SpriteAtlas packing and runtime atlas binding, SortingGroup, SpriteMask, freeform/sprite 2D lights and ShadowCaster2D, Grid and Tilemap/TilemapRenderer, PixelPerfectCamera, and 2D SpriteSkin deformation are rendered",
                 location: "crates/unitas-render/src/ui_pass.rs",
                 evidence: &[],
                 missing: Some(
-                    "SpriteAtlas packing and runtime atlas binding, SortingGroup and SpriteMask, 2D lights, Grid and Tilemap/TilemapRenderer, PixelPerfectCamera, and 2D SpriteSkin deformation are not implemented",
+                    "SpriteAtlas packing and runtime atlas binding, SortingGroup and SpriteMask, freeform/sprite 2D lights and ShadowCaster2D, Grid and Tilemap/TilemapRenderer, PixelPerfectCamera, and 2D SpriteSkin deformation are not implemented",
                 ),
             },
             OwnedCapabilityPart {
@@ -2190,10 +2203,18 @@ pub const OWNED_FEATURE_CAPABILITIES: &[OwnedFeatureCapability] = &[
                 behavior: "buttons, labels, pointer hit-testing, keyboard and gamepad focus navigation, and Button.onClick dispatch work across the runtime and C# bridge",
                 location: "crates/unitas-runtime/src/ui_components.rs",
                 evidence: &[
-                    "crates/unitas-runtime/tests/pointer_ui.rs::pointer_click_activates_a_button_headless",
-                    "crates/unitas-runtime/tests/pointer_ui.rs::keyboard_focus_still_cycles_and_enter_submits",
                     "crates/unitas-runtime/tests/ui_components.rs::a_pointer_click_on_a_button_is_dispatched",
+                    "crates/unitas-runtime/tests/ui_components.rs::keyboard_focus_and_enter_submit_the_focused_button",
                     "crates/unitas-runtime/tests/ui_components.rs::the_ui_abi_sets_the_text_and_reports_the_click",
+                ],
+                missing: None,
+            },
+            OwnedCapabilityPart {
+                behavior: "InputField focus, character entry, caret movement, backspace/delete editing, submit/cancel events, and headless canvas text and caret rendering work across the runtime and C# bridge",
+                location: "crates/unitas-runtime/src/canvas.rs",
+                evidence: &[
+                    "crates/unitas-runtime/tests/canvas_tests.rs::input_field_handles_char_entry_caret_movement_deletion_and_submit_cancel_events",
+                    "crates/unitas-runtime/tests/canvas_tests.rs::input_field_headless_canvas_capture_renders_entered_text_and_caret",
                 ],
                 missing: None,
             },
@@ -2207,11 +2228,11 @@ pub const OWNED_FEATURE_CAPABILITIES: &[OwnedFeatureCapability] = &[
                 missing: None,
             },
             OwnedCapabilityPart {
-                behavior: "screen-space camera and world-space canvases, layout groups, masks, CanvasGroup, ScrollRect, sliders, toggles, dropdowns, input fields, raycasters, and UI Toolkit runtime documents are supported",
+                behavior: "screen-space camera and world-space canvases, layout groups, masks, CanvasGroup, ScrollRect, sliders, toggles, dropdowns, raycasters, and UI Toolkit runtime documents are supported",
                 location: "crates/unitas-runtime/src/canvas.rs",
                 evidence: &[],
                 missing: Some(
-                    "screen-space camera and world-space canvases, layout groups (HorizontalLayoutGroup, VerticalLayoutGroup, GridLayoutGroup, ContentSizeFitter, AspectRatioFitter), Mask and RectMask2D, CanvasGroup, ScrollRect, sliders, toggles, dropdowns, input fields, GraphicRaycaster and PhysicsRaycaster, and UI Toolkit runtime (UIDocument, UXML, USS) are not implemented",
+                    "screen-space camera and world-space canvases, layout groups (HorizontalLayoutGroup, VerticalLayoutGroup, GridLayoutGroup, ContentSizeFitter, AspectRatioFitter), Mask and RectMask2D, CanvasGroup, ScrollRect, sliders, toggles, dropdowns, GraphicRaycaster and PhysicsRaycaster, and UI Toolkit runtime (UIDocument, UXML, USS) are not implemented",
                 ),
             },
         ],
@@ -2360,14 +2381,28 @@ pub const OWNED_FEATURE_CAPABILITIES: &[OwnedFeatureCapability] = &[
         feature_id: "MED-001",
         owning_spec: "ui-audio-input.md",
         capability: "Video playback and synchronized media state",
-        parts: &[OwnedCapabilityPart {
-            behavior: "VideoPlayer and VideoClip import, container and codec decoding (H.264, H.265, VP8, VP9, AV1), camera plane/render texture/material override render modes, audio track routing, DSP/game time synchronization, and HTTP/HLS/DASH streaming are executed",
-            location: "crates/unitas-asset/src/database.rs",
-            evidence: &[],
-            missing: Some(
-                "VideoPlayer and VideoClip import, container and codec decoding (H.264, H.265, VP8, VP9, AV1), camera plane/render texture/material override render modes, audio track routing, DSP/game time synchronization, and HTTP/HLS/DASH streaming are not implemented",
-            ),
-        }],
+        parts: &[
+            OwnedCapabilityPart {
+                behavior: "cooked video clip import probes MP4/MOV/WebM/IVF containers and cooks stream metadata into the content-hash cache, and VideoPlayer decodes cooked clips on a background worker via dynamically loaded system FFmpeg libraries and presents RGBA frames onto a target surface across the runtime and C# bridge",
+                location: "crates/unitas-runtime/src/video.rs",
+                evidence: &[
+                    "crates/unitas-asset/tests/video_import_tests.rs::mp4_and_ivf_stream_probing_and_cooked_roundtrip_work_offline",
+                    "crates/unitas-asset/tests/video_import_tests.rs::cook_project_videos_and_manifest_roundtrip",
+                    "crates/unitas-runtime/tests/video_tests.rs::video_player_corrupt_clip_and_abi_error_paths_report_cleanly",
+                    "crates/unitas-runtime/tests/video_tests.rs::ffmpeg_worker_decodes_cooked_video_and_renders_first_and_later_frames_to_scene_capture",
+                    "crates/unitas-runtime/tests/video_tests.rs::abi_video_roundtrip_controls_playback_events_and_frame_buffer",
+                ],
+                missing: None,
+            },
+            OwnedCapabilityPart {
+                behavior: "camera plane and material override render modes, audio track routing to the mixer, DSP/game time synchronization, WebAssembly video decode, and HTTP/HLS/DASH streaming are executed",
+                location: "crates/unitas-runtime/src/video.rs",
+                evidence: &[],
+                missing: Some(
+                    "camera plane and material override render modes, audio track routing to the mixer, DSP/game time synchronization, WebAssembly video decode, and HTTP/HLS/DASH streaming are not implemented",
+                ),
+            },
+        ],
     },
     OwnedFeatureCapability {
         feature_id: "BLD-001",

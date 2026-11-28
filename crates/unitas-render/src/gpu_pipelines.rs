@@ -2,6 +2,7 @@ use super::gpu_shader::{POST_SHADER_SOURCE, SHADER_SOURCE, VERTEX_LAYOUT};
 use super::post::POST_PARAMS_SIZE;
 use super::solid_texture;
 use super::{Pipelines, DEPTH_FORMAT, GLOBAL_FLOATS, INSTANCE_FLOATS};
+use crate::light_2d::LIGHTS_2D_BYTES;
 
 fn color_target(format: wgpu::TextureFormat) -> wgpu::ColorTargetState {
     wgpu::ColorTargetState {
@@ -405,16 +406,28 @@ pub(super) fn create_scene_shader(device: &wgpu::Device) -> wgpu::ShaderModule {
 pub(super) fn create_global_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
     device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
         label: Some("globals"),
-        entries: &[wgpu::BindGroupLayoutEntry {
-            binding: 0,
-            visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
-            ty: wgpu::BindingType::Buffer {
-                ty: wgpu::BufferBindingType::Uniform,
-                has_dynamic_offset: false,
-                min_binding_size: wgpu::BufferSize::new((GLOBAL_FLOATS * 4) as u64),
+        entries: &[
+            wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Uniform,
+                    has_dynamic_offset: false,
+                    min_binding_size: wgpu::BufferSize::new((GLOBAL_FLOATS * 4) as u64),
+                },
+                count: None,
             },
-            count: None,
-        }],
+            wgpu::BindGroupLayoutEntry {
+                binding: 1,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Uniform,
+                    has_dynamic_offset: false,
+                    min_binding_size: wgpu::BufferSize::new(LIGHTS_2D_BYTES),
+                },
+                count: None,
+            },
+        ],
     })
 }
 

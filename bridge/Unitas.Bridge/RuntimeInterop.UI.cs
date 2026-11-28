@@ -46,7 +46,7 @@ namespace Unitas.Bridge
             uint enabled);
     }
 
-    internal sealed class RuntimeUiProvider : UnityEngine.UI.IUiProvider
+    internal sealed partial class RuntimeUiProvider : UnityEngine.UI.IUiProvider
     {
         private readonly ulong _runtimeHandle;
 
