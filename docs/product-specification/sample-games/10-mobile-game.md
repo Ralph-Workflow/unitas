@@ -221,9 +221,10 @@ controls, and Reset Progress with a confirmation. Settings persist through
 ### Packages
 
 URP 14.x, Input System 1.x, uGUI 1.0.x, TextMeshPro 3.0.x, and Newtonsoft Json
-3.x, at the version lines CMP-002 lists. Packages are resolved from their
-registry when the project opens and are never vendored in the sample
-repository.
+3.x, at the version lines CMP-002 lists. Each package resolves to unitas's own
+implementation of that version line ([Packages](../architecture.md#packages));
+no Unity-published package code is vendored in the sample repository, fetched,
+or compiled.
 
 ### Save data
 
@@ -277,10 +278,11 @@ packages' licence terms are recorded in the build's licence report.
 Only engine and package behavior, each tied to a catalog ID. Game rules are
 defined under Game Design and implemented by the sample's own scripts; the
 engine contains no code specific to this game. Package behavior (Input System,
-Newtonsoft Json) comes from the package's own code at the pinned version line,
-compiled and run unmodified (CMP-002). Agents reach the game only through the
-editor's generic MCP object, property, method-invocation, input, capture, and
-device commands, with no game-specific command.
+Newtonsoft Json) comes from unitas's own implementation of each package's public
+API at the pinned version line ([Packages](../architecture.md#packages),
+CMP-002). Agents reach the game only through the editor's generic MCP object,
+property, method-invocation, input, capture, and device commands, with no
+game-specific command.
 
 ### Scripting and runtime
 

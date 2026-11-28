@@ -107,14 +107,15 @@ workers; Play Mode profiles the editor's play session.
 ## Memory Profiler
 
 When the project includes the Memory Profiler package
-(`com.unity.memoryprofiler`), `Window/Analysis/Memory Profiler` opens the
-package's window, drawn as an editor extension (RUN-010): a snapshot list,
-**Capture** against the Profiler's current target, single-snapshot views of
-memory by category, type, and object, and comparison of two snapshots.
+(`com.unity.memoryprofiler`), `Window/Analysis/Memory Profiler` opens the window
+of unitas's implementation of the package ([Independent
+implementation](../architecture.md#independent-implementation)): a snapshot
+list, **Capture** against the Profiler's current target, single-snapshot views
+of memory by category, type, and object, and comparison of two snapshots.
 Snapshots are stored where the package stores them. Without the package, the
 menu item is absent, and the Profiler's Memory module states that detailed
-snapshot analysis requires the package and links to it in the Package
-Manager ([Settings and preferences](settings-and-preferences.md)).
+snapshot analysis requires the package and links to it in the Package Manager
+([Settings and preferences](settings-and-preferences.md)).
 
 ## Physics Debugger
 
@@ -171,9 +172,10 @@ visual tree, styles, and layout. It is defined in [UI authoring](ui-authoring.md
 ## Test Runner
 
 When the project includes the Test Framework package
-(`com.unity.test-framework`), `Window/General/Test Runner` opens the package's
-window, drawn as an editor extension (RUN-010). Discovery, execution, and
-results are owned by TST-003.
+(`com.unity.test-framework`), `Window/General/Test Runner` opens the window of
+unitas's implementation of the package ([Independent
+implementation](../architecture.md#independent-implementation)). Discovery,
+execution, and results are owned by TST-003.
 
 * **Tabs.** EditMode and PlayMode.
 * **Toolbar.** **Run All**, **Run Selected**, **Rerun Failed**, a search field,

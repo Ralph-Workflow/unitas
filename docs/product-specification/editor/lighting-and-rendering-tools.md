@@ -255,12 +255,13 @@ behavior is defined there.
 ## Shader Graph window
 
 When the project includes the Shader Graph package, double-clicking a Shader
-Graph or Sub Graph asset opens the package's own graph window, drawn as an
-editor extension (RUN-010) with the workspace behavior of any docked window;
-its graph semantics and generated shaders are owned by REN-006. Without the
-package, such assets show in the Project window with their import state and
-an Inspector that names the missing package. Visual Effect Graph assets
-follow the same rule with their package.
+Graph or Sub Graph asset opens the graph window of unitas's implementation of
+the package ([Independent
+implementation](../architecture.md#independent-implementation)), with the
+workspace behavior of any docked window; its graph semantics and generated
+shaders are owned by REN-006. Without the package, such assets show in the
+Project window with their import state and an Inspector that names the missing
+package. Visual Effect Graph assets follow the same rule with their package.
 
 ### Shortcuts
 

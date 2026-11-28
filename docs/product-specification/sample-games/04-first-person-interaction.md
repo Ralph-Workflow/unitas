@@ -248,9 +248,10 @@ Built-in variant: Shader Graph 14.x, Input System 1.x, uGUI 1.0.x, TextMeshPro
 10.x variants: URP and Shader Graph 12.x or 10.x, migrated and assessed against
 the 14.x lines, plus the same. All variants: Unity Test Framework 1.x. Every
 variant's manifest pins Input System, uGUI, and TextMeshPro versions that the
-Package Manager marks released for Unity 2022.3 LTS. Packages are resolved
-from their registry when the project opens and are never vendored in the
-sample repository.
+Package Manager marks released for Unity 2022.3 LTS. Each package resolves to
+unitas's own implementation of that version line
+([Packages](../architecture.md#packages)); no Unity-published package code is
+vendored in the sample repository, fetched, or compiled.
 
 ### Save data
 
@@ -309,10 +310,11 @@ the build's licence report.
 Only engine and package behavior, each tied to a catalog ID. Game rules are
 defined under Game Design and implemented by the sample's own scripts; the
 engine contains no code specific to this game. Package behavior (Input System,
-Shader Graph, URP) comes from the package's own code at the pinned version
-line, compiled and run unmodified (CMP-002). Agents reach the game only through
-the editor's generic MCP object, property, method-invocation, input, and
-capture commands, with no game-specific command.
+Shader Graph, URP) comes from unitas's own implementation of each package's
+public API at the pinned version line ([Packages](../architecture.md#packages),
+CMP-002). Agents reach the game only through the editor's generic MCP object,
+property, method-invocation, input, and capture commands, with no game-specific
+command.
 
 ### Scripting and runtime
 

@@ -82,8 +82,9 @@ LTS behavior after their serialized forms migrate (SER-005 in
   methods compile to native code cached by content hash, asynchronously in the
   editor as in Unity; a target without native code generation runs the same
   methods as managed code.
-* **Entities.** The Entities packages run as package code on this layer, with
-  no second entity engine: systems update from the PlayerLoop, baking runs at
+* **Entities.** unitas's own implementation of the Entities packages
+  ([Independent implementation](architecture.md#independent-implementation))
+  runs on this layer, with no second entity engine: systems update from the PlayerLoop, baking runs at
   import and writes entity scenes to the cache, and Entities Graphics submits
   batches to the render graph. An Entities `World` is package state, not the
   engine's world.
@@ -1218,14 +1219,14 @@ checks, as in Unity.
 
 ### Burst and Unity.Mathematics
 
-Code marked `[BurstCompile]`, including Burst function pointers, produces
-results equivalent to Unity within the floating-point mode and precision the
-attribute declares. Constructs that Burst rejects, such as managed object
-access, are reported as compile diagnostics naming the method. Whether native
-acceleration is available on a target is reported as a performance property
-(PRF-001), not as a compatibility failure; without it, the code runs with the
-same results. `Unity.Mathematics` types and functions have the same semantics
-in managed and Burst-compiled code.
+Code marked `[BurstCompile]`, including Burst function pointers, is compiled by
+unitas's own compiler, never by Burst, and produces results equivalent to Unity
+within the floating-point mode and precision the attribute declares. Constructs
+that Burst rejects, such as managed object access, are reported as compile
+diagnostics naming the method. Whether native acceleration is available on a
+target is reported as a performance property (PRF-001), not as a compatibility
+failure; without it, the code runs with the same results. `Unity.Mathematics`
+types and functions have the same semantics in managed and Burst-compiled code.
 
 Browser players run jobs on worker threads in parallel whenever browser
 threading is in effect, as defined in

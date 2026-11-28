@@ -237,10 +237,11 @@ XR Plugin Management 4.x, XR Interaction Toolkit 2.x, Input System 1.x, URP
 14.x, uGUI 1.0.x, TextMeshPro 3.0.x, and Unity Test Framework 1.x, at the
 version lines CMP-002 lists. The game also requires the OpenXR provider plug-in
 (`com.unity.xr.openxr`) and, for tracked hands, the XR Hands package
-(`com.unity.xr.hands`). Both are reported against their own package and
-version, as XR-001 requires, and both are Supported. Packages are resolved from
-their registry when the project opens and are never vendored in the sample
-repository.
+(`com.unity.xr.hands`). Both are reported against their own package and version,
+as XR-001 requires, and both are Supported. Each package resolves to unitas's
+own implementation of that version line
+([Packages](../architecture.md#packages)); no Unity-published package code is
+vendored in the sample repository, fetched, or compiled.
 
 ### Save data
 
@@ -287,13 +288,13 @@ the build's licence report.
 
 Only engine and package behavior, each tied to a catalog ID. Game rules are
 defined under Game Design and implemented by the sample's own scripts; the
-engine contains no code specific to this game. Package behavior (XR
-Interaction Toolkit, XR Plugin Management, OpenXR, XR Hands, Input System)
-comes from the package's own code at the pinned version line, compiled and run
-unmodified (CMP-002); the items below state only the engine surface the
-packages call. Agents reach the game only through the editor's generic MCP
-object, property, method-invocation, input, capture, and track-playback
-commands, with no game-specific command.
+engine contains no code specific to this game. Package behavior (XR Interaction
+Toolkit, XR Plugin Management, OpenXR, XR Hands, Input System) comes from
+unitas's own implementation of each package's public API at the pinned version
+line ([Packages](../architecture.md#packages), CMP-002); the items below state
+the package and engine behavior the game relies on. Agents reach the game only
+through the editor's generic MCP object, property, method-invocation, input,
+capture, and track-playback commands, with no game-specific command.
 
 ### Scripting and runtime
 

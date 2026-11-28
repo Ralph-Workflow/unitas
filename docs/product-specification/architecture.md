@@ -17,6 +17,90 @@ this document holds and the detailed specification is corrected.
 The rest of the specification says *what* the product does. This document and
 the Architecture sections say *how* it is built. Neither restates the other.
 
+## Independent implementation
+
+unitas runs Unity 2022.3 projects the way Wine runs Windows programs: it
+reimplements everything those projects rely on and contains none of the
+original implementation.
+
+### What unitas never uses
+
+unitas never uses, loads, runs, links, embeds, or redistributes any
+implementation published by Unity Technologies. That covers:
+
+* the Unity Editor and player binaries;
+* the implementation of the `UnityEngine` and `UnityEditor` APIs;
+* every Unity-published package, both its C# code and its native libraries;
+* Unity's built-in shaders and shader includes;
+* the Burst compiler and IL2CPP;
+* Unity's native XR, platform, and plugin libraries;
+* the code of Unity's services SDKs.
+
+Each of these is a unitas implementation, written independently and shipped as
+part of the unitas distribution.
+
+The exclusion covers code published by Unity Technologies only, including
+Unity's own native plugins and libraries. A project's third-party code loads
+and runs as it does in Unity: third-party C# packages, third-party native
+plugins such as the Steamworks SDK, FMOD, or a platform vendor's SDK, and
+Asset Store content that Unity did not publish.
+
+### What unitas keeps
+
+unitas keeps only the names and formats that projects depend on, because
+existing projects refer to them and must compile and load unchanged:
+
+* namespaces, type names, member names, and signatures;
+* package identifiers, version lines, and assembly names;
+* menu paths and attribute names;
+* serialized type names, field names, and file formats.
+
+These are required identifiers. Keeping them states compatibility and implies
+no affiliation with, or endorsement by, their owner.
+
+### Packages
+
+* unitas implements the public API of each package in the supported package
+  matrix (CMP-002 in the [Compatibility contract](compatibility-contract.md))
+  as part of the engine distribution.
+* A project's manifest entry for a supported Unity-published package resolves
+  to unitas's implementation of the listed version line. That implementation
+  has the same package identifier, assembly names, namespaces, serialized type
+  names, and asset formats as the published package.
+* unitas never downloads, compiles, loads, or redistributes the code that
+  Unity publishes for those packages. When a project embeds such a package
+  under `Packages/`, that copy stays on disk untouched, is reported, and is
+  never compiled; unitas's implementation is used instead.
+* A Unity-published package outside the supported package matrix is reported
+  Unknown, and its code is never compiled in its place.
+* Packages that are not published under Unity's terms, such as third-party,
+  scoped-registry, git, and project-authored packages, compile as ordinary
+  project code.
+* Code marked `[BurstCompile]` is compiled by unitas's own compiler, and
+  ahead-of-time compilation is unitas's own toolchain on the hosted .NET
+  runtime.
+
+### Unity-built content
+
+Content that Unity built, such as AssetBundles, Addressables content,
+lightmaps, probes, and other baked data, is input. unitas reads it with its
+own code, as the [Content pipeline](#content-pipeline) defines, and never with
+Unity's code. Test fixtures that a licensed Unity Editor produced are
+permitted as input content, with the producing Unity release recorded.
+
+### Clean-room development
+
+* **Sources of behavior:** Unity's public documentation, published file
+  formats, and black-box observation of a licensed Unity Editor or player.
+  Observation records reference behavior and runs the compatibility
+  benchmarks, as Wine's conformance tests run on Windows.
+* **Never a source:** Unity's source code in any form, including the C#
+  reference source, package source, built-in shader source, and any
+  decompiled or disassembled binary. Observing what Unity does is permitted;
+  reading how Unity's code does it is not.
+* Contributors follow the [independent implementation rules](../../CONTRIBUTING.md#independent-implementation)
+  and the [trademark rules](../../TRADEMARKS.md).
+
 ## Layers
 
 unitas is one engine with five layers. Each layer depends only on the layers
@@ -132,8 +216,8 @@ core's native world.
 * The player hosts .NET in its own process. Managed code runs with
   just-in-time compilation where the target permits it, and with
   ahead-of-time compilation where the target forbids it, such as browsers,
-  iOS, and consoles. Roslyn compiles project and package scripts under Unity
-  2022.3's language profile into collectible load contexts, so the editor
+  iOS, and consoles. Roslyn compiles project scripts and the scripts of
+  packages not published by Unity under Unity 2022.3's language profile into collectible load contexts, so the editor
   reloads code without restarting the process.
 
 ## Content pipeline

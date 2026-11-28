@@ -92,8 +92,10 @@ Rendering and animation follow the [Engine architecture](architecture.md).
   main thread simulates the next frame. The main thread waits on the GPU only
   where an API is synchronous by contract, such as a CPU read after
   `ReadPixels`.
-* **One renderer, every pipeline.** URP, HDRP, and custom pipelines run their
-  own unmodified C# code, which records through `ScriptableRenderContext`,
+* **One renderer, every pipeline.** URP and HDRP are unitas's own
+  implementations of those packages
+  ([Independent implementation](architecture.md#independent-implementation)),
+  and custom pipelines run their project C# code. Each records through `ScriptableRenderContext`,
   `CommandBuffer`, and the SRP Core render graph into one native render graph;
   the Built-in pipeline is built from the same passes. Built-in features in
   scriptable pipelines, backend emulation, and capture outputs are passes in
@@ -588,14 +590,16 @@ The following ShaderLab and shader-program forms are translated and Supported:
   tessellation programs, and `#pragma target` and `#pragma require` levels.
   Geometry and tessellation programs run on every device that can run compute
   shaders, including graphics APIs that have no such stages. On WebGL 2, which
-  has no compute stage, they follow the compute rule of the Web target in
-  [Web target](web-target.md#render-pipelines-and-features-on-the-web). A shader whose
-  target level exceeds the device's capability falls through to the next
-  subshader or its `Fallback`.
-* Built-in includes (`UnityCG.cginc`, `Lighting.cginc`, `AutoLight.cginc`,
-  `UnityShaderVariables.cginc`, and the other Built-in shader includes), the
-  URP 14.x and HDRP 14.x ShaderLibrary, and the Scriptable Render Pipeline
-  Core 14.x shader includes.
+  has no compute stage, they follow the compute rule of the Web target in [Web
+  target](web-target.md#render-pipelines-and-features-on-the-web). A shader
+  whose target level exceeds the device's capability falls through to the next
+  subshader or its `Fallback`. * Built-in includes (`UnityCG.cginc`,
+  `Lighting.cginc`, `AutoLight.cginc`, `UnityShaderVariables.cginc`, and the
+  other Built-in shader includes), the URP 14.x and HDRP 14.x ShaderLibrary, and
+  the Scriptable Render Pipeline Core 14.x shader includes. unitas provides its
+  own include files under those paths, written independently, with the
+  documented macros, functions, and variables that project shaders use; Unity's
+  include files are never used.
 * Ray tracing shaders (`.raytrace` assets and ray tracing passes in
   ShaderLab) on devices with ray tracing hardware. On a device without it,
   `SystemInfo.supportsRayTracing` returns false and ray tracing work is
@@ -625,9 +629,11 @@ consequence.
 
 The Built-in shader families Standard, Standard (Specular setup), Autodesk
 Interactive, `Legacy Shaders/*`, `Mobile/*`, `Unlit/*`, `Particles/*`,
-`Sprites/*`, `UI/*`, `Skybox/*`, and `Nature/*` are translated to unitas
-shaders that keep each family's properties and visual role: lit, unlit,
-transparent, cutout, additive, particle, sprite, UI, skybox, and foliage.
+`Sprites/*`, `UI/*`, `Skybox/*`, and `Nature/*` are provided by unitas's own
+shaders, written independently under the same shader names ([Independent
+implementation](architecture.md#independent-implementation)), that keep each
+family's properties and visual role: lit, unlit, transparent, cutout, additive,
+particle, sprite, UI, skybox, and foliage.
 
 `Shader.Find` returns the shader in the editor and in a player when that shader
 is referenced by content included in the build or listed in the Graphics

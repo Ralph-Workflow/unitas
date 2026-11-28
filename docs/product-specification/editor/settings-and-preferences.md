@@ -143,8 +143,9 @@ listed by PRJ-007; this section states the page's arrangement.
   when the package is present.
 * **UI Builder.** The UI Builder's project settings, defined in
   [UI authoring](ui-authoring.md).
-* **Version Control.** The version control mode as stored (PRJ-007), and,
-  with the Version Control package, the package's own section.
+* **Version Control.** The version control mode as stored (PRJ-007), and, with
+  the Version Control package, that package's section, provided by unitas's
+  implementation of it.
 * **XR Plug-in Management.** When the package is present: per-target tabs
   with a checkbox per XR provider plug-in, **Initialize XR on Startup**, and
   child pages per provider. When the package is absent, the page offers to
@@ -245,13 +246,14 @@ The Package Manager window opens from `Window/Package Manager`. It edits
 
 * **Toolbar.** A **+** menu with **Add package from disk...**, **Add package
   from tarball...**, **Add package from git URL...**, and **Add package by
-  name...**; a **Packages** drop-down choosing the list's context — **Unity
-  Registry** (the default registry the project resolves names from), **In
-  Project**, **My Assets**, **Built-in**, and one entry per scoped registry;
-  a **Sort** drop-down (name, published date); a **Filters** drop-down
-  (updates available, release state); a search field; and a settings menu
-  with **Advanced Project Settings** (opens the Project Settings Package
-  Manager page) and **Manual resolve**.
+  name...**; a **Packages** drop-down choosing the list's context — **unitas
+  Implementations** (the unitas implementations of supported Unity packages,
+  which resolve the project's Unity package names), **In Project**, **My
+  Assets**, **Built-in**, and one entry per scoped registry; a **Sort**
+  drop-down (name, published date); a **Filters** drop-down (updates available,
+  release state); a search field; and a settings menu with **Advanced Project
+  Settings** (opens the Project Settings Package Manager page) and **Manual
+  resolve**.
 * **List pane.** On the left, packages grouped by feature set and author,
   each row with display name, version, and status markers: installed, update
   available, pre-release, experimental, deprecated, locked by the lock file,

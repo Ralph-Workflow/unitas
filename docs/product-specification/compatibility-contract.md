@@ -215,9 +215,13 @@ different API result, or ignored setting while reporting full support.
 ## Supported package matrix
 
 Unity package behavior is in scope only for the packages and version lines in
-the matrix below. The matrix, each package's tier and state, and the owning
-specification are available to people and to agents through automation, as
-defined in [Automation and MCP](automation-and-mcp.md).
+the matrix below. Every package in the matrix is unitas's own implementation of
+that package's public API; unitas never compiles, loads, or redistributes the
+code Unity publishes for it, as [Independent
+implementation](architecture.md#independent-implementation) defines. The matrix,
+each package's tier and state, and the owning specification are available to
+people and to agents through automation, as defined in [Automation and
+MCP](automation-and-mcp.md).
 
 Matrix rules:
 
@@ -225,22 +229,22 @@ Matrix rules:
   Package Manager marks as released or verified for Unity 2022.3 LTS. A version
   inside the line that is not released for Unity 2022.3 LTS is Unknown.
 * A project saved by an earlier release that Unity 2022.3 LTS can upgrade, and
-  that resolves an earlier
-  line of a listed package (for example URP 10.x or 12.x) has that package's
-  serialized content migrated as SER-005 defines and is assessed against the
-  listed line; behavior of the earlier line that differs from the listed line
-  is not matched.
-* A package, or a package version, that the matrix does not list is Unknown
-  until it is assessed. Preview, experimental, and prerelease versions are
+  that resolves an earlier line of a listed package (for example URP 10.x or
+  12.x) has that package's serialized content migrated as SER-005 defines and is
+  assessed against the listed line; behavior of the earlier line that differs
+  from the listed line is not matched. * A package, or a package version, that
+  the matrix does not list is Unknown until it is assessed. A Unity-published
+  package outside the matrix is reported Unknown and its published code is never
+  compiled in its place. Preview, experimental, and prerelease versions are
   Unknown unless the matrix lists them.
-* A package takes the tier of its owning catalog feature.
-* A Supported package provides the documented public behavior of the listed
-  version, subject to the limitations its owning specification states; for a
-  package whose owning feature is in the Familiar or Native tier, the owning
-  specification defines the behavior where it says so. Behavior that the owning
-  specification neither names nor excludes is Unknown until assessed and is
-  reported as such. A Partially supported package names its excluded behavior
-  in the matrix.
+* A package takes the tier of its owning catalog feature. * A Supported package
+  is one whose unitas implementation provides the documented public behavior of
+  the listed version, subject to the limitations its owning specification
+  states; for a package whose owning feature is in the Familiar or Native tier,
+  the owning specification defines the behavior where it says so. Behavior that
+  the owning specification neither names nor excludes is Unknown until assessed
+  and is reported as such. A Partially supported package names its excluded
+  behavior in the matrix.
 * Packages that a listed version requires as dependencies are covered to the
   extent the listed package's behavior depends on them. Project code that uses a
   dependency's own API directly is assessed on its own and is Unknown until
@@ -296,7 +300,7 @@ Matrix rules:
 | UI Toolkit runtime (`UIDocument`, UXML, USS, panel settings) | built into Unity 2022.3 LTS | Familiar | Supported | [UI, audio, and input](ui-audio-input.md) (UI-001) |
 | Visual Scripting (`com.unity.visualscripting`) | 1.x | Semantic | Supported | [Scripting runtime](scripting-runtime.md) (RUN-002) |
 | AR Foundation (`com.unity.xr.arfoundation`) with Apple ARKit (`com.unity.xr.arkit`) and Google ARCore (`com.unity.xr.arcore`) | 5.x | Familiar | Supported on devices that expose AR tracking | [Builds, platforms, XR, and networking](build-platforms-xr-networking.md) (XR-001) |
-| Unity Gaming Services SDKs (`com.unity.services.*`, including Authentication, Lobby, Relay, Cloud Save, and Analytics) | Released or verified | Familiar | Supported: the SDK behavior runs, and calls reach the services when the project has a service account and credentials; without them, calls return the services' own unavailable errors; data flows as PRD-002 defines | [Builds, platforms, XR, and networking](build-platforms-xr-networking.md) (NET-001) |
+| Unity Gaming Services SDKs (`com.unity.services.*`, including Authentication, Lobby, Relay, Cloud Save, and Analytics) | Released or verified | Familiar | Supported: unitas's own implementation of the SDKs' public APIs; reaching the services requires the developer's own agreement with the service provider, and the release's licensing table records whether those service terms permit unitas clients; data flows as PRD-002 defines | [Builds, platforms, XR, and networking](build-platforms-xr-networking.md) (NET-001) |
 
 "Released or verified" means the versions the Unity Package Manager marks as
 released or verified for Unity 2022.3 LTS.

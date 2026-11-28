@@ -20,10 +20,10 @@ owning specification governs.
 
 The Sprite Editor window belongs to the 2D Sprite package
 (`com.unity.2d.sprite`) and the Tile Palette window to the 2D Tilemap Editor
-package (`com.unity.2d.tilemap`). Each is the package's own editor window,
-drawn and run as an editor extension
-([Custom editor extensions](../editor-and-authoring.md#custom-editor-extensions),
-RUN-010 in [Scripting runtime](../scripting-runtime.md)), and appears at its
+package (`com.unity.2d.tilemap`). Each is part of unitas's own implementation of
+its package ([Independent
+implementation](../architecture.md#independent-implementation)), built on the
+same editor-window services as project editor extensions, and appears at its
 menu path only when the project includes its package. The Sprite Atlas
 inspector, packing, and preview are built in.
 

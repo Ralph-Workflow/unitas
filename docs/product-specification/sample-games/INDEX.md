@@ -148,21 +148,23 @@ the domain documents."
    escalation, Game feel, and Replay). Every game rule lives here and is
    implemented by the sample's own scripts.
 5. **Content**, with the subsections Assets (Asset | Source format | Import
-   settings that matter), Packages (version lines from CMP-002, resolved from
-   their registry and never vendored), Save data (formats, versions, and
-   locations), and Licences and provenance (a pointer to
-   `Licenses/content-licenses.json`).
+   settings that matter), Packages (version lines from CMP-002, each resolving
+   to unitas's own implementation as [Packages](../architecture.md#packages)
+   defines; no Unity-published package code is vendored, fetched, or compiled),
+   Save data (formats, versions, and locations), and Licences and provenance (a
+   pointer to `Licenses/content-licenses.json`).
 6. **Feature Coverage.** ID | Behavior | Scenarios, with one ID per row.
 7. **Engine Behavior This Game Depends On.** It opens with: "Only engine and
    package behavior, each tied to a catalog ID. Game rules are defined under
    Game Design and implemented by the sample's own scripts; the engine contains
-   no code specific to this game. Package behavior comes from the package's own
-   code at the pinned version line, compiled and run unmodified (CMP-002).
-   Agents reach the game only through the editor's generic MCP commands, with
-   no game-specific command." Its subsections are Scripting and runtime;
-   Project and content; Simulation; Rendering and animation; Audio and video;
-   Input; UI and text; Player and build; and Editor and automation. An optional
-   Networking, XR, or Platform and permissions subsection follows the nine.
+   no code specific to this game. Package behavior comes from unitas's own
+   implementation of each package's public API at the pinned version line
+   (CMP-002). Agents reach the game only through the editor's generic MCP
+   commands, with no game-specific command." Its subsections are Scripting and
+   runtime; Project and content; Simulation; Rendering and animation; Audio and
+   video; Input; UI and text; Player and build; and Editor and automation. An
+   optional Networking, XR, or Platform and permissions subsection follows the
+   nine.
 8. **Presentation and Performance**, with the subsections Visual checkpoints,
    Audio checkpoints, Project-declared expectations (per target class,
    evaluated only on the declared class, never PRF-002 budgets), and PRF-002

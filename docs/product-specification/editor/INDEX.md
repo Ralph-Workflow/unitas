@@ -65,11 +65,12 @@ governs.
   headless through the editor's MCP interface, or in the visual editor by
   input injection, and cites the catalog IDs it demonstrates.
 * Windows provided by packages (for example Timeline, Sprite Editor, Tile
-  Palette, Memory Profiler, Shader Graph, and Test Runner) are the packages'
-  own editor windows, drawn as editor extensions (RUN-010 in
-  [Scripting runtime](../scripting-runtime.md)); their documents state the
-  resulting behaviour, the editor services the windows rely on, and the state
-  shown when the package is absent.
+  Palette, Memory Profiler, Shader Graph, and Test Runner) are part of unitas's
+  own implementations of those packages ([Independent
+  implementation](../architecture.md#independent-implementation)), built on the
+  same editor-window services as project editor extensions; their documents
+  state the resulting behaviour, the editor services the windows rely on, and
+  the state shown when the package is absent.
 
 ## Scale
 

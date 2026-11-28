@@ -91,9 +91,10 @@ This section applies [Engine architecture](architecture.md) to builds, players, 
 ### XR
 
 * The XR subsystem owns the session, runtime, tracking spaces, poses, and haptics, and
-  reaches the device through the OpenXR loader in the platform layer. The XR packages'
-  managed code runs as shipped. unitas provides the native provider that code calls, in place
-  of the package's native library. `XRDisplaySubsystem`, `XRInputSubsystem`, and the XR Plugin
+  reaches the device through the OpenXR loader in the platform layer. The XR packages are unitas's
+  own implementations of their public APIs, including the OpenXR provider
+  ([Independent implementation](architecture.md#independent-implementation)); no Unity XR
+  library is loaded. `XRDisplaySubsystem`, `XRInputSubsystem`, and the XR Plugin
   Management loaders are bindings over this subsystem.
 * Interaction profiles and hand joints become Input System devices through the input
   subsystem. Render views (poses, fields of view, and the runtime's swapchain images) go to
@@ -110,8 +111,8 @@ This section applies [Engine architecture](architecture.md) to builds, players, 
 
 * Layers, bottom up: platform sockets (UDP and TCP on native targets, WebSocket and WebRTC
   data channels in the browser), Unity Transport, a netcode package, then the game. Each layer
-  uses only the one below. The packages' managed code runs as shipped. unitas provides the
-  sockets, jobs, and engine APIs it calls.
+  uses only the one below. The netcode and transport packages are unitas's own
+  implementations of their public APIs, over the engine's sockets and jobs.
 * Socket I/O is asynchronous and never blocks the main thread. Sends and receives are drained
   at defined loop phases, and netcode reads time only from the time the loop publishes.
 * Server, host, client, and thin client are roles of the same player. Several instances,
@@ -795,9 +796,10 @@ identity, and the public types and members of those packages keep their Unity
 defines, and every known difference from Unity is listed in the API reference
 owned by AUT-006 in [Automation and MCP](automation-and-mcp.md).
 
-The managed code of each listed XR package runs as shipped. unitas provides the
-engine APIs and native subsystems that code calls, including an OpenXR provider
-that takes the place of the package's native provider library.
+Each listed XR package, including its OpenXR provider, is unitas's own
+implementation of that package's public API, as
+[Independent implementation](architecture.md#independent-implementation) defines.
+No Unity-published XR code or native library is loaded.
 
 XR exposes tracked head and controller poses, tracking state, declared actions,
 device capabilities, render views, recentering, interaction, the haptics each
@@ -913,8 +915,10 @@ identity, and the API shape below keeps its Unity 2022.3 LTS names and
 signatures; the behavior is the behavior this section defines, and every known
 difference from Unity is listed in the AUT-006 API reference.
 
-The managed code of each listed networking package runs as shipped. unitas
-provides the sockets, jobs, and engine APIs that code calls.
+Each listed networking package is unitas's own implementation of that
+package's public API, as
+[Independent implementation](architecture.md#independent-implementation) defines,
+over the engine's sockets, jobs, and engine APIs.
 
 When a supported networking package and version is declared for the project, a
 game can represent sessions, connections, player identity, ownership, messages,
@@ -1084,8 +1088,11 @@ license, signing identity, or platform entitlement.
 
 The Unity Gaming Services SDKs (`com.unity.services.*`, including
 Authentication, Lobby, Relay, Cloud Save, and Analytics) in the version lines
-CMP-002 lists run as shipped. With a service account and credentials
-configured for the project, their calls reach the services. Without them,
+CMP-002 lists are unitas's own implementations of the SDKs' public APIs.
+Reaching the services requires the developer's own agreement with the service
+provider; the release's licensing table records whether those service terms
+permit unitas clients. With a service account and credentials configured for
+the project, calls reach the services. Without them,
 calls return the services' own unavailable errors, which are reported as the
 unavailable-integration outcome. Their data flows follow
 [Product data flows, telemetry, and privacy](#product-data-flows-telemetry-and-privacy).

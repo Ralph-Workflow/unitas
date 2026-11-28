@@ -208,9 +208,10 @@ All settings persist through `PlayerPrefs` and take effect immediately.
 ### Packages
 
 uGUI 1.0.x, TextMeshPro 3.0.x, Input System 1.x (for the input variant), and URP
-14.x (for the URP variant), at the version lines CMP-002 lists. Packages are
-resolved from their registry when the project opens and are never vendored in
-the sample repository.
+14.x (for the URP variant), at the version lines CMP-002 lists. Each package
+resolves to unitas's own implementation of that version line
+([Packages](../architecture.md#packages)); no Unity-published package code is
+vendored in the sample repository, fetched, or compiled.
 
 ### Save data
 
@@ -263,11 +264,11 @@ the build's licence report.
 
 Only engine and package behavior, each tied to a catalog ID. Game rules are
 defined under Game Design and implemented by the sample's own scripts; the
-engine contains no code specific to this game. Package behavior comes from the
-package's own code at the pinned version line, compiled and run unmodified
-(CMP-002). Agents reach the game only through the editor's generic MCP object,
-property, method-invocation, input, and capture commands, with no
-game-specific command.
+engine contains no code specific to this game. Package behavior comes from
+unitas's own implementation of each package's public API at the pinned version
+line ([Packages](../architecture.md#packages), CMP-002). Agents reach the game
+only through the editor's generic MCP object, property, method-invocation,
+input, and capture commands, with no game-specific command.
 
 ### Scripting and runtime
 

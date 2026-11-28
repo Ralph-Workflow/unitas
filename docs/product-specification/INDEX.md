@@ -107,12 +107,15 @@ never silently approximated.
 
 ### Packages
 
-Behavior provided by Unity packages is in scope only for the package families
-and version lines that the supported package matrix lists (CMP-002, owned by
-the [Compatibility contract](compatibility-contract.md)). A package that the
-matrix does not list is reported as Unknown until it is assessed; it is never
-assumed to be supported. The matrix grows until it covers every package that
-Unity publishes as released or verified for Unity 2022.3 LTS.
+Behavior provided by Unity packages comes from unitas's own implementation of
+each package's public API, never from the code Unity publishes for it, as
+[Independent implementation](architecture.md#independent-implementation)
+defines. It is in scope only for the package families and version lines that the
+supported package matrix lists (CMP-002, owned by the [Compatibility
+contract](compatibility-contract.md)). A package that the matrix does not list
+is reported as Unknown until it is assessed; it is never assumed to be
+supported. The matrix grows until it covers every package that Unity publishes
+as released or verified for Unity 2022.3 LTS.
 
 ### Full Unity 2022.3 LTS content coverage
 

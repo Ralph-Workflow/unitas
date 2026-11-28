@@ -18,10 +18,10 @@ graphs by ANI-002; sequences and cinematic tracks by CIN-001, all in
 states what a value means at runtime, the owning specification governs.
 
 The Animation and Animator windows are built-in windows. The Timeline window
-belongs to the Timeline package (`com.unity.timeline`): it is the package's
-own editor window, drawn and run as an editor extension
-([Custom editor extensions](../editor-and-authoring.md#custom-editor-extensions),
-RUN-010 in [Scripting runtime](../scripting-runtime.md)), and appears at its
+belongs to the Timeline package (`com.unity.timeline`). It is part of unitas's
+own implementation of that package ([Independent
+implementation](../architecture.md#independent-implementation)), built on the
+same editor-window services as project editor extensions, and appears at its
 menu path only when the project includes the package.
 
 Every window here docks, groups as tabs, floats, and maximizes as defined in

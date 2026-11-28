@@ -74,11 +74,12 @@ agents can request them but cannot grant them.
 * **Importers.** Built-in importers use mature decoders and run in import
   workers, so a decoder failure fails one asset and the import continues.
   Project-supplied importers and postprocessors run in the worker that hosts
-  project code and only in a trusted project. Shader import hands shaders to
-  the rendering subsystem's compiler toolchain at this stage.
-* **Packages.** Resolution runs in the project model, fetches only with
-  consent, and stores fetched package content in a per-user content-addressed
-  store; resolved packages appear as read-only roots of the asset registry.
+  project code and only in a trusted project. Shader import hands shaders to the
+  rendering subsystem's compiler toolchain at this stage. * **Packages.**
+  Supported Unity-published packages resolve to the implementations that ship
+  with unitas. Resolution runs in the project model, fetches only with consent,
+  and stores fetched package content in a per-user content-addressed store;
+  resolved packages appear as read-only roots of the asset registry.
 * **Sameness.** The visual editor and headless sessions use the same model,
   cache, and scheduler. Play sessions and builds consume only cooked
   artifacts from that cache, and a build packs the target's artifacts without
@@ -466,8 +467,15 @@ the project trust rules of [Project trust](#project-trust).
 `Packages/manifest.json` declares the project's packages. Each dependency is
 resolved from its declared source:
 
-* A version from the Unity registry or a scoped registry. Scoped registries
-  route the package names that match their scopes to their registry URL.
+* A Unity-published package name in the supported package matrix (CMP-002)
+resolves to unitas's own implementation of the listed version line, which ships
+with unitas, as [Independent
+implementation](architecture.md#independent-implementation) defines. unitas
+never fetches, compiles, or loads the code Unity publishes for it, and an
+embedded copy of it under `Packages/` stays on disk untouched, is reported, and
+is never compiled.
+* A version from a scoped registry. Scoped registries route the package names
+  that match their scopes to their registry URL.
 * A git URL, with an optional revision and package path.
 * A local package by `file:` path outside the project.
 * An embedded package stored under `Packages/`.

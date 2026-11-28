@@ -415,18 +415,18 @@ column. The external editor is a per-user preference.
 
 The IDE integration packages that the project includes
 (`com.unity.ide.visualstudio`, `com.unity.ide.rider`, and
-`com.unity.ide.vscode`) add their editors as choices of that preference, and
-the external-editor preference page draws each package's own preferences, such
-as which kinds of packages get generated project files and the command-line
-arguments to pass, as an editor extension (RUN-010). Changing them has the
-package's documented effect, including on project-file generation and
-regeneration (DIA-002 in
-[Diagnostics, profiling, and playtesting](diagnostics-profiling-playtesting.md)),
-and agents read and change the same preferences through MCP (AUT-001). When
-the package's editor is chosen, opening a script reaches the IDE through the
-package's own launch behavior. When the IDE the package names is not
-installed, the preference page states this and opening a script falls back as
-below.
+`com.unity.ide.vscode`) add their editors as choices of that preference, and the
+external-editor preference page shows each package's preferences, such as which
+kinds of packages get generated project files and the command-line arguments to
+pass. These packages are unitas's own implementations ([Independent
+implementation](architecture.md#independent-implementation)). Changing them has
+the package's documented effect, including on project-file generation and
+regeneration (DIA-002 in [Diagnostics, profiling, and
+playtesting](diagnostics-profiling-playtesting.md)), and agents read and change
+the same preferences through MCP (AUT-001). When the package's editor is chosen,
+opening a script reaches the IDE through the package's documented launch
+behavior. When the IDE the package names is not installed, the preference page
+states this and opening a script falls back as below.
 
 When none is configured,
 the operating system's default handler for the file type is used and the
@@ -595,12 +595,13 @@ of AUT-007 in [Automation and MCP](automation-and-mcp.md). A commit made for an
 agent session contains only applied changes, never items held for approval
 (EDT-008), and records the agent session that requested it.
 
-The Version Control package (`com.unity.collab-proxy`) and the project's
-Plastic SCM and Unity Version Control settings, including the project's
-version control mode (PRJ-007 in [Projects and assets](project-and-assets.md)),
-are kept unchanged as project content. The package's own windows draw as
-editor extensions (RUN-010) and operate when its service and account are
-available.
+The Version Control package (`com.unity.collab-proxy`) and the project's Plastic
+SCM and Unity Version Control settings, including the project's version control
+mode (PRJ-007 in [Projects and assets](project-and-assets.md)), are kept
+unchanged as project content. The package's windows are part of unitas's
+implementation of it ([Independent
+implementation](architecture.md#independent-implementation)) and operate when
+its service and account are available.
 
 ### Semantic diff and three-way merge
 
@@ -892,10 +893,10 @@ the keyboard.
 35. A project with the Version Control package and Unity Version Control
     settings opens, keeps those settings unchanged through save, and draws
     the package's window. (EDT-007)
-36. The preference page of an installed IDE integration package draws the
-    package's own preferences, changing which packages get generated project
-    files regenerates them accordingly, and an agent reads and changes the
-    same preference through MCP. (EDT-006, DIA-002)
+36. The preference page of an installed IDE integration package shows the
+    package's preferences, changing which packages get generated project files
+    regenerates them accordingly, and an agent reads and changes the same
+    preference through MCP. (EDT-006, DIA-002)
 37. A three-way merge of a binary-serialized scene changed on two branches
     combines changes to different properties, surfaces a same-property
     conflict, and writes the result in binary form; a corrupt asset is
