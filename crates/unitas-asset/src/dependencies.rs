@@ -219,7 +219,7 @@ impl ImportRecord {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ImportSessionReport {
     pub records: Vec<ImportRecord>,
     pub imported: usize,

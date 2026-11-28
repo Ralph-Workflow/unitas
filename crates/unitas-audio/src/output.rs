@@ -55,8 +55,17 @@ fn take_armed_capture() -> Option<DeviceCapture> {
         Ok(guard) => guard,
         Err(poisoned) => poisoned.into_inner(),
     };
-    armed.take()
+    match armed.take() {
+        // A capture whose sample rate is already set was claimed by a
+        // FrameHandoff (enable_capture); it belongs to that handoff and must
+        // not be re-armed at the device rate.
+        Some(capture) if capture.lock().sample_rate != 0 => None,
+        other => other,
+    }
 }
+
+#[cfg(test)]
+pub(crate) static CAPTURE_TEST_LOCK: Mutex<()> = Mutex::new(());
 
 impl DeviceCapture {
     /// The mix sample rate the capture recorded at.
@@ -500,6 +509,9 @@ mod tests {
 
     #[test]
     fn device_start_returns_a_typed_error_instead_of_panicking() {
+        let _capture_guard = crate::output::CAPTURE_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         match DeviceOutput::start() {
             Ok(output) => {
                 assert!(output.sample_rate() > 0);

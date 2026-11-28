@@ -219,7 +219,14 @@ mod tests {
         let ring = std::sync::Arc::new(SampleRing::new(4));
         let consumer = std::sync::Arc::clone(&ring);
         let handle = std::thread::spawn(move || {
-            std::thread::sleep(Duration::from_millis(20));
+            // Wait until the producer has filled the ring (so `push` must
+            // block) instead of sleeping a fixed time: the 50 ms push
+            // deadline can expire before a fixed-sleep consumer is scheduled
+            // on a loaded machine.
+            let deadline = std::time::Instant::now() + Duration::from_secs(5);
+            while consumer.pending_frames() < 4 && std::time::Instant::now() < deadline {
+                std::thread::yield_now();
+            }
             let mut out = vec![0.0f32; 8];
             consumer.fill(&mut out);
             out

@@ -1629,6 +1629,11 @@ pub fn cook_audio_candidates(
 ) -> Result<(CookedAudioManifest, ImportSessionReport), ImportCacheError> {
     let _cook_guard = lock_audio_cook();
     let cache_cooked_dir = cache_dir.join(COOKED_DIR_NAME);
+    if candidates.is_empty() && !cache_cooked_dir.is_dir() {
+        // Nothing to cook and no prior cache: stay side-effect free so builds
+        // never create cache directories inside project content.
+        return Ok((CookedAudioManifest::new(), ImportSessionReport::default()));
+    }
     fs::create_dir_all(&cache_cooked_dir).map_err(|error| ImportCacheError {
         path: cache_cooked_dir.clone(),
         message: error.to_string(),

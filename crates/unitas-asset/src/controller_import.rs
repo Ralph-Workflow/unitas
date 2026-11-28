@@ -93,8 +93,12 @@ pub fn import_animator_controller(
 
     let parameters = parse_parameters(controller_node, &asset_label)?;
     let layer_specs = parse_layer_specs(controller_node, guids, &asset_label)?;
-    let base_machine_id =
-        resolve_base_machine_id(controller_node, &layer_specs, first_state_machine_id, &asset_label)?;
+    let base_machine_id = resolve_base_machine_id(
+        controller_node,
+        &layer_specs,
+        first_state_machine_id,
+        &asset_label,
+    )?;
 
     let base = parse_state_machine(
         base_machine_id,
@@ -313,18 +317,13 @@ fn parse_layer_mask(
     let mask_doc = stream
         .documents
         .iter()
-        .find(|doc| {
-            doc.class_id == AVATAR_MASK_CLASS_ID || doc.root.get("AvatarMask").is_some()
-        })
+        .find(|doc| doc.class_id == AVATAR_MASK_CLASS_ID || doc.root.get("AvatarMask").is_some())
         .ok_or_else(|| AnimImportError::MalformedController {
             asset: mask_label.clone(),
             member: member.clone(),
             reason: "mask asset has no AvatarMask document".to_string(),
         })?;
-    let mask_root = mask_doc
-        .root
-        .get("AvatarMask")
-        .unwrap_or(&mask_doc.root);
+    let mask_root = mask_doc.root.get("AvatarMask").unwrap_or(&mask_doc.root);
     let mask_name = mask_root
         .get("m_Name")
         .and_then(YamlNode::as_str)
@@ -518,13 +517,14 @@ fn parse_state_machine(
         }
     }
 
-    let root_info = machines.get(&machine_id).ok_or_else(|| {
-        AnimImportError::MalformedController {
-            asset: asset_label.to_string(),
-            member: "m_StateMachine".to_string(),
-            reason: format!("state machine fileID {machine_id} was not collected"),
-        }
-    })?;
+    let root_info =
+        machines
+            .get(&machine_id)
+            .ok_or_else(|| AnimImportError::MalformedController {
+                asset: asset_label.to_string(),
+                member: "m_StateMachine".to_string(),
+                reason: format!("state machine fileID {machine_id} was not collected"),
+            })?;
     let entry_state = if root_info.default_state_id != 0 {
         resolve_default_state_index(
             root_info.default_state_id,

@@ -335,7 +335,11 @@ fn probe_entity(runtime: &Runtime) -> Result<EntityId, Box<dyn std::error::Error
     graph
         .breadth_first_order()
         .into_iter()
-        .find(|id| graph.entity(*id).is_some_and(|entity| entity.name == "Probe"))
+        .find(|id| {
+            graph
+                .entity(*id)
+                .is_some_and(|entity| entity.name == "Probe")
+        })
         .ok_or_else(|| String::from("probe entity not found").into())
 }
 

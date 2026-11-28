@@ -682,7 +682,12 @@ fn assert_ser005_footprint(
     expected_added: &[PathBuf],
 ) -> Result<(), Box<dyn std::error::Error>> {
     for generated in ["Library", "Temp", "Logs", "obj", "UserSettings"] {
-        assert!(!project_root.join(generated).exists());
+        let generated_path = project_root.join(generated);
+        assert!(
+            !generated_path.exists(),
+            "generated directory written into project content: {}",
+            generated_path.display()
+        );
     }
     assert!(!project_root
         .join("ProjectSettings/UnitasVersion.txt")

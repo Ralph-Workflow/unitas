@@ -2860,6 +2860,11 @@ mod tests {
     #[test]
     fn looping_music_reaches_the_device_capture_without_a_seam_gap() -> Result<(), AudioError> {
         use crate::output::{arm_capture, FrameHandoff};
+        // Serializes with the DeviceOutput-start test: both touch the global
+        // ARMED_CAPTURE slot, which races under parallel test threads.
+        let _capture_guard = crate::output::CAPTURE_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
 
         let path = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../samples/marble-rush/Assets/Audio/MusicLoop.wav");
