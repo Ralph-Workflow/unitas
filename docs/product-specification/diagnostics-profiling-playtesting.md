@@ -235,6 +235,11 @@ edits, undo, and save on such content complete within the release's declared
 budgets, and that queries return paginated results rather than the whole
 project.
 
+Scenes at the scale floor also play. In play mode in the editor and in the
+packaged player, such a scene runs within the release's declared frame-time
+budget, and an object that neither changes nor is visible in a frame adds no
+measurable cost to that frame.
+
 ### Declared budgets
 
 Each release declares budgets, measured on named reference projects with
@@ -249,6 +254,8 @@ recorded hardware, operating system, and target, for:
 * runtime frame-time overhead relative to the Unity reference player on the
   benchmark projects (CMP-001 in [Playable samples and benchmarks](sample-games/INDEX.md)),
   same target and hardware;
+* runtime frame time on the scale-floor reference scenes in play mode, in the
+  editor and the packaged player;
 * player startup time;
 * editor, headless, and player memory overhead;
 * hierarchy and asset queries, search, selection, property edits, undo, and
