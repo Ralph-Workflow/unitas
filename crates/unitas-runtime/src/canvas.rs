@@ -1308,11 +1308,11 @@ impl CanvasState {
                 ctx.scale,
             ),
         );
-        let children = self.active_children_of(entity);
-        if children.is_empty() {
-            return;
-        }
         if let Some(group) = self.active_layout_group(entity) {
+            let children = self.active_children_of(entity);
+            if children.is_empty() {
+                return;
+            }
             let child_rects = resolve_layout_group_children(
                 &group,
                 current_rect,
@@ -1323,6 +1323,10 @@ impl CanvasState {
             for (child, child_rect) in children.into_iter().zip(child_rects) {
                 self.resolve_subtree_rects(child, child_rect, ctx, results, depth + 1);
             }
+            return;
+        }
+        let children = self.children_of(entity);
+        if children.is_empty() {
             return;
         }
         for child in children {
@@ -1408,6 +1412,16 @@ impl CanvasState {
             return Some(measure_text_preferred(content, font_size, color));
         }
         None
+    }
+
+    fn children_of(&self, parent: EntityId) -> Vec<EntityId> {
+        let mut children = Vec::new();
+        for rect in &self.binding.rect_transforms {
+            if rect.parent == Some(parent) {
+                children.push(rect.entity);
+            }
+        }
+        children
     }
 
     fn active_children_of(&self, parent: EntityId) -> Vec<EntityId> {

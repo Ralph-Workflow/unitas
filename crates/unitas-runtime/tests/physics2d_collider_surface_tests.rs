@@ -225,7 +225,7 @@ fn polygon_and_edge_colliders_created_via_abi_participate_in_2d_simulation_conta
 }
 
 #[test]
-fn composite_outline_merges_two_abutting_box_colliders_and_slides_smoothly_across_seam() {
+fn physics2d_composite_outline_merges_two_abutting_box_colliders_and_slides_smoothly_across_seam() {
     let handle = unitas_runtime_new();
     assert_ne!(handle, 0);
 

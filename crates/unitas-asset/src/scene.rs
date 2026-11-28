@@ -18,11 +18,19 @@ use self::scene_audio::collect_audio;
 use self::scene_physics::{
     collect_physics, collect_physics_2d, is_character_controller, AssembledScenePhysics,
 };
+use self::scene_ui::collect_ui;
 
 pub use crate::particle::PARTICLE_SYSTEM_CLASS;
 pub use crate::trail::TRAIL_RENDERER_CLASS;
+pub use scene_anim::AnimatorBinding;
 pub use scene_audio::{AudioFilterComponent, AudioFilterKind};
 pub use scene_physics::parse_physic_material;
+pub use scene_ui::{
+    CanvasComponent, CanvasMatchMode, CanvasRenderMode, CanvasScaleMode, CanvasScalerComponent,
+    ContentSizeFitMode, LayoutGroupAxis, RectTransformComponent, UiBinding, UiButtonComponent,
+    UiContentSizeFitterComponent, UiElementComponent, UiImageComponent, UiLayoutGroupComponent,
+    UiPadding, UiTextComponent, CANVAS_CLASS, RECT_TRANSFORM_CLASS,
+};
 
 #[path = "scene_anim.rs"]
 mod scene_anim;
@@ -32,8 +40,8 @@ mod scene_audio;
 pub mod scene_physics;
 #[path = "scene_sprite.rs"]
 mod scene_sprite;
-
-use self::scene_sprite::{sprite_border, ui_image_draw_mode};
+#[path = "scene_ui.rs"]
+mod scene_ui;
 
 pub const AUDIO_SOURCE_CLASS: u32 = 82;
 pub const AUDIO_CLIP_CLASS: u32 = 83;
@@ -44,8 +52,6 @@ pub const MESH_COLLIDER_CLASS: u32 = 64;
 pub const ANIMATOR_CLASS: u32 = 95;
 pub const LIGHT_CLASS: u32 = 108;
 pub const SPRITE_RENDERER_CLASS: u32 = 212;
-pub const CANVAS_CLASS: u32 = 223;
-pub const RECT_TRANSFORM_CLASS: u32 = 224;
 pub const IMAGE_SCRIPT_GUID: &str = "fe87c0e1cc204ed48ad3b37840f39efc";
 pub const TEXT_SCRIPT_GUID: &str = "5f7201a12d95ffc409449d95f23cf332";
 pub const BUTTON_SCRIPT_GUID: &str = "4e29b1a8efbd4b44bb3f3716e73f07ff";
@@ -107,11 +113,6 @@ const DEFAULT_LIGHT_COLOR: [f32; 3] = [1.0, 1.0, 1.0];
 const DEFAULT_SPRITE_COLOR: [f32; 4] = [1.0, 1.0, 1.0, 1.0];
 const DEFAULT_LIGHT_DIRECTION: [f32; 3] = [0.0, -1.0, 0.0];
 const DIRECTIONAL_LIGHT_TYPE: i64 = 1;
-const DEFAULT_UI_COLOR: [f32; 4] = [1.0, 1.0, 1.0, 1.0];
-const DEFAULT_UI_FONT_SIZE: f32 = 14.0;
-const DEFAULT_UI_ENABLED: bool = true;
-const DEFAULT_REFERENCE_RESOLUTION: [f32; 2] = [800.0, 600.0];
-const DEFAULT_MATCH_WIDTH_OR_HEIGHT: f32 = 0.0;
 const CHARACTER_CONTROLLER_SCRIPT_NAME: &str = "CharacterController";
 const CHARACTER_CONTROLLER_FIELD_KEYS: [&str; 4] = [
     "m_SlopeLimit",
@@ -521,199 +522,6 @@ pub struct RenderBinding {
     pub sprites: Vec<SpriteRendererComponent>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CanvasRenderMode {
-    ScreenSpaceOverlay,
-    ScreenSpaceCamera,
-    WorldSpace,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CanvasScaleMode {
-    ConstantPixelSize,
-    ScaleWithScreenSize,
-    ConstantPhysicalSize,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CanvasMatchMode {
-    MatchWidthOrHeight,
-    Shrink,
-    Expand,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct CanvasScalerComponent {
-    pub ui_scale_mode: CanvasScaleMode,
-    pub reference_resolution: [f32; 2],
-    pub screen_match_mode: CanvasMatchMode,
-    pub match_width_or_height: f32,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct CanvasComponent {
-    pub entity: EntityId,
-    pub render_mode: CanvasRenderMode,
-    pub sorting_order: i64,
-    pub scaler: Option<CanvasScalerComponent>,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct RectTransformComponent {
-    pub entity: EntityId,
-    pub parent: Option<EntityId>,
-    pub anchor_min: [f32; 2],
-    pub anchor_max: [f32; 2],
-    pub anchored_position: [f32; 2],
-    pub size_delta: [f32; 2],
-    pub pivot: [f32; 2],
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct UiImageComponent {
-    pub entity: EntityId,
-    pub color: [f32; 4],
-    pub sprite_guid: Option<AssetGuid>,
-    pub enabled: bool,
-    pub draw_mode: SpriteDrawMode,
-    /// The nine-slice border of the sprite in sprite pixels: left, bottom, right, top.
-    pub sprite_border: [f32; 4],
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct UiTextComponent {
-    pub entity: EntityId,
-    pub text: String,
-    pub color: [f32; 4],
-    pub font_size: f32,
-    pub enabled: bool,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct UiButtonComponent {
-    pub entity: EntityId,
-    pub target_graphic: Option<EntityId>,
-    pub interactable: bool,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub struct UiPadding {
-    pub left: i32,
-    pub right: i32,
-    pub top: i32,
-    pub bottom: i32,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum LayoutGroupAxis {
-    #[default]
-    Horizontal,
-    Vertical,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct UiLayoutGroupComponent {
-    pub entity: EntityId,
-    pub axis: LayoutGroupAxis,
-    pub padding: UiPadding,
-    pub spacing: f32,
-    pub child_alignment: u32,
-    pub child_control_width: bool,
-    pub child_control_height: bool,
-    pub child_force_expand_width: bool,
-    pub child_force_expand_height: bool,
-    pub enabled: bool,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum ContentSizeFitMode {
-    #[default]
-    Unconstrained = 0,
-    MinSize = 1,
-    PreferredSize = 2,
-}
-
-impl ContentSizeFitMode {
-    pub const fn from_u32(code: u32) -> Option<Self> {
-        match code {
-            0 => Some(Self::Unconstrained),
-            1 => Some(Self::MinSize),
-            2 => Some(Self::PreferredSize),
-            _ => None,
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct UiContentSizeFitterComponent {
-    pub entity: EntityId,
-    pub horizontal_fit: ContentSizeFitMode,
-    pub vertical_fit: ContentSizeFitMode,
-    pub enabled: bool,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub enum UiElementComponent {
-    Image(UiImageComponent),
-    Text(UiTextComponent),
-    Button(UiButtonComponent),
-}
-
-impl UiElementComponent {
-    pub fn entity(&self) -> EntityId {
-        match self {
-            Self::Image(image) => image.entity,
-            Self::Text(text) => text.entity,
-            Self::Button(button) => button.entity,
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Default)]
-pub struct UiBinding {
-    pub canvases: Vec<CanvasComponent>,
-    pub rect_transforms: Vec<RectTransformComponent>,
-    pub elements: Vec<UiElementComponent>,
-    pub layout_groups: Vec<UiLayoutGroupComponent>,
-    pub content_size_fitters: Vec<UiContentSizeFitterComponent>,
-}
-
-impl UiBinding {
-    pub fn shift_entity_ids(&mut self, base: u64) {
-        for canvas in &mut self.canvases {
-            canvas.entity = EntityId::new(base + canvas.entity.as_u64());
-        }
-        for rect in &mut self.rect_transforms {
-            rect.entity = EntityId::new(base + rect.entity.as_u64());
-            rect.parent = rect
-                .parent
-                .map(|parent| EntityId::new(base + parent.as_u64()));
-        }
-        for element in &mut self.elements {
-            match element {
-                UiElementComponent::Image(image) => {
-                    image.entity = EntityId::new(base + image.entity.as_u64());
-                }
-                UiElementComponent::Text(text) => {
-                    text.entity = EntityId::new(base + text.entity.as_u64());
-                }
-                UiElementComponent::Button(button) => {
-                    button.entity = EntityId::new(base + button.entity.as_u64());
-                    button.target_graphic = button
-                        .target_graphic
-                        .map(|target| EntityId::new(base + target.as_u64()));
-                }
-            }
-        }
-        for group in &mut self.layout_groups {
-            group.entity = EntityId::new(base + group.entity.as_u64());
-        }
-        for fitter in &mut self.content_size_fitters {
-            fitter.entity = EntityId::new(base + fitter.entity.as_u64());
-        }
-    }
-}
-
 #[derive(Debug, Clone, PartialEq)]
 pub struct ParticleBinding {
     pub entity: EntityId,
@@ -724,16 +532,6 @@ pub struct ParticleBinding {
 pub struct TrailBinding {
     pub entity: EntityId,
     pub binding: TrailRendererBinding,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct AnimatorBinding {
-    pub entity: EntityId,
-    pub controller_guid: Option<String>,
-    pub enabled: bool,
-    pub apply_root_motion: bool,
-    pub culling_mode: i32,
-    pub update_mode: i32,
 }
 
 #[derive(Debug)]
@@ -1843,267 +1641,10 @@ fn collect_particles_and_trails(
     (particles, trails)
 }
 
-fn collect_ui(
-    stream: &Stream,
-    game_objects: &GameObjectRecords,
-    instance_roots: &HashSet<i64>,
-    index: Option<&GuidIndex>,
-) -> UiBinding {
-    let mut binding = UiBinding::default();
-    let mut collectors = UiCollectors::default();
-    let mut rect_entities: HashMap<i64, EntityId> = HashMap::new();
-    let mut rect_fathers: HashMap<i64, i64> = HashMap::new();
-    let mut rects: Vec<(i64, RectTransformComponent)> = Vec::new();
-    for doc in &stream.documents {
-        if doc.stripped {
-            continue;
-        }
-        if doc.class_id == RECT_TRANSFORM_CLASS {
-            let Some(body) = doc.root.get("RectTransform") else {
-                continue;
-            };
-            let Some(entity) = component_entity(body, game_objects, instance_roots) else {
-                continue;
-            };
-            rect_entities.insert(doc.file_id, entity);
-            if let Ok(Some(father)) = reference_id(body.get("m_Father")) {
-                rect_fathers.insert(doc.file_id, father);
-            }
-            rects.push((doc.file_id, parse_rect_transform(entity, body)));
-        } else if doc.class_id == CANVAS_CLASS {
-            let Some(body) = doc.root.get("Canvas") else {
-                continue;
-            };
-            let Some(entity) = component_entity(body, game_objects, instance_roots) else {
-                continue;
-            };
-            binding.canvases.push(CanvasComponent {
-                entity,
-                render_mode: canvas_render_mode(body.get("m_RenderMode")),
-                sorting_order: body
-                    .get("m_SortingOrder")
-                    .and_then(Node::as_i64)
-                    .unwrap_or(0),
-                scaler: None,
-            });
-        }
-    }
-    for (file_id, rect) in &mut rects {
-        rect.parent = rect_fathers
-            .get(file_id)
-            .and_then(|f| rect_entities.get(f))
-            .copied();
-    }
-    binding.rect_transforms = rects.into_iter().map(|(_, rect)| rect).collect();
-    for doc in &stream.documents {
-        if doc.stripped || doc.class_id != MONO_BEHAVIOUR_CLASS {
-            continue;
-        }
-        let Some(body) = doc.root.get("MonoBehaviour") else {
-            continue;
-        };
-        let Some(guid) = body
-            .get("m_Script")
-            .and_then(|n| n.get("guid"))
-            .and_then(Node::as_str)
-            .map(str::trim)
-        else {
-            continue;
-        };
-        let Some(entity) = component_entity(body, game_objects, instance_roots) else {
-            continue;
-        };
-        collect_ui_mono_behaviour(
-            doc.file_id,
-            entity,
-            guid,
-            body,
-            index,
-            &mut binding,
-            &mut collectors,
-        );
-    }
-    for (slot, target) in collectors.button_targets {
-        if let Some(entity) = collectors.graphics.get(&target).copied() {
-            if let Some(UiElementComponent::Button(button)) = binding.elements.get_mut(slot) {
-                button.target_graphic = Some(entity);
-            }
-        }
-    }
-    binding
-}
-
-/// The graphics and button targets the UI parser collects while it walks the
-/// scene's `MonoBehaviour` components.
-#[derive(Default)]
-struct UiCollectors {
-    graphics: HashMap<i64, EntityId>,
-    button_targets: Vec<(usize, i64)>,
-}
-
-fn parse_rect_transform(entity: EntityId, body: &Node) -> RectTransformComponent {
-    RectTransformComponent {
-        entity,
-        parent: None,
-        anchor_min: vector2_or(body.get("m_AnchorMin"), [0.0, 0.0]),
-        anchor_max: vector2_or(body.get("m_AnchorMax"), [1.0, 1.0]),
-        anchored_position: vector2_or(body.get("m_AnchoredPosition"), [0.0, 0.0]),
-        size_delta: vector2_or(body.get("m_SizeDelta"), [0.0, 0.0]),
-        pivot: vector2_or(body.get("m_Pivot"), [0.5, 0.5]),
-    }
-}
-
-fn collect_ui_mono_behaviour(
-    file_id: i64,
-    entity: EntityId,
-    guid: &str,
-    body: &Node,
-    index: Option<&GuidIndex>,
-    binding: &mut UiBinding,
-    collectors: &mut UiCollectors,
-) {
-    match guid {
-        IMAGE_SCRIPT_GUID => {
-            collectors.graphics.insert(file_id, entity);
-            let sprite = body.get("m_Sprite");
-            let sprite_guid = sprite_guid(sprite);
-            binding
-                .elements
-                .push(UiElementComponent::Image(UiImageComponent {
-                    entity,
-                    color: color4_or(body.get("m_Color"), DEFAULT_UI_COLOR),
-                    sprite_border: sprite_border(index, sprite_guid.as_deref()),
-                    sprite_guid,
-                    enabled: yaml_bool(body.get("m_Enabled"), DEFAULT_UI_ENABLED),
-                    draw_mode: ui_image_draw_mode(body.get("m_Type")),
-                }));
-        }
-        TEXT_SCRIPT_GUID => binding
-            .elements
-            .push(UiElementComponent::Text(UiTextComponent {
-                entity,
-                text: body
-                    .get("m_Text")
-                    .and_then(Node::as_str)
-                    .unwrap_or_default()
-                    .to_string(),
-                color: color4_or(body.get("m_Color"), DEFAULT_UI_COLOR),
-                font_size: yaml_f32(body.get("m_FontSize"), DEFAULT_UI_FONT_SIZE, |v| v > 0.0),
-                enabled: yaml_bool(body.get("m_Enabled"), DEFAULT_UI_ENABLED),
-            })),
-        BUTTON_SCRIPT_GUID => {
-            let index = binding.elements.len();
-            binding
-                .elements
-                .push(UiElementComponent::Button(UiButtonComponent {
-                    entity,
-                    target_graphic: None,
-                    interactable: yaml_bool(body.get("m_Interactable"), DEFAULT_UI_ENABLED),
-                }));
-            if let Ok(Some(target)) = reference_id(body.get("m_TargetGraphic")) {
-                collectors.button_targets.push((index, target));
-            }
-        }
-        CANVAS_SCALER_SCRIPT_GUID => {
-            if let Some(canvas) = binding.canvases.iter_mut().find(|c| c.entity == entity) {
-                canvas.scaler = Some(CanvasScalerComponent {
-                    ui_scale_mode: canvas_scale_mode(body.get("m_UiScaleMode")),
-                    reference_resolution: vector2_or(
-                        body.get("m_ReferenceResolution"),
-                        DEFAULT_REFERENCE_RESOLUTION,
-                    ),
-                    screen_match_mode: canvas_match_mode(body.get("m_ScreenMatchMode")),
-                    match_width_or_height: yaml_f32(
-                        body.get("m_MatchWidthOrHeight"),
-                        DEFAULT_MATCH_WIDTH_OR_HEIGHT,
-                        |v| (0.0..=1.0).contains(&v),
-                    ),
-                });
-            }
-        }
-        HORIZONTAL_LAYOUT_GROUP_SCRIPT_GUID => binding.layout_groups.push(parse_layout_group(
-            entity,
-            LayoutGroupAxis::Horizontal,
-            body,
-        )),
-        VERTICAL_LAYOUT_GROUP_SCRIPT_GUID => {
-            binding
-                .layout_groups
-                .push(parse_layout_group(entity, LayoutGroupAxis::Vertical, body));
-        }
-        CONTENT_SIZE_FITTER_SCRIPT_GUID => binding
-            .content_size_fitters
-            .push(parse_content_size_fitter(entity, body)),
-        _ => {}
-    }
-}
-
-fn parse_layout_group(
-    entity: EntityId,
-    axis: LayoutGroupAxis,
-    body: &Node,
-) -> UiLayoutGroupComponent {
-    let padding = body
-        .get("m_Padding")
-        .map_or_else(UiPadding::default, |n| UiPadding {
-            left: yaml_i32(n.get("m_Left"), 0),
-            right: yaml_i32(n.get("m_Right"), 0),
-            top: yaml_i32(n.get("m_Top"), 0),
-            bottom: yaml_i32(n.get("m_Bottom"), 0),
-        });
-    UiLayoutGroupComponent {
-        entity,
-        axis,
-        padding,
-        spacing: yaml_f32(body.get("m_Spacing"), 0.0, f32::is_finite),
-        child_alignment: yaml_u32(body.get("m_ChildAlignment"), 0).min(8),
-        child_control_width: yaml_bool(body.get("m_ChildControlWidth"), true),
-        child_control_height: yaml_bool(body.get("m_ChildControlHeight"), true),
-        child_force_expand_width: yaml_bool(body.get("m_ChildForceExpandWidth"), true),
-        child_force_expand_height: yaml_bool(body.get("m_ChildForceExpandHeight"), true),
-        enabled: yaml_bool(body.get("m_Enabled"), DEFAULT_UI_ENABLED),
-    }
-}
-
-fn parse_content_size_fitter(entity: EntityId, body: &Node) -> UiContentSizeFitterComponent {
-    UiContentSizeFitterComponent {
-        entity,
-        horizontal_fit: ContentSizeFitMode::from_u32(yaml_u32(body.get("m_HorizontalFit"), 0))
-            .unwrap_or(ContentSizeFitMode::Unconstrained),
-        vertical_fit: ContentSizeFitMode::from_u32(yaml_u32(body.get("m_VerticalFit"), 0))
-            .unwrap_or(ContentSizeFitMode::Unconstrained),
-        enabled: yaml_bool(body.get("m_Enabled"), DEFAULT_UI_ENABLED),
-    }
-}
-
 fn yaml_i32(node: Option<&Node>, default: i32) -> i32 {
     node.and_then(Node::as_i64)
         .and_then(|v| i32::try_from(v).ok())
         .unwrap_or(default)
-}
-
-fn canvas_render_mode(node: Option<&Node>) -> CanvasRenderMode {
-    match node.and_then(Node::as_i64).unwrap_or(0) {
-        1 => CanvasRenderMode::ScreenSpaceCamera,
-        2 => CanvasRenderMode::WorldSpace,
-        _ => CanvasRenderMode::ScreenSpaceOverlay,
-    }
-}
-
-fn canvas_scale_mode(node: Option<&Node>) -> CanvasScaleMode {
-    match node.and_then(Node::as_i64).unwrap_or(0) {
-        1 => CanvasScaleMode::ScaleWithScreenSize,
-        2 => CanvasScaleMode::ConstantPhysicalSize,
-        _ => CanvasScaleMode::ConstantPixelSize,
-    }
-}
-
-fn canvas_match_mode(node: Option<&Node>) -> CanvasMatchMode {
-    match node.and_then(Node::as_i64).unwrap_or(0) {
-        1 => CanvasMatchMode::Shrink,
-        2 => CanvasMatchMode::Expand,
-        _ => CanvasMatchMode::MatchWidthOrHeight,
-    }
 }
 
 fn sprite_guid(node: Option<&Node>) -> Option<AssetGuid> {

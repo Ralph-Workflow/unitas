@@ -1,10 +1,20 @@
 use std::collections::HashSet;
 
+use unitas_core::EntityId;
+
 use crate::unity_yaml::{Node, Stream};
 
-use super::{
-    component_entity, yaml_bool, yaml_i32, AnimatorBinding, GameObjectRecords, ANIMATOR_CLASS,
-};
+use super::{component_entity, yaml_bool, yaml_i32, GameObjectRecords, ANIMATOR_CLASS};
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct AnimatorBinding {
+    pub entity: EntityId,
+    pub controller_guid: Option<String>,
+    pub enabled: bool,
+    pub apply_root_motion: bool,
+    pub culling_mode: i32,
+    pub update_mode: i32,
+}
 
 pub(super) fn collect_animators(
     stream: &Stream,

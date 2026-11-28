@@ -1403,6 +1403,7 @@ impl Runtime {
         presenter.set_light(self.directional_light());
         crate::presenter::apply_pending_display_quality(self);
         presenter.set_shadow_settings(crate::presenter::shadow_settings_for_runtime(self));
+        presenter.set_post_settings(crate::presenter::post_settings_for_runtime(self));
         let image = presenter
             .render_offscreen(self, width, height)
             .map_err(|error| RenderError::DeviceFailed(error.to_string()))?;
