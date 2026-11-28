@@ -120,6 +120,11 @@ permitted as input content, with the producing Unity release recorded.
   reference source, package source, built-in shader source, and any
   decompiled or disassembled binary. Observing what Unity does is permitted;
   reading how Unity's code does it is not.
+* **Every engine:** these rules apply to every other engine as well, including
+  engines whose source code is available under license, such as Unreal
+  Engine. unitas may adopt publicly described techniques, from published
+  papers, talks, and documentation, and never reads, copies, or derives from
+  another engine's source.
 * Contributors follow the [independent implementation rules](../../CONTRIBUTING.md#independent-implementation)
   and the [trademark rules](../../TRADEMARKS.md).
 

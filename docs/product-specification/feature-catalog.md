@@ -136,3 +136,21 @@ detailed specification names the identifiers it demonstrates.
 | AUT-006 | Agent-accessible product knowledge and documentation | Native | [Automation and MCP](automation-and-mcp.md) |
 | AUT-007 | Agent permission scopes, grants, and confirmations | Native | [Automation and MCP](automation-and-mcp.md) |
 | AUT-008 | Agent audit log and provenance | Native | [Automation and MCP](automation-and-mcp.md) |
+
+## Engine Extensions
+
+Capabilities beyond Unity 2022.3 LTS, each off by default and bound by the
+compatibility rules of [Engine extensions](engine-extensions.md).
+
+| ID | Feature | Tier | Owning specification |
+|---|---|---|---|
+| EXT-001 | Virtualized geometry | Native | [Engine extensions](engine-extensions.md) |
+| EXT-002 | Dynamic global illumination and reflections | Native | [Engine extensions](engine-extensions.md) |
+| EXT-003 | Virtual shadow maps | Native | [Engine extensions](engine-extensions.md) |
+| EXT-004 | Temporal upscaling | Native | [Engine extensions](engine-extensions.md) |
+| EXT-005 | World streaming | Native | [Engine extensions](engine-extensions.md) |
+| EXT-006 | Shared content cache | Native | [Engine extensions](engine-extensions.md) |
+| EXT-007 | Live code reload | Native | [Engine extensions](engine-extensions.md) |
+| EXT-008 | Multi-instance play | Native | [Engine extensions](engine-extensions.md) |
+| EXT-009 | Collaborative editing | Native | [Engine extensions](engine-extensions.md) |
+| EXT-010 | Unified tracing | Native | [Engine extensions](engine-extensions.md) |

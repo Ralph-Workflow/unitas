@@ -232,6 +232,7 @@ opens.
 | Browser delivery | [Web target](web-target.md) | Browser player, loader and page API, WebAssembly memory and threads, graphics on WebGPU and WebGL 2, hosting, storage, browser input and media, web performance budgets, and browser testing |
 | Quality and verification | [Diagnostics, profiling, and playtesting](diagnostics-profiling-playtesting.md) | Diagnostics, external debugging, profiling, engine performance commitments, scenarios, project tests, replay, comparison, coverage, and tester feedback |
 | Inclusive and durable games | [Accessibility, localization, and persistence](accessibility-localization-persistence.md) | Accessible editor and player features, localization, saves, settings, and data evolution |
+| Beyond Unity | [Engine extensions](engine-extensions.md) | Opt-in capabilities beyond Unity 2022.3 LTS, such as virtualized geometry, dynamic global illumination, virtual shadow maps, temporal upscaling, world streaming, a shared content cache, live code reload, multi-instance play, collaborative editing, and unified tracing, under rules that keep Unity projects unchanged |
 | Demonstrable outcomes | [Playable samples and benchmarks](sample-games/INDEX.md) | Complete games, agent authoring benchmarks, and behavioral benchmarks proving declared feature combinations |
 
 ### Start here
