@@ -18,7 +18,10 @@ and interoperability, for example which project formats unitas reads or which
 version's documented behavior a feature follows.
 
 Some names also appear as identifiers in code, such as the `UnityEngine` C#
-namespace. Existing scripts refer to those identifiers, so unitas must expose
+namespace and package identifiers such as `com.unity.render-pipelines.universal`.
+unitas keeps API, package, assembly, menu-path, and serialized names only as
+required identifiers; the code behind them is unitas's own, and unitas
+contains no Unity implementation. Existing scripts refer to those identifiers, so unitas must expose
 them for those scripts to compile and run unchanged. Their presence does not
 mean that unitas contains, or is derived from, the trademark owner's software.
 unitas is written independently, under the rules in

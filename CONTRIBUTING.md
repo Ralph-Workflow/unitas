@@ -26,18 +26,32 @@ Thank you for helping build unitas. Before you open a pull request:
 unitas reads and runs projects made for other engines, so it must be written
 independently of them. Every contribution follows these rules:
 
-* Work only from public documentation, published file formats, and the
-  observed behavior of projects you have the right to use.
-* Never copy code, comments, or documentation text from another engine, its
-  editor, its packages, or its tools, even when that source is publicly
-  viewable. Describe behavior in your own words.
+* unitas reimplements everything another engine does, the way Wine
+  reimplements Windows. It never uses, loads, runs, or redistributes another
+  engine's code: not its editor or player binaries, its API implementation,
+  its published packages (C# or native), its built-in shaders and include
+  files, its compilers such as Burst or IL2CPP, its native plugins, or its
+  service SDKs. It keeps only the names projects depend on, such as
+  namespaces, type and member names, package identifiers, assembly names,
+  menu paths, and file formats.
+* Work only from public documentation, published file formats, and black-box
+  observation: running a licensed copy of another engine's editor or player
+  to record reference behavior or to run compatibility benchmarks, without
+  looking inside it.
+* Never read, copy, or derive from another engine's source code, comments, or
+  documentation text, even when that source is publicly viewable. This
+  includes its C# reference source, package source, and built-in shader
+  source. Describe behavior in your own words.
 * Never decompile, disassemble, or otherwise reverse engineer another
   engine's binaries, and never use leaked or confidential material or
   anything covered by a non-disclosure agreement.
 * Test fixtures and sample content are written by hand, or come from content
   you own or that carries a license compatible with GPL-3.0 and the
-  commercial license. Do not add asset-store content, bundled sample assets,
-  or another vendor's logos, icons, or images.
+  commercial license. Content that another engine built, such as asset
+  bundles or baked data produced by a licensed copy, may be committed as an
+  input fixture with the producing release recorded. Do not add asset-store
+  content, another engine's bundled sample assets, or another vendor's logos,
+  icons, or images.
 * Name other products only to describe compatibility, as explained in
   [TRADEMARKS.md](TRADEMARKS.md). Never use another vendor's marks in the
   name or branding of anything unitas ships.
