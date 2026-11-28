@@ -197,6 +197,19 @@ core's native world.
   dependency. An agent reaches a running game only through the editor.
 * **No editor-only hooks:** a capability the editor needs becomes an engine
   capability that games can use as well.
+* **No external driver:** no standalone .NET program drives the engine: not the
+  editor, not a scenario or playtest runner, and not a tool. A .NET test project
+  may load the native library to unit-test bindings, and that is all.
+
+## Games and samples
+
+* The engine runs games and never contains them. No engine, player, build, or
+  tool code knows a particular game, and the player has no default or built-in
+  game. A game proves the engine only when the packaged player and the headless
+  editor run the game's own scripts and content.
+* Samples are original content written the way developers write games for Unity
+  2022.3, in its on-disk formats, so that Unity itself could open them. A sample
+  never works around a gap in unitas; the gap is closed in the engine.
 
 ## Performance principles
 
