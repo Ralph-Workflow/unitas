@@ -2045,3 +2045,45 @@ def test_size_gate_skips_fixtures_and_build_bin_but_checks_src_bin(
         f"crates/unitas-build/src/bin/foo.rs:1: file exceeds "
         f"{verify.MAX_FILE_LINES} lines ({over_limit} lines)"
     ]
+
+
+def test_javascript_banned_constructs_bypass_and_size_are_enforced(
+    tmp_path: Path,
+) -> None:
+    tools_dir = tmp_path / "tools"
+    tools_dir.mkdir(parents=True)
+    script = tools_dir / "probe.mjs"
+    script.write_text(
+        "function ok(value) {\n  return value + 1;\n}\n",
+        encoding="utf-8",
+    )
+    assert verify.banned_source_findings(script, root=tmp_path) == []
+    assert verify.bypass_findings_in(script, root=tmp_path) == []
+    assert verify.check_size(tmp_path) == []
+
+    script.write_text(
+        "// eslint-disable-next-line\n"
+        "// @ts-ignore\n"
+        "export function bad(x) {\n"
+        "  return eval(x);\n"
+        "}\n",
+        encoding="utf-8",
+    )
+    banned = verify.banned_source_findings(script, root=tmp_path)
+    assert "tools/probe.mjs:1: eslint-disable directive" in banned
+    assert "tools/probe.mjs:2: typescript comment directive" in banned
+    assert "tools/probe.mjs:4: eval call" in banned
+    bypasses = verify.bypass_findings_in(script, root=tmp_path)
+    assert "tools/probe.mjs:1: eslint-disable suppression marker" in bypasses
+    assert "tools/probe.mjs:2: typescript-ignore suppression marker" in bypasses
+
+    body = "  step += 1;\n" * verify.MAX_FUNCTION_LINES
+    script.write_text(
+        f"function oversize() {{\n  let step = 0;\n{body}  return step;\n}}\n",
+        encoding="utf-8",
+    )
+    span = verify.MAX_FUNCTION_LINES + 4
+    assert verify.check_size(tmp_path) == [
+        f"tools/probe.mjs:1: JavaScript function exceeds "
+        f"{verify.MAX_FUNCTION_LINES} lines ({span} lines)"
+    ]

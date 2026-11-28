@@ -51,6 +51,7 @@ PERMISSIVE_LICENSES = frozenset(
 )
 COMMENT_SUFFIXES = (".cfg", ".ini", ".j2", ".jinja", ".sh", ".toml", ".yaml", ".yml")
 SOURCE_SUFFIXES = (
+    ".cjs",
     ".cs",
     ".go",
     ".h",
@@ -58,6 +59,7 @@ SOURCE_SUFFIXES = (
     ".js",
     ".jsx",
     ".kt",
+    ".mjs",
     ".py",
     ".rs",
     ".ts",
@@ -188,17 +190,23 @@ TIMED_BUDGET_GUIDANCE = (
     "rule 11; docs/ralph-workflow-policy/gate-script-policy.md Failure output)\n"
 )
 GATE_CLI_ARG_COUNT = 2
+JS_BYPASS_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
+    ("eslint-disable", re.compile(r"(?m)^\s*//\s*eslint-disable|/\*\s*eslint-disable")),
+    (
+        "typescript-ignore",
+        re.compile(
+            r"//\s*@ts-(?:ignore|nocheck|expect-error)\b"
+            r"|/\*\s*@ts-(?:ignore|nocheck|expect-error)\b"
+        ),
+    ),
+)
 BYPASS_SOURCE_PATTERNS: dict[str, tuple[tuple[str, re.Pattern[str]], ...]] = {
-    ".js": (("eslint-disable", re.compile(r"(?m)^\s*//\s*eslint-disable")),),
-    ".jsx": (("eslint-disable", re.compile(r"(?m)^\s*//\s*eslint-disable")),),
-    ".ts": (
-        ("eslint-disable", re.compile(r"(?m)^\s*//\s*eslint-disable")),
-        ("typescript-ignore", re.compile(r"(?m)^\s*//\s*@ts-(ignore|nocheck)")),
-    ),
-    ".tsx": (
-        ("eslint-disable", re.compile(r"(?m)^\s*//\s*eslint-disable")),
-        ("typescript-ignore", re.compile(r"(?m)^\s*//\s*@ts-(ignore|nocheck)")),
-    ),
+    ".cjs": JS_BYPASS_PATTERNS,
+    ".js": JS_BYPASS_PATTERNS,
+    ".jsx": JS_BYPASS_PATTERNS,
+    ".mjs": JS_BYPASS_PATTERNS,
+    ".ts": JS_BYPASS_PATTERNS,
+    ".tsx": JS_BYPASS_PATTERNS,
     ".rs": (
         ("rust allow attribute", re.compile(r"#!?\[\s*allow\b")),
         ("rust expect attribute", re.compile(r"#!?\[\s*expect\b")),
@@ -357,7 +365,26 @@ BANNED_CALLS = frozenset({"compile", "eval", "exec", "__import__"})
 BANNED_BUILTINS = frozenset({"globals", "locals", "vars"})
 BROAD_EXCEPTIONS = frozenset({"BaseException", "Exception"})
 MUTABLE_DEFAULTS = (ast.Dict, ast.List, ast.Set)
+JS_BANNED_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
+    ("eval call", re.compile(r"\beval\s*\(")),
+    ("new Function", re.compile(r"\bnew\s+Function\s*\(")),
+    ("Proxy or Reflect reflection", re.compile(r"\b(?:Proxy|Reflect)\b")),
+    ("with statement", re.compile(r"\bwith\s*\(")),
+    (
+        "typescript comment directive",
+        re.compile(r"@ts-(?:ignore|expect-error|nocheck)\b"),
+    ),
+    ("eslint-disable directive", re.compile(r"\beslint-disable\b")),
+    ("explicit any type", re.compile(r"@type\s*\{\s*any\s*\}|:\s*any\b|\bas\s+any\b")),
+    ("dangerouslySetInnerHTML", re.compile(r"\bdangerouslySetInnerHTML\b")),
+)
 BANNED_SOURCE_PATTERNS: dict[str, tuple[tuple[str, re.Pattern[str]], ...]] = {
+    ".cjs": JS_BANNED_PATTERNS,
+    ".js": JS_BANNED_PATTERNS,
+    ".jsx": JS_BANNED_PATTERNS,
+    ".mjs": JS_BANNED_PATTERNS,
+    ".ts": JS_BANNED_PATTERNS,
+    ".tsx": JS_BANNED_PATTERNS,
     ".rs": (
         ("unsafe block", re.compile(r"(?m)^\s*unsafe\b")),
         ("transmute", re.compile(r"\btransmute\b")),
@@ -430,12 +457,14 @@ FIRST_PARTY_SOURCE_ROOTS = (
 )
 MAX_FILE_LINES = 3000
 MAX_FUNCTION_LINES = 200
-SIZE_SOURCE_SUFFIXES = (".cs", ".py", ".rs")
+SIZE_SOURCE_SUFFIXES = (".cjs", ".cs", ".js", ".jsx", ".mjs", ".py", ".rs", ".ts", ".tsx")
+JS_SIZE_SUFFIXES = (".cjs", ".js", ".jsx", ".mjs", ".ts", ".tsx")
 SIZE_EXCLUDED_PREFIX = "bridge/Unitas.Bridge.Tests/Fixtures/"
 CSHARP_TYPE_DECL_RE = re.compile(r"\b(?:class|struct|interface|enum|record|namespace)\b")
 CSHARP_BLOCK_KEYWORD_RE = re.compile(
     r"\b(?:if|else|for|foreach|while|switch|try|catch|finally|using|lock|fixed|checked|unchecked|do|new|return|yield|throw|when)\b"
 )
+JS_FUNCTION_HEADER_RE = re.compile(r"\bfunction\b|=>")
 
 
 def read_policy_corpus() -> dict[str, str]:
@@ -2372,6 +2401,34 @@ def csharp_size_findings(lines: Sequence[str], relative: str) -> list[str]:
     return findings
 
 
+def js_size_findings(lines: Sequence[str], relative: str) -> list[str]:
+    findings: list[str] = []
+    stack: list[tuple[str, int]] = []
+    pending = ""
+    for lineno, raw_line in enumerate(lines, start=1):
+        for char in strip_csharp_line(raw_line):
+            if char == "{":
+                header = pending.strip()
+                kind = "function" if JS_FUNCTION_HEADER_RE.search(header) else "block"
+                stack.append((kind, lineno))
+                pending = ""
+            elif char == "}":
+                pending = ""
+                if stack:
+                    kind, start_line = stack.pop()
+                    span = lineno - start_line + 1
+                    if kind == "function" and span > MAX_FUNCTION_LINES:
+                        findings.append(
+                            f"{relative}:{start_line}: JavaScript function exceeds "
+                            f"{MAX_FUNCTION_LINES} lines ({span} lines)"
+                        )
+            elif char == ";":
+                pending = ""
+            else:
+                pending += char
+    return findings
+
+
 def check_size(root: Path = REPO_ROOT) -> list[str]:
     findings: list[str] = []
     for path in iter_size_source_files(root):
@@ -2386,6 +2443,8 @@ def check_size(root: Path = REPO_ROOT) -> list[str]:
             findings.extend(python_size_findings(text, relative))
         elif path.suffix == ".cs":
             findings.extend(csharp_size_findings(lines, relative))
+        elif path.suffix in JS_SIZE_SUFFIXES:
+            findings.extend(js_size_findings(lines, relative))
     return findings
 
 
