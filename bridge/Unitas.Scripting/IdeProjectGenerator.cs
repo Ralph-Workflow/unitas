@@ -158,7 +158,7 @@ namespace Unitas.Scripting
 
             ProjectMetadataIndex.ScanProjectMeta(fullProjectRoot, guidToPath, pathToGuid, parsedPlugins);
 
-            HashSet<string> baseDefines = DefinesAndResponseParser.BuildBaseDefines(effectiveOptions);
+            HashSet<string> baseDefines = DefinesAndResponseParser.BuildBaseDefines(effectiveOptions, fullProjectRoot);
 
             ProjectMetadataIndex.EvaluatePlugins(
                 parsedPlugins,

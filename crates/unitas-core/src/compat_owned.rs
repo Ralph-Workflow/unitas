@@ -2460,11 +2460,20 @@ pub const OWNED_FEATURE_CAPABILITIES: &[OwnedFeatureCapability] = &[
                 missing: None,
             },
             OwnedCapabilityPart {
+                behavior: "web wasm32 target compiles unitas-runtime to a WebAssembly module (wasm32-unknown-unknown) verified in the device lane, and web packaging stages the real .wasm binary (\\0asm magic header) with an index.html template and JavaScript WebAssembly loader",
+                location: "crates/unitas-build/src/package.rs",
+                evidence: &[
+                    "crates/unitas-build/src/package.rs::packaged_web_app_stages_real_wasm_module_index_html_and_loader_js",
+                    "crates/unitas-build/tests/build/target_availability.rs::web_target_probes_emcc_and_wasm32_and_reports_externally_unavailable_when_emcc_is_missing",
+                ],
+                missing: None,
+            },
+            OwnedCapabilityPart {
                 behavior: "WebGL/WebGPU browser targets, Android and iOS/tvOS mobile targets, UWP, Dedicated Server (UNITY_SERVER) target, Linux Wayland and Steam Deck handheld integration, and licensed console targets are supported",
                 location: "crates/unitas-build/src/targets.rs",
                 evidence: &[],
                 missing: Some(
-                    "WebGL/WebGPU browser target, Android and iOS/tvOS mobile targets, UWP, Dedicated Server (UNITY_SERVER) target, Linux Wayland/Steam Deck handheld integration, and licensed console targets are not implemented",
+                    "managed C# script execution in the browser and interactive WebGL/WebGPU browser play, Android and iOS/tvOS mobile targets, UWP, Dedicated Server (UNITY_SERVER) target, Linux Wayland/Steam Deck handheld integration, and licensed console targets are not implemented",
                 ),
             },
         ],

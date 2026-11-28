@@ -26,10 +26,11 @@ pub use bundle::{
 };
 pub use config::{BuildConfiguration, BuildMode, BuildValidationError, ProductIdentity};
 pub use package::{
-    attempt_desktop_target, attempt_desktop_targets, desktop_package_targets,
-    package_desktop_target, package_desktop_targets, package_linux_app, package_macos_app,
-    package_web_app, package_windows_app, PackageError, PackagedApp, PackagedPlayer,
-    PackagedTarget,
+    attempt_desktop_target, attempt_desktop_targets, desktop_package_targets, has_wasm_magic_bytes,
+    locate_or_build_wasm_runtime_binary, package_desktop_target, package_desktop_targets,
+    package_linux_app, package_macos_app, package_web_app, package_windows_app, PackageError,
+    PackagedApp, PackagedPlayer, PackagedTarget, WASM_MAGIC_BYTES, WEB_INDEX_HTML_FILENAME,
+    WEB_LOADER_JS_FILENAME,
 };
 pub use player::{
     apply_content_update_to_player, build_project, build_project_for_host, decode_bmp_bytes,

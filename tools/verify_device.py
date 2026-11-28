@@ -58,6 +58,7 @@ CHIME_FLOOR_AMPLITUDE = 0.005
 PLAYER_BINARY = REPO_ROOT / "target" / "debug" / "unitas-player"
 WEB_TARGET = "wasm32-unknown-unknown"
 WEB_CHECK_PACKAGE = "unitas-render"
+WEB_RUNTIME_PACKAGE = "unitas-runtime"
 POLICY_CITATION = "docs/ralph-workflow-policy/verification-policy.md § Gate lanes"
 TIMEOUT_CITATION = "docs/ralph-workflow-policy/verification-policy.md § Default requirements"
 DEVICE_PACKAGES: tuple[str, ...] = (
@@ -745,7 +746,16 @@ def run_build_gates() -> int:
     )
     if rc != 0:
         return rc
-    sys.stdout.write(f"OK verify-device web-target: the renderer compiles for {WEB_TARGET}\n")
+    rc, _ = run_step(
+        "web-runtime-target",
+        ("cargo", "check", "-p", WEB_RUNTIME_PACKAGE, "--target", WEB_TARGET),
+        BUILD_BUDGET_SECONDS,
+    )
+    if rc != 0:
+        return rc
+    sys.stdout.write(
+        f"OK verify-device web-target: the renderer and runtime compile for {WEB_TARGET}\n"
+    )
     return 0
 
 

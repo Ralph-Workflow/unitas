@@ -78,7 +78,6 @@ default = []
 device = ["dep:gilrs", "dep:winit", "unitas-audio/device"]
 
 [dependencies]
-libloading = "0.8"
 unitas-animation = { path = "../unitas-animation" }
 unitas-asset = { path = "../unitas-asset" }
 unitas-audio = { path = "../unitas-audio" }
@@ -88,6 +87,9 @@ unitas-physics = { path = "../unitas-physics" }
 gilrs = { version = "0.11.2", optional = true }
 unitas-render = { path = "../unitas-render" }
 winit = { version = "0.30.13", optional = true }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+libloading = "0.8"
 
 [dev-dependencies]
 unitas-render = { path = "../unitas-render" }

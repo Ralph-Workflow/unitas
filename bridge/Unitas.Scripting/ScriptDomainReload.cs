@@ -16,6 +16,8 @@ namespace Unitas.Scripting
             public ScriptCompilationOptions? Options { get; set; }
 
             public IReadOnlyList<MonoBehaviour> LiveInstances { get; set; } = Array.Empty<MonoBehaviour>();
+
+            public AssemblyLoadContext? ReplacedContext { get; set; }
         }
 
         public sealed class Result
@@ -117,7 +119,7 @@ namespace Unitas.Scripting
 
             IReadOnlyList<MonoBehaviour> liveInstances = request.LiveInstances ?? Array.Empty<MonoBehaviour>();
             List<InstanceState> states = CaptureStates(liveInstances);
-            WeakReference? replacedReference = UnloadReplacedContext(liveInstances);
+            WeakReference? replacedReference = UnloadReplacedContext(liveInstances, request.ReplacedContext);
 
             AssemblyLoadContext context = ScriptGlueRegistry.CreateCollectibleContext("UnitasGame", compilation.OutputDirectory);
 
@@ -192,9 +194,11 @@ namespace Unitas.Scripting
         }
 
         [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.NoInlining)]
-        private static WeakReference? UnloadReplacedContext(IReadOnlyList<MonoBehaviour> liveInstances)
+        private static WeakReference? UnloadReplacedContext(
+            IReadOnlyList<MonoBehaviour> liveInstances,
+            AssemblyLoadContext? explicitReplacedContext)
         {
-            AssemblyLoadContext? replacedContext = ResolveReplacedContext(liveInstances);
+            AssemblyLoadContext? replacedContext = ResolveReplacedContext(liveInstances, explicitReplacedContext);
             if (replacedContext == null)
             {
                 return null;
@@ -211,8 +215,15 @@ namespace Unitas.Scripting
         }
 
         [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.NoInlining)]
-        private static AssemblyLoadContext? ResolveReplacedContext(IReadOnlyList<MonoBehaviour> liveInstances)
+        private static AssemblyLoadContext? ResolveReplacedContext(
+            IReadOnlyList<MonoBehaviour> liveInstances,
+            AssemblyLoadContext? explicitReplacedContext)
         {
+            if (explicitReplacedContext != null && explicitReplacedContext != AssemblyLoadContext.Default)
+            {
+                return explicitReplacedContext;
+            }
+
             for (int i = 0; i < liveInstances.Count; i++)
             {
                 AssemblyLoadContext? candidate = ScriptGlueRegistry.GetInstanceLoadContext(liveInstances[i]);

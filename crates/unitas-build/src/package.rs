@@ -32,13 +32,13 @@ pub const PLAYER_BINARY_FILENAME: &str = "unitas-player";
 pub const LICENSE_TEXT_FILENAME: &str = "LICENSE";
 pub const THIRD_PARTY_NOTICES_FILENAME: &str = "THIRD-PARTY-NOTICES.txt";
 pub const STAGED_ASSETS_DIR_NAME: &str = "Assets";
-/// Suffix of the per-game data directory in Windows/Linux layouts, matching
-/// the convention players expect (`<Product>_Data`).
 pub const DATA_DIR_SUFFIX: &str = "_Data";
-/// The directory a target's staged bundle lives in while it is packaged.
 pub const STAGED_DIR_NAME: &str = "staged";
+pub const WEB_INDEX_HTML_FILENAME: &str = "index.html";
+pub const WEB_LOADER_JS_FILENAME: &str = "unitas-loader.js";
+pub const WASM_MAGIC_BYTES: [u8; 4] = [0x00, 0x61, 0x73, 0x6d];
+const WASM_RUNTIME_ARTIFACT_FILENAME: &str = "unitas_runtime.wasm";
 
-/// A macOS application bundle produced from a staged player bundle.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PackagedApp {
     pub app_path: PathBuf,
@@ -52,6 +52,7 @@ pub struct PackagedApp {
 pub enum PackageError {
     Io { path: PathBuf, message: String },
     MissingPlayerBinary { path: PathBuf },
+    InvalidWasmBinary { path: PathBuf, message: String },
     CodeSign { path: PathBuf, message: String },
     BuildFailed { path: PathBuf, message: String },
 }
@@ -66,6 +67,13 @@ impl fmt::Display for PackageError {
                 write!(
                     formatter,
                     "the unitas player binary does not exist at '{}'",
+                    path.display()
+                )
+            }
+            PackageError::InvalidWasmBinary { path, message } => {
+                write!(
+                    formatter,
+                    "the web player artifact at '{}' is not a valid WebAssembly module: {message}",
                     path.display()
                 )
             }
@@ -89,7 +97,6 @@ impl fmt::Display for PackageError {
 
 impl std::error::Error for PackageError {}
 
-/// A Windows or Linux player directory produced from a staged player bundle.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PackagedPlayer {
     pub app_dir: PathBuf,
@@ -98,25 +105,16 @@ pub struct PackagedPlayer {
     pub manifest_path: PathBuf,
 }
 
-/// A desktop target the packaging slice staged: the player payload, the build
-/// report that describes it and whether this host launched it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PackagedTarget {
-    /// The target the package was built for.
     pub target: BuildTarget,
-    /// The directory name the package lives under (`macos`, `windows`, `linux`).
     pub label: String,
-    /// The packaged player: an application bundle or a player directory.
     pub app_path: PathBuf,
-    /// The executable that launches the packaged player.
     pub launch_artifact: PathBuf,
-    /// The build report of the package.
     pub build_report_path: PathBuf,
-    /// Whether this host launched the package it staged.
     pub launched: bool,
 }
 
-/// The name the application bundle and its executable carry.
 pub fn bundle_name(product_name: &str) -> String {
     let trimmed = product_name.trim();
     let base = if trimmed.is_empty() {
@@ -132,7 +130,6 @@ pub fn bundle_name(product_name: &str) -> String {
         .collect()
 }
 
-/// The unitas player binary of the local build, when one has been built.
 pub fn locate_player_binary() -> Option<PathBuf> {
     let mut candidates = Vec::new();
     if let Ok(executable) = std::env::current_exe() {
@@ -156,12 +153,6 @@ pub fn locate_player_binary() -> Option<PathBuf> {
     candidates.into_iter().find(|candidate| candidate.is_file())
 }
 
-/// Packages a staged player bundle as a runnable macOS application bundle.
-///
-/// The bundle carries the player binary, the staged bundle contents in
-/// `Contents/Resources`, a launcher that starts the player with those
-/// contents, the license texts the licensing record refers to, and an
-/// `Info.plist` that names the executable macOS runs.
 pub fn package_macos_app(
     manifest: &BundleManifest,
     staged_dir: &Path,
@@ -222,12 +213,6 @@ pub fn package_macos_app(
     })
 }
 
-/// Packages a staged player bundle as a Windows player directory.
-///
-/// The layout follows the convention Windows players expect: the product
-/// directory carries `<Product>.exe` next to `<Product>_Data/`, which holds
-/// the staged bundle contents (manifest, assets, managed payload) and the
-/// license texts.
 pub fn package_windows_app(
     manifest: &BundleManifest,
     staged_dir: &Path,
@@ -247,11 +232,6 @@ pub fn package_windows_app(
     )
 }
 
-/// Packages a staged player bundle as a Linux player directory.
-///
-/// The layout mirrors the Windows one: the product directory carries the
-/// `<Product>` executable next to `<Product>_Data/` with the staged bundle
-/// contents and license texts.
 pub fn package_linux_app(
     manifest: &BundleManifest,
     staged_dir: &Path,
@@ -279,14 +259,230 @@ pub fn package_web_app(
     licensing: &LicensingRecord,
     license_text: Option<&Path>,
 ) -> Result<PackagedPlayer, PackageError> {
-    package_player_directory(
+    if !player_binary.is_file() {
+        return Err(PackageError::MissingPlayerBinary {
+            path: player_binary.to_path_buf(),
+        });
+    }
+    let wasm_source = resolve_web_wasm_binary(player_binary)?;
+    let packaged = package_player_directory(
         manifest,
         staged_dir,
         output_dir,
-        player_binary,
+        &wasm_source,
         licensing,
         license_text,
         BuildTarget::WEB_WASM32,
+    )?;
+    validate_wasm_binary(&packaged.executable_path)?;
+
+    let wasm_filename = BuildTarget::WEB_WASM32.executable_name(&manifest.product_name);
+    let index_html_path = packaged.app_dir.join(WEB_INDEX_HTML_FILENAME);
+    write_file(
+        &index_html_path,
+        web_index_html(manifest, &wasm_filename).as_bytes(),
+    )?;
+    let loader_js_path = packaged.app_dir.join(WEB_LOADER_JS_FILENAME);
+    write_file(&loader_js_path, web_loader_js(&wasm_filename).as_bytes())?;
+
+    Ok(packaged)
+}
+
+pub fn has_wasm_magic_bytes(bytes: &[u8]) -> bool {
+    bytes.starts_with(&WASM_MAGIC_BYTES)
+}
+
+fn validate_wasm_binary(path: &Path) -> Result<(), PackageError> {
+    let bytes = fs::read(path).map_err(|error| PackageError::Io {
+        path: path.to_path_buf(),
+        message: error.to_string(),
+    })?;
+    if !has_wasm_magic_bytes(&bytes) {
+        return Err(PackageError::InvalidWasmBinary {
+            path: path.to_path_buf(),
+            message: String::from("missing '\\0asm' WebAssembly magic header"),
+        });
+    }
+    Ok(())
+}
+
+pub fn locate_or_build_wasm_runtime_binary() -> Result<PathBuf, PackageError> {
+    let manifest_directory = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let root = manifest_directory
+        .parent()
+        .and_then(Path::parent)
+        .ok_or_else(|| PackageError::BuildFailed {
+            path: manifest_directory.to_path_buf(),
+            message: String::from("could not locate workspace root for wasm32 build"),
+        })?;
+    let candidates = [
+        root.join("target")
+            .join("wasm32-unknown-unknown")
+            .join("debug")
+            .join(WASM_RUNTIME_ARTIFACT_FILENAME),
+        root.join("target")
+            .join("wasm32-unknown-unknown")
+            .join("release")
+            .join(WASM_RUNTIME_ARTIFACT_FILENAME),
+    ];
+    for candidate in &candidates {
+        if candidate.is_file() {
+            if let Ok(bytes) = fs::read(candidate) {
+                if has_wasm_magic_bytes(&bytes) {
+                    return Ok(candidate.clone());
+                }
+            }
+        }
+    }
+
+    let output = Command::new("cargo")
+        .current_dir(root)
+        .args([
+            "build",
+            "-p",
+            "unitas-runtime",
+            "--target",
+            "wasm32-unknown-unknown",
+        ])
+        .output()
+        .map_err(|error| PackageError::BuildFailed {
+            path: root.to_path_buf(),
+            message: format!("failed to invoke cargo build for wasm32-unknown-unknown: {error}"),
+        })?;
+    if !output.status.success() {
+        return Err(PackageError::BuildFailed {
+            path: root.to_path_buf(),
+            message: String::from_utf8_lossy(&output.stderr).trim().to_string(),
+        });
+    }
+    let built = &candidates[0];
+    validate_wasm_binary(built)?;
+    Ok(built.clone())
+}
+
+fn resolve_web_wasm_binary(player_binary: &Path) -> Result<PathBuf, PackageError> {
+    let bytes = fs::read(player_binary).map_err(|error| PackageError::Io {
+        path: player_binary.to_path_buf(),
+        message: error.to_string(),
+    })?;
+    if has_wasm_magic_bytes(&bytes) {
+        return Ok(player_binary.to_path_buf());
+    }
+    locate_or_build_wasm_runtime_binary()
+}
+
+fn web_index_html(manifest: &BundleManifest, wasm_filename: &str) -> String {
+    let product = xml_escape(&manifest.product_name);
+    let company = xml_escape(&manifest.company_name);
+    let version = xml_escape(&manifest.version);
+    let wasm = xml_escape(wasm_filename);
+    format!(
+        "<!DOCTYPE html>\n\
+         <html lang=\"en\">\n\
+         <head>\n\
+         <meta charset=\"utf-8\">\n\
+         <meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\">\n\
+         <title>{product}</title>\n\
+         </head>\n\
+         <body data-company=\"{company}\" data-product=\"{product}\" data-version=\"{version}\" data-wasm=\"{wasm}\">\n\
+         <main id=\"unitas-container\">\n\
+         <canvas id=\"unitas-canvas\" width=\"1280\" height=\"720\"></canvas>\n\
+         <div id=\"unitas-status\" role=\"status\">Loading {product}...</div>\n\
+         <div id=\"unitas-error\" role=\"alert\" hidden></div>\n\
+         </main>\n\
+         <script src=\"{WEB_LOADER_JS_FILENAME}\"></script>\n\
+         </body>\n\
+         </html>\n"
+    )
+}
+
+fn web_loader_js(wasm_filename: &str) -> String {
+    format!(
+        "(function () {{\n\
+         \x20 const DEFAULT_WASM_URL = \"{wasm_filename}\";\n\
+         \x20 function reportError(target, message) {{\n\
+         \x20   if (target) {{\n\
+         \x20     target.hidden = false;\n\
+         \x20     target.textContent = String(message);\n\
+         \x20   }}\n\
+         \x20 }}\n\
+         \x20 function createUnityInstance(canvas, config, onProgress) {{\n\
+         \x20   const resolvedConfig = config || {{}};\n\
+         \x20   const codeUrl = resolvedConfig.codeUrl || DEFAULT_WASM_URL;\n\
+         \x20   const errorElement = typeof document !== \"undefined\" ? document.getElementById(\"unitas-error\") : null;\n\
+         \x20   const statusElement = typeof document !== \"undefined\" ? document.getElementById(\"unitas-status\") : null;\n\
+         \x20   if (typeof WebAssembly === \"undefined\") {{\n\
+         \x20     const message = \"WebAssembly is not supported in this browser\";\n\
+         \x20     reportError(errorElement, message);\n\
+         \x20     return Promise.reject(new Error(message));\n\
+         \x20   }}\n\
+         \x20   if (typeof onProgress === \"function\") {{\n\
+         \x20     onProgress(0.0);\n\
+         \x20   }}\n\
+         \x20   const imports = {{ env: {{}} }};\n\
+         \x20   return fetch(codeUrl)\n\
+         \x20     .then(function (response) {{\n\
+         \x20       if (!response.ok) {{\n\
+         \x20         throw new Error(\"Failed to download WebAssembly module \" + codeUrl + \" (HTTP \" + response.status + \")\");\n\
+         \x20       }}\n\
+         \x20       if (typeof onProgress === \"function\") {{\n\
+         \x20         onProgress(0.5);\n\
+         \x20       }}\n\
+         \x20       if (typeof WebAssembly.instantiateStreaming === \"function\") {{\n\
+         \x20         return WebAssembly.instantiateStreaming(response.clone(), imports).catch(function () {{\n\
+         \x20           return response.arrayBuffer().then(function (bytes) {{\n\
+         \x20             return WebAssembly.instantiate(bytes, imports);\n\
+         \x20           }});\n\
+         \x20         }});\n\
+         \x20       }}\n\
+         \x20       return response.arrayBuffer().then(function (bytes) {{\n\
+         \x20         return WebAssembly.instantiate(bytes, imports);\n\
+         \x20       }});\n\
+         \x20     }})\n\
+         \x20     .then(function ( instantiated ) {{\n\
+         \x20       if (typeof onProgress === \"function\") {{\n\
+         \x20         onProgress(1.0);\n\
+         \x20       }}\n\
+         \x20       if (statusElement) {{\n\
+         \x20         statusElement.textContent = \"Ready\";\n\
+         \x20       }}\n\
+         \x20       return {{\n\
+         \x20         canvas: canvas,\n\
+         \x20         module: instantiated.module,\n\
+         \x20         instance: instantiated.instance,\n\
+         \x20         SetFullscreen: function (fullscreen) {{\n\
+         \x20           if (fullscreen && canvas && typeof canvas.requestFullscreen === \"function\") {{\n\
+         \x20             canvas.requestFullscreen();\n\
+         \x20           }} else if (!fullscreen && typeof document !== \"undefined\" && typeof document.exitFullscreen === \"function\") {{\n\
+         \x20             document.exitFullscreen();\n\
+         \x20           }}\n\
+         \x20         }},\n\
+         \x20         SendMessage: function () {{}},\n\
+         \x20         Quit: function () {{\n\
+         \x20           return Promise.resolve();\n\
+         \x20         }}\n\
+         \x20       }};\n\
+         \x20     }})\n\
+         \x20     .catch(function (error) {{\n\
+         \x20       const message = error && error.message ? error.message : String(error);\n\
+         \x20       reportError(errorElement, message);\n\
+         \x20       if (typeof resolvedConfig.showBanner === \"function\") {{\n\
+         \x20         resolvedConfig.showBanner(message, \"error\");\n\
+         \x20       }}\n\
+         \x20       throw error;\n\
+         \x20     }});\n\
+         \x20 }}\n\
+         \x20 if (typeof window !== \"undefined\") {{\n\
+         \x20   window.createUnityInstance = createUnityInstance;\n\
+         \x20   window.addEventListener(\"DOMContentLoaded\", function () {{\n\
+         \x20     const canvas = document.getElementById(\"unitas-canvas\");\n\
+         \x20     const wasmAttr = document.body ? document.body.getAttribute(\"data-wasm\") : null;\n\
+         \x20     if (canvas) {{\n\
+         \x20       createUnityInstance(canvas, {{ codeUrl: wasmAttr || DEFAULT_WASM_URL }}).catch(function () {{}});\n\
+         \x20     }}\n\
+         \x20   }});\n\
+         \x20 }}\n\
+         }})();\n"
     )
 }
 
@@ -596,8 +792,6 @@ pub fn attempt_desktop_targets(
     Ok(outcomes)
 }
 
-/// Ad-hoc code-signs the app bundle when the host can sign and no signature
-/// is present yet, so a locally packaged app stays launchable.
 #[cfg(target_os = "macos")]
 fn ad_hoc_sign_if_needed(app_path: &Path) -> Result<(), PackageError> {
     let already_signed = Command::new("codesign")
@@ -634,11 +828,9 @@ fn ad_hoc_sign_if_needed(path: &Path) -> Result<(), PackageError> {
     Ok(())
 }
 
-fn launcher_script(executable_name: &str) -> String {
+fn launcher_script(_executable_name: &str) -> String {
     format!(
         "#!/bin/sh\n\
-         # Launcher for the {executable_name} player bundle: runs the staged\n\
-         # bundle that ships inside this application.\n\
          here=$(CDPATH= cd -- \"$(dirname -- \"$0\")\" && pwd)\n\
          exec \"$here/{PLAYER_BINARY_FILENAME}\" \"$here/../{RESOURCES_DIR_NAME}\" --windowed \"$@\"\n"
     )
@@ -1187,6 +1379,83 @@ mod tests {
             result,
             Err(PackageError::MissingPlayerBinary { .. })
         ));
+        let _ = fs::remove_dir_all(&output_dir);
+        Ok(())
+    }
+
+    #[test]
+    fn packaged_web_app_stages_real_wasm_module_index_html_and_loader_js(
+    ) -> Result<(), Box<dyn Error>> {
+        let output_dir = test_output_dir("web_app")?;
+        let config = BuildConfiguration::new(
+            vec![fixture_scene()],
+            "Unitas",
+            "PackagedGame",
+            "com.unitas.packaged",
+            "1.0.0",
+            BuildTarget::WEB_WASM32,
+        );
+        let staged = stage_bundle_for_host(&config, &output_dir, Some(BuildTarget::WEB_WASM32))?;
+        let licensing = licensing_record("com.unitas.packaged");
+        let binary = dummy_player_binary(&output_dir)?;
+        let packaged = package_web_app(
+            &staged.manifest,
+            &output_dir,
+            &output_dir.join("web-layout"),
+            &binary,
+            &licensing,
+            None,
+        )?;
+
+        assert_eq!(
+            packaged.app_dir,
+            output_dir.join("web-layout").join("PackagedGame")
+        );
+        assert_eq!(
+            packaged.executable_path,
+            packaged.app_dir.join("PackagedGame.wasm")
+        );
+        assert!(packaged.executable_path.is_file());
+        let wasm_bytes = fs::read(&packaged.executable_path)?;
+        assert!(
+            wasm_bytes.starts_with(&WASM_MAGIC_BYTES),
+            "staged .wasm artifact must start with '\\0asm' magic bytes"
+        );
+        assert!(
+            wasm_bytes.len() > WASM_MAGIC_BYTES.len(),
+            "staged .wasm artifact must carry compiled module contents beyond the magic header"
+        );
+
+        let index_html_path = packaged.app_dir.join(WEB_INDEX_HTML_FILENAME);
+        assert!(index_html_path.is_file());
+        let index_html = fs::read_to_string(&index_html_path)?;
+        assert!(index_html.contains("PackagedGame"));
+        assert!(index_html.contains(WEB_LOADER_JS_FILENAME));
+        assert!(index_html.contains("PackagedGame.wasm"));
+
+        let loader_js_path = packaged.app_dir.join(WEB_LOADER_JS_FILENAME);
+        assert!(loader_js_path.is_file());
+        let loader_js = fs::read_to_string(&loader_js_path)?;
+        assert!(loader_js.contains("WebAssembly.instantiateStreaming"));
+        assert!(loader_js.contains("WebAssembly.instantiate"));
+        assert!(loader_js.contains("createUnityInstance"));
+        assert!(loader_js.contains("PackagedGame.wasm"));
+
+        assert_eq!(
+            packaged.data_dir,
+            packaged.app_dir.join("PackagedGame_Data")
+        );
+        assert!(packaged.manifest_path.is_file());
+        assert!(packaged
+            .data_dir
+            .join(STAGED_ASSETS_DIR_NAME)
+            .join("scene_000_scene_alpha.unity")
+            .is_file());
+        assert!(packaged
+            .data_dir
+            .join(THIRD_PARTY_NOTICES_FILENAME)
+            .is_file());
+
         let _ = fs::remove_dir_all(&output_dir);
         Ok(())
     }

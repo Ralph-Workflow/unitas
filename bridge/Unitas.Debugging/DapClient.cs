@@ -13,11 +13,6 @@ using System.Threading.Tasks;
 
 namespace Unitas.Debugging
 {
-    /// <summary>
-    /// A debug adapter protocol client that talks to a debug adapter server over a
-    /// loopback TCP connection. Requests are correlated with their responses by
-    /// sequence number and every wait is bounded, so a caller never hangs.
-    /// </summary>
     public sealed class DapClient : IDisposable
     {
         public const string StoppedEvent = "stopped";
@@ -56,11 +51,6 @@ namespace Unitas.Debugging
             reader = Task.Run(ReadLoopAsync);
         }
 
-        /// <summary>
-        /// Connects to a debug adapter on the loopback interface. The connection is
-        /// retried until the timeout expires, because the adapter opens its listener
-        /// only once the debugged process starts.
-        /// </summary>
         public static DapClient Connect(int port, TimeSpan? timeout = null)
         {
             return Connect(IPAddress.Loopback, port, timeout);
@@ -258,10 +248,31 @@ namespace Unitas.Debugging
             return Request("disconnect");
         }
 
-        /// <summary>
-        /// Waits for one event with the given name. Returns null when the event does
-        /// not arrive before the timeout expires.
-        /// </summary>
+        public JsonObject SetExceptionBreakpoints(IReadOnlyList<string> filters)
+        {
+            ArgumentNullException.ThrowIfNull(filters);
+            JsonArray filterNodes = new JsonArray();
+            for (int index = 0; index < filters.Count; index++)
+            {
+                if (!string.IsNullOrEmpty(filters[index]))
+                {
+                    filterNodes.Add(filters[index]);
+                }
+            }
+            return Request("setExceptionBreakpoints", new JsonObject
+            {
+                ["filters"] = filterNodes
+            });
+        }
+
+        public JsonObject ExceptionInfo(int threadId = 1)
+        {
+            return Request("exceptionInfo", new JsonObject
+            {
+                ["threadId"] = threadId
+            });
+        }
+
         public JsonObject? WaitForEvent(string eventName, TimeSpan timeout)
         {
             ArgumentNullException.ThrowIfNull(eventName);

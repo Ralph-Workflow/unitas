@@ -87,11 +87,6 @@ namespace Unitas.Scripting
         }
     }
 
-    /// <summary>
-    /// Locates the .NET SDK roots the compile path may use: DOTNET_ROOT, the
-    /// per-user install, the running host, every `dotnet` on PATH, and the
-    /// well-known system install locations.
-    /// </summary>
     internal static class DotnetSdkRoots
     {
         internal static List<string> GetCandidateRoots()
@@ -258,11 +253,6 @@ namespace Unitas.Scripting
             return CompileProject(projectRoot, options, false);
         }
 
-        /// <summary>
-        /// Compiles a project's scripts. With <paramref name="debuggingEnabled"/> the user
-        /// sources are rewritten with debug probes, the produced assemblies reference
-        /// Unitas.Debugging, and that assembly is copied next to them in the output directory.
-        /// </summary>
         public static ScriptCompilationResult CompileProject(
             string projectRoot,
             ScriptCompilationOptions? options,
@@ -320,7 +310,7 @@ namespace Unitas.Scripting
 
             ProjectMetadataIndex.ScanProjectMeta(fullProjectRoot, guidToPath, pathToGuid, parsedPlugins);
 
-            HashSet<string> baseDefines = DefinesAndResponseParser.BuildBaseDefines(effectiveOptions);
+            HashSet<string> baseDefines = DefinesAndResponseParser.BuildBaseDefines(effectiveOptions, fullProjectRoot);
 
             List<DiscoveredPluginRecord> pluginRecords = ProjectMetadataIndex.EvaluatePlugins(
                 parsedPlugins,
@@ -1015,11 +1005,6 @@ namespace Unitas.Scripting
             return successResult;
         }
 
-        /// <summary>
-        /// Keeps the output directory's Unitas.Debugging.dll in step with the compile:
-        /// an instrumented compile publishes it next to the produced assemblies, a
-        /// default compile removes the copy a previous instrumented compile left.
-        /// </summary>
         private static void PublishDebuggingAssembly(string outputDirectory, string? debuggingReferencePath)
         {
             string target = Path.Combine(outputDirectory, "Unitas.Debugging.dll");
@@ -1040,11 +1025,6 @@ namespace Unitas.Scripting
             }
         }
 
-        /// <summary>
-        /// Rewrites the user sources with debug probes. The rewritten text replaces the
-        /// file on disk for the compile only; the original path stays the source path so
-        /// diagnostics and breakpoints keep pointing at the user's script.
-        /// </summary>
         private static Dictionary<string, string> BuildInstrumentedSources(
             List<string> sources,
             List<string> sortedDefines)
@@ -1065,11 +1045,6 @@ namespace Unitas.Scripting
             return instrumented;
         }
 
-        /// <summary>
-        /// Locates Unitas.Debugging.dll the way the other bridge references are located:
-        /// from a loaded assembly, from beside the running one, or from the sibling
-        /// project's build output. Never a hardcoded machine path.
-        /// </summary>
         private static string? ResolveDebuggingAssemblyPath()
         {
             foreach (var assembly in AppDomain.CurrentDomain.GetAssemblies())
@@ -1354,7 +1329,7 @@ namespace Unitas.Scripting
 
             ProjectMetadataIndex.ScanProjectMeta(fullProjectRoot, guidToPath, pathToGuid, parsedPlugins);
 
-            HashSet<string> baseDefines = DefinesAndResponseParser.BuildBaseDefines(effectiveOptions);
+            HashSet<string> baseDefines = DefinesAndResponseParser.BuildBaseDefines(effectiveOptions, fullProjectRoot);
 
             ProjectMetadataIndex.EvaluatePlugins(
                 parsedPlugins,
@@ -2135,8 +2110,6 @@ namespace Unitas.Scripting
             sb.Append("WARNERR:").AppendLine(rsp.WarningsAsErrors.ToString(CultureInfo.InvariantCulture));
             if (debuggingEnabled)
             {
-                // Only the instrumented compile needs its own cache key; a default
-                // compile keeps the hash it has always written.
                 sb.Append("DEBUG:").AppendLine("1");
             }
 

@@ -33,6 +33,7 @@ namespace Unitas.Bridge.Tests
             TestStory6ReferenceCycleDiagnostic();
             TestStory6OverrideReferencesHonorsPrecompiledReferences();
             TestStory7TargetDefinesEditorAndPlayers();
+            TestProjectSettingsDefinesAndApiCompatibilityLevels();
             TestStory29PlayerBuildRejectsUnguardedUnityEditorReference();
             TestStory1And4FailedEditPreservesLastValidAndIncrementalRecompile();
             TestStory10IncompatibleNativePluginDllImportDiagnostic();
@@ -54,6 +55,7 @@ namespace Unitas.Bridge.Tests
         public static void RunPart3()
         {
             TestStory7TargetDefinesEditorAndPlayers();
+            TestProjectSettingsDefinesAndApiCompatibilityLevels();
             TestStory29PlayerBuildRejectsUnguardedUnityEditorReference();
         }
 
@@ -335,6 +337,142 @@ namespace Unitas.Bridge.Tests
             {
                 DeleteDirectoryIfExists(tempProject);
             }
+        }
+
+        private static void TestProjectSettingsDefinesAndApiCompatibilityLevels()
+        {
+            string fixtureRoot = ResolveFixtureProject();
+            string tempProject = CloneProjectToTemp(fixtureRoot, "project_settings_defines");
+            try
+            {
+                WriteProjectSettingsAssetForDefineTest(tempProject);
+                WriteDefineFidelityProbeScript(tempProject);
+
+                VerifyStandaloneProjectSettingsDefines(tempProject);
+                VerifyAndroidProjectSettingsDefines(tempProject);
+                VerifyServerAndWebGlProjectSettingsDefines(tempProject);
+            }
+            finally
+            {
+                DeleteDirectoryIfExists(tempProject);
+            }
+        }
+
+        private static void WriteProjectSettingsAssetForDefineTest(string tempProject)
+        {
+            string settingsDir = Path.Combine(tempProject, "ProjectSettings");
+            Directory.CreateDirectory(settingsDir);
+            string settingsPath = Path.Combine(settingsDir, "ProjectSettings.asset");
+
+            File.WriteAllText(
+                settingsPath,
+                "%YAML 1.1\n%TAG !u! tag:unity3d.com,2011:\n--- !u!129 &1\nPlayerSettings:\n"
+                    + "  m_ObjectHideFlags: 0\n"
+                    + "  serializedVersion: 26\n"
+                    + "  apiCompatibilityLevel: 6\n"
+                    + "  apiCompatibilityLevelPerPlatform:\n"
+                    + "    Android: 3\n"
+                    + "  scriptingDefineSymbols:\n"
+                    + "    default: DEFAULT_FROM_SETTINGS\n"
+                    + "    1: STANDALONE_SYMBOL;CUSTOM_GAME_FLAG\n"
+                    + "    4: IOS_SYMBOL\n"
+                    + "    7: ANDROID_SYMBOL;MOBILE_INPUT\n"
+                    + "    19: SERVER_SYMBOL\n");
+        }
+
+        private static void WriteDefineFidelityProbeScript(string tempProject)
+        {
+            string probeScriptPath = Path.Combine(tempProject, "Assets", "Scripts", "DefineFidelityProbe.cs");
+            File.WriteAllText(
+                probeScriptPath,
+                "using UnityEngine;\n"
+                    + "public class DefineFidelityProbe : MonoBehaviour\n"
+                    + "{\n"
+                    + "#if STANDALONE_SYMBOL && CUSTOM_GAME_FLAG && NET_STANDARD_2_1 && NET_STANDARD && ENABLE_MONO && !ENABLE_IL2CPP && !NET_4_6\n"
+                    + "    public const string ActiveProfile = \"StandaloneNetStandard21\";\n"
+                    + "#elif ANDROID_SYMBOL && MOBILE_INPUT && NET_4_6 && ENABLE_MONO && !ENABLE_IL2CPP && !NET_STANDARD_2_1\n"
+                    + "    public const string ActiveProfile = \"AndroidNet46\";\n"
+                    + "#elif SERVER_SYMBOL && UNITY_SERVER && NET_STANDARD_2_1\n"
+                    + "    public const string ActiveProfile = \"DedicatedServer\";\n"
+                    + "#elif DEFAULT_FROM_SETTINGS && UNITY_WEBGL && NET_STANDARD_2_1\n"
+                    + "    public const string ActiveProfile = \"WebGLDefaultFallback\";\n"
+                    + "#else\n"
+                    + "    #error Expected target defines and API compatibility symbols were not active\n"
+                    + "#endif\n"
+                    + "}\n");
+            File.WriteAllText(
+                probeScriptPath + ".meta",
+                "fileFormatVersion: 2\nguid: 80000000000000000000000000000099\nMonoImporter:\n  serializedVersion: 2\n");
+        }
+
+        private static void VerifyStandaloneProjectSettingsDefines(string tempProject)
+        {
+            ScriptCompilationOptions standaloneOpts = new ScriptCompilationOptions
+            {
+                IsEditor = true,
+                TargetPlatform = ScriptTargetPlatform.StandaloneOSX,
+                TargetArchitecture = "x86_64",
+                OutputDirectory = Path.Combine(tempProject, "Library", "OutStandaloneSettings")
+            };
+            ScriptCompilationResult standaloneRes = ScriptCompilation.CompileProject(tempProject, standaloneOpts);
+            Check.Equal("ProjectSettings StandaloneOSX compile succeeds with per-target defines", true, standaloneRes.Succeeded);
+            CompiledAssemblyRecord? standaloneMain = standaloneRes.FindAssembly("Assembly-CSharp");
+            Check.That("StandaloneOSX includes STANDALONE_SYMBOL from group 1", standaloneMain != null && ContainsString(standaloneMain.Defines, "STANDALONE_SYMBOL"));
+            Check.That("StandaloneOSX includes CUSTOM_GAME_FLAG from group 1", standaloneMain != null && ContainsString(standaloneMain.Defines, "CUSTOM_GAME_FLAG"));
+            Check.That("StandaloneOSX omits ANDROID_SYMBOL", standaloneMain != null && !ContainsString(standaloneMain.Defines, "ANDROID_SYMBOL"));
+            Check.That("StandaloneOSX defines NET_STANDARD_2_1 for apiCompatibilityLevel 6", standaloneMain != null && ContainsString(standaloneMain.Defines, "NET_STANDARD_2_1"));
+            Check.That("StandaloneOSX defines NET_STANDARD for apiCompatibilityLevel 6", standaloneMain != null && ContainsString(standaloneMain.Defines, "NET_STANDARD"));
+            Check.That("StandaloneOSX defines ENABLE_MONO and omits ENABLE_IL2CPP", standaloneMain != null && ContainsString(standaloneMain.Defines, "ENABLE_MONO") && !ContainsString(standaloneMain.Defines, "ENABLE_IL2CPP"));
+            Check.That("StandaloneOSX defines earlier _OR_NEWER symbols (UNITY_2020_3_OR_NEWER, UNITY_2021_3_OR_NEWER)", standaloneMain != null && ContainsString(standaloneMain.Defines, "UNITY_2020_3_OR_NEWER") && ContainsString(standaloneMain.Defines, "UNITY_2021_3_OR_NEWER"));
+        }
+
+        private static void VerifyAndroidProjectSettingsDefines(string tempProject)
+        {
+            ScriptCompilationOptions androidOpts = new ScriptCompilationOptions
+            {
+                IsEditor = false,
+                TargetPlatform = ScriptTargetPlatform.Android,
+                TargetArchitecture = "ARM64",
+                EmitGeneratedGlue = false,
+                OutputDirectory = Path.Combine(tempProject, "Library", "OutAndroidSettings")
+            };
+            ScriptCompilationResult androidRes = ScriptCompilation.CompileProject(tempProject, androidOpts);
+            Check.Equal("ProjectSettings Android compile succeeds with NET_4_6 per-platform override", true, androidRes.Succeeded);
+            CompiledAssemblyRecord? androidMain = androidRes.FindAssembly("Assembly-CSharp");
+            Check.That("Android includes ANDROID_SYMBOL from group 7", androidMain != null && ContainsString(androidMain.Defines, "ANDROID_SYMBOL"));
+            Check.That("Android includes MOBILE_INPUT from group 7", androidMain != null && ContainsString(androidMain.Defines, "MOBILE_INPUT"));
+            Check.That("Android omits STANDALONE_SYMBOL", androidMain != null && !ContainsString(androidMain.Defines, "STANDALONE_SYMBOL"));
+            Check.That("Android defines NET_4_6 from apiCompatibilityLevelPerPlatform", androidMain != null && ContainsString(androidMain.Defines, "NET_4_6"));
+            Check.That("Android omits NET_STANDARD_2_1 when NET_4_6 is active", androidMain != null && !ContainsString(androidMain.Defines, "NET_STANDARD_2_1"));
+        }
+
+        private static void VerifyServerAndWebGlProjectSettingsDefines(string tempProject)
+        {
+            ScriptCompilationOptions serverOpts = new ScriptCompilationOptions
+            {
+                IsEditor = false,
+                TargetPlatform = ScriptTargetPlatform.DedicatedServer,
+                TargetArchitecture = "x86_64",
+                EmitGeneratedGlue = false,
+                OutputDirectory = Path.Combine(tempProject, "Library", "OutServerSettings")
+            };
+            ScriptCompilationResult serverRes = ScriptCompilation.CompileProject(tempProject, serverOpts);
+            Check.Equal("ProjectSettings DedicatedServer compile succeeds with group 19 defines", true, serverRes.Succeeded);
+            CompiledAssemblyRecord? serverMain = serverRes.FindAssembly("Assembly-CSharp");
+            Check.That("DedicatedServer includes SERVER_SYMBOL from group 19", serverMain != null && ContainsString(serverMain.Defines, "SERVER_SYMBOL"));
+
+            ScriptCompilationOptions webglOpts = new ScriptCompilationOptions
+            {
+                IsEditor = false,
+                TargetPlatform = ScriptTargetPlatform.WebGL,
+                TargetArchitecture = "x86_64",
+                EmitGeneratedGlue = false,
+                OutputDirectory = Path.Combine(tempProject, "Library", "OutWebGLSettings")
+            };
+            ScriptCompilationResult webglRes = ScriptCompilation.CompileProject(tempProject, webglOpts);
+            Check.Equal("ProjectSettings WebGL compile falls back to default scriptingDefineSymbols", true, webglRes.Succeeded);
+            CompiledAssemblyRecord? webglMain = webglRes.FindAssembly("Assembly-CSharp");
+            Check.That("WebGL includes DEFAULT_FROM_SETTINGS fallback", webglMain != null && ContainsString(webglMain.Defines, "DEFAULT_FROM_SETTINGS"));
         }
 
         private static void TestStory29PlayerBuildRejectsUnguardedUnityEditorReference()

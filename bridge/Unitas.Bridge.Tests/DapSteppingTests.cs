@@ -23,6 +23,7 @@ namespace Unitas.Bridge.Tests
             TestPauseStopsAtNextSequencePoint();
             TestEvaluateLocalsDestroyedAndRejectsSideEffects();
             TestLoopbackBindingRejectsNonLoopbackAddresses();
+            TestExceptionBreakpointsAndExceptionInfo();
         }
 
         private static void TestLaunchAndUnboundBreakpoints()
@@ -249,6 +250,141 @@ namespace Unitas.Bridge.Tests
             finally
             {
                 listener.Stop();
+            }
+        }
+
+        private static void TestExceptionBreakpointsAndExceptionInfo()
+        {
+            LoopbackPair pair = LoopbackPair.Create();
+            SequencePointTable table = new SequencePointTable();
+            table.Add(601, "/game/Fault.cs", 14, "Fault.Step", new[] { "phase" });
+            table.Add(602, "/game/Fault.cs", 22, "Fault.Crash", new[] { "phase" });
+            DebugAgent.RegisterSequencePoints(table);
+            DebugSession session = DebugAgent.BeginSession(pair.Server);
+            try
+            {
+                using DapClient client = new DapClient(pair.Client);
+                JsonObject initResponse = client.Request("initialize");
+                Check.That("dap exception breakpoints: initialize succeeds", ReadBool(initResponse["success"]));
+                JsonArray? filters = initResponse["body"]?["exceptionBreakpointFilters"] as JsonArray;
+                Check.That("dap exception breakpoints: initialize advertises exceptionBreakpointFilters", filters != null && filters.Count >= 2);
+                Check.That("dap exception breakpoints: initialize advertises supportsExceptionInfoRequest", ReadBool(initResponse["body"]?["supportsExceptionInfoRequest"]));
+
+                client.Request("launch");
+
+                JsonObject setAllResponse = client.Request("setExceptionBreakpoints", new JsonObject
+                {
+                    ["filters"] = new JsonArray { "all" }
+                });
+                Check.That("dap exception breakpoints: setExceptionBreakpoints all succeeds", ReadBool(setAllResponse["success"]));
+                client.Request("configurationDone");
+
+                Task thrownWorker = Task.Run(() =>
+                {
+                    DebugAgent.EnterFrame();
+                    try
+                    {
+                        DebugAgent.Hit(601, new object?[] { "before-throw" }, 1);
+                        try
+                        {
+                            throw new InvalidOperationException("bad state in step");
+                        }
+                        catch (InvalidOperationException)
+                        {
+                        }
+                    }
+                    finally
+                    {
+                        DebugAgent.LeaveFrame();
+                    }
+                });
+
+                JsonObject thrownStopped = client.Receive(TimeSpan.FromSeconds(5));
+                Check.Equal("dap exception breakpoints: first-chance throw emits stopped event", "stopped", ReadString(thrownStopped["event"]));
+                Check.Equal("dap exception breakpoints: stop reason is exception", "exception", ReadString(thrownStopped["body"]?["reason"]));
+                Check.That(
+                    "dap exception breakpoints: stopped event text reports exception type and message",
+                    ReadString(thrownStopped["body"]?["text"]).Contains("InvalidOperationException", StringComparison.Ordinal)
+                    && ReadString(thrownStopped["body"]?["text"]).Contains("bad state in step", StringComparison.Ordinal));
+
+                JsonObject exceptionInfo = client.Request("exceptionInfo", new JsonObject { ["threadId"] = 1 });
+                Check.That("dap exception breakpoints: exceptionInfo succeeds", ReadBool(exceptionInfo["success"]));
+                Check.That(
+                    "dap exception breakpoints: exceptionInfo exceptionId names exception type",
+                    ReadString(exceptionInfo["body"]?["exceptionId"]).Contains("InvalidOperationException", StringComparison.Ordinal));
+                Check.Equal(
+                    "dap exception breakpoints: exceptionInfo description reports exception message",
+                    "bad state in step",
+                    ReadString(exceptionInfo["body"]?["description"]));
+
+                JsonArray stackFrames = (JsonArray)client.Request("stackTrace")["body"]!["stackFrames"]!;
+                Check.Equal("dap exception breakpoints: stackTrace points to throwing sequence point line", 14, ReadInt(stackFrames[0]?["line"]));
+
+                JsonObject evalException = client.Request("evaluate", new JsonObject { ["expression"] = "$exception" });
+                Check.That("dap exception breakpoints: evaluate $exception succeeds", ReadBool(evalException["success"]));
+                Check.That(
+                    "dap exception breakpoints: evaluate $exception contains message",
+                    ReadString(evalException["body"]?["result"]).Contains("bad state in step", StringComparison.Ordinal));
+
+                Check.That("dap exception breakpoints: continue after caught exception succeeds", ReadBool(client.Request("continue")["success"]));
+                Check.That("dap exception breakpoints: thrown worker completes", thrownWorker.Wait(TimeSpan.FromSeconds(5)));
+
+                JsonObject setUncaughtResponse = client.Request("setExceptionBreakpoints", new JsonObject
+                {
+                    ["filters"] = new JsonArray { "uncaught" }
+                });
+                Check.That("dap exception breakpoints: setExceptionBreakpoints uncaught succeeds", ReadBool(setUncaughtResponse["success"]));
+
+                DebugAgent.EnterFrame();
+                try
+                {
+                    DebugAgent.Hit(601, new object?[] { "caught-under-uncaught" }, 1);
+                    try
+                    {
+                        throw new InvalidOperationException("caught should not pause uncaught filter");
+                    }
+                    catch (InvalidOperationException)
+                    {
+                    }
+                }
+                finally
+                {
+                    DebugAgent.LeaveFrame();
+                }
+
+                JsonObject noStop = client.Receive(TimeSpan.FromMilliseconds(200));
+                Check.That("dap exception breakpoints: caught exception does not pause when only uncaught filter is active", ReadString(noStop["event"]) != "stopped");
+
+                Task unhandledWorker = Task.Run(() =>
+                {
+                    DebugAgent.EnterFrame();
+                    try
+                    {
+                        DebugAgent.Hit(602, new object?[] { "unhandled-crash" }, 1);
+                        DebugAgent.NotifyUnhandledException(new ArgumentException("unhandled script argument"));
+                    }
+                    finally
+                    {
+                        DebugAgent.LeaveFrame();
+                    }
+                });
+
+                JsonObject unhandledStopped = client.Receive(TimeSpan.FromSeconds(5));
+                Check.Equal("dap exception breakpoints: unhandled exception emits stopped event", "stopped", ReadString(unhandledStopped["event"]));
+                Check.Equal("dap exception breakpoints: unhandled stop reason is exception", "exception", ReadString(unhandledStopped["body"]?["reason"]));
+                Check.That(
+                    "dap exception breakpoints: unhandled stop text includes exception message",
+                    ReadString(unhandledStopped["body"]?["text"]).Contains("unhandled script argument", StringComparison.Ordinal));
+
+                JsonObject unhandledInfo = client.Request("exceptionInfo", new JsonObject { ["threadId"] = 1 });
+                Check.Equal("dap exception breakpoints: unhandled exceptionInfo breakMode is unhandled", "unhandled", ReadString(unhandledInfo["body"]?["breakMode"]));
+
+                client.Request("continue");
+                Check.That("dap exception breakpoints: unhandled worker completes after continue", unhandledWorker.Wait(TimeSpan.FromSeconds(5)));
+            }
+            finally
+            {
+                session.Dispose();
             }
         }
 

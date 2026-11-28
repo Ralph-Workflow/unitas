@@ -553,11 +553,178 @@ namespace Unitas.Bridge.Tests
             try
             {
                 VerifyCliRunCommandExitCodes(tempProject);
+                VerifyNUnitParameterAttributesExpansionAndExpectedResult(tempProject);
             }
             finally
             {
                 DeleteDirectoryIfExists(tempProject);
             }
+        }
+
+        private static void VerifyNUnitParameterAttributesExpansionAndExpectedResult(string tempProject)
+        {
+            string paramFile = Path.Combine(tempProject, "Assets", "Tests", "EditMode", "ParameterizedAttributeTests.cs");
+            File.WriteAllText(
+                paramFile,
+                "using System.Collections;\n"
+                + "using System.Collections.Generic;\n"
+                + "using NUnit.Framework;\n"
+                + "namespace MyGame.EditTests\n"
+                + "{\n"
+                + "    public enum SampleColor { Red, Green, Blue }\n"
+                + "    public class ExternalCaseProvider\n"
+                + "    {\n"
+                + "        public static readonly object[] StaticArrayCases =\n"
+                + "        {\n"
+                + "            new object[] { 10, 20, 30 },\n"
+                + "            new object[] { 5, 15, 20 }\n"
+                + "        };\n"
+                + "        public static IEnumerable<int> GetValueSourceInts() => new[] { 2, 4 };\n"
+                + "        public static IEnumerable<TestCaseData> GetScaledCases(int factor)\n"
+                + "        {\n"
+                + "            yield return new TestCaseData(3 * factor, 4 * factor).Returns(7 * factor).SetName(\"CustomScaledCase_\" + factor).SetCategory(\"ParamCustomCat\");\n"
+                + "        }\n"
+                + "        public IEnumerator<object[]> GetEnumerator()\n"
+                + "        {\n"
+                + "            yield return new object[] { \"hello\", 5 };\n"
+                + "            yield return new object[] { \"unitas\", 6 };\n"
+                + "        }\n"
+                + "    }\n"
+                + "    [Category(\"ParamAttributes\")]\n"
+                + "    public class ParameterizedAttributeTests\n"
+                + "    {\n"
+                + "        public static IEnumerable<TestCaseData> LocalCaseDataProperty\n"
+                + "        {\n"
+                + "            get\n"
+                + "            {\n"
+                + "                yield return new TestCaseData(6, 7).Returns(42);\n"
+                + "                yield return new TestCaseData(8, 9).Returns(72).Ignore(\"SkippedViaTestCaseData\");\n"
+                + "            }\n"
+                + "        }\n"
+                + "        public static string[] LocalStringValues = new[] { \"A\", \"B\" };\n"
+                + "        [TestCase(3, 5, ExpectedResult = 8)]\n"
+                + "        [TestCase(10, 4, ExpectedResult = 999, TestName = \"IntentionalExpectedResultMismatch\")]\n"
+                + "        public int TestCaseWithExpectedResult(int a, int b) => a + b;\n"
+                + "        [TestCaseSource(nameof(LocalCaseDataProperty))]\n"
+                + "        public int TestCaseSourceFromLocalTestCaseData(int a, int b) => a * b;\n"
+                + "        [TestCaseSource(typeof(ExternalCaseProvider), nameof(ExternalCaseProvider.StaticArrayCases))]\n"
+                + "        public void TestCaseSourceFromExternalTypeField(int a, int b, int sum)\n"
+                + "        {\n"
+                + "            Assert.AreEqual(sum, a + b);\n"
+                + "        }\n"
+                + "        [TestCaseSource(typeof(ExternalCaseProvider), nameof(ExternalCaseProvider.GetScaledCases), new object[] { 10 })]\n"
+                + "        public int TestCaseSourceWithMethodParams(int a, int b) => a + b;\n"
+                + "        [TestCaseSource(typeof(ExternalCaseProvider))]\n"
+                + "        public void TestCaseSourceFromEnumerableClass(string word, int expectedLen)\n"
+                + "        {\n"
+                + "            Assert.AreEqual(expectedLen, word.Length);\n"
+                + "        }\n"
+                + "        [Test]\n"
+                + "        public void CombinatorialValuesAndValueSource(\n"
+                + "            [Values(1, 2)] int num,\n"
+                + "            [ValueSource(nameof(LocalStringValues))] string letter,\n"
+                + "            [ValueSource(typeof(ExternalCaseProvider), nameof(ExternalCaseProvider.GetValueSourceInts))] int mult)\n"
+                + "        {\n"
+                + "            Assert.IsTrue(num >= 1 && num <= 2);\n"
+                + "            Assert.IsTrue(letter == \"A\" || letter == \"B\");\n"
+                + "            Assert.IsTrue(mult == 2 || mult == 4);\n"
+                + "        }\n"
+                + "        [Test]\n"
+                + "        public void AutoBoolAndEnumValues([Values] bool flag, [Values] SampleColor color)\n"
+                + "        {\n"
+                + "            Assert.IsTrue(flag || !flag);\n"
+                + "            Assert.IsTrue(color == SampleColor.Red || color == SampleColor.Green || color == SampleColor.Blue);\n"
+                + "        }\n"
+                + "    }\n"
+                + "}\n");
+
+            string xmlPath = Path.Combine(tempProject, "TestResults", "param_attributes.xml");
+            TestRunResult paramRun = TestRunner.RunProject(
+                tempProject,
+                new TestRunOptions
+                {
+                    Mode = TestModeFilter.EditMode,
+                    CategoryFilter = "ParamAttributes",
+                    ResultsXmlPath = xmlPath,
+                    SkipCompilation = false
+                });
+
+            Check.Equal("NUnit parameter attributes run compiles cleanly", true, paramRun.CompileSucceeded);
+            Check.Equal("NUnit parameter attributes discovers 23 expanded test cases", 23, paramRun.SelectedTestCaseCount);
+            Check.Equal("NUnit parameter attributes passes 21 cases", 21, paramRun.PassedCount);
+            Check.Equal("NUnit parameter attributes fails 1 case (ExpectedResult mismatch)", 1, paramRun.FailedCount);
+            Check.Equal("NUnit parameter attributes skips 1 case (TestCaseData.Ignore)", 1, paramRun.SkippedCount);
+
+            TestCaseResult? expectedMatch = paramRun.FindTest("MyGame.EditTests.ParameterizedAttributeTests.TestCaseWithExpectedResult(3,5)");
+            Check.That(
+                "TestCase ExpectedResult matching return value passes",
+                expectedMatch != null && expectedMatch.Outcome == TestOutcome.Passed);
+
+            TestCaseResult? expectedMismatch = paramRun.FindTest("MyGame.EditTests.ParameterizedAttributeTests.IntentionalExpectedResultMismatch");
+            Check.That(
+                "TestCase ExpectedResult mismatch fails with clear expected vs actual message",
+                expectedMismatch != null
+                && expectedMismatch.Outcome == TestOutcome.Failed
+                && expectedMismatch.Message != null
+                && expectedMismatch.Message.Contains("999", StringComparison.Ordinal)
+                && expectedMismatch.Message.Contains("14", StringComparison.Ordinal));
+
+            TestCaseResult? tcdPass = paramRun.FindTest("MyGame.EditTests.ParameterizedAttributeTests.TestCaseSourceFromLocalTestCaseData(6,7)");
+            Check.That(
+                "TestCaseSource local TestCaseData with Returns(42) passes",
+                tcdPass != null && tcdPass.Outcome == TestOutcome.Passed);
+
+            TestCaseResult? tcdSkip = paramRun.FindTest("MyGame.EditTests.ParameterizedAttributeTests.TestCaseSourceFromLocalTestCaseData(8,9)");
+            Check.That(
+                "TestCaseSource local TestCaseData with Ignore is skipped with reason",
+                tcdSkip != null
+                && tcdSkip.Outcome == TestOutcome.Skipped
+                && string.Equals(tcdSkip.Message, "SkippedViaTestCaseData", StringComparison.Ordinal));
+
+            TestCaseResult? customNamed = paramRun.FindTest("MyGame.EditTests.ParameterizedAttributeTests.CustomScaledCase_10");
+            bool hasCustomCat = false;
+            if (customNamed != null)
+            {
+                for (int c = 0; c < customNamed.Descriptor.Categories.Count; c++)
+                {
+                    if (string.Equals(customNamed.Descriptor.Categories[c], "ParamCustomCat", StringComparison.Ordinal))
+                    {
+                        hasCustomCat = true;
+                        break;
+                    }
+                }
+            }
+
+            Check.That(
+                "TestCaseSource with methodParams and SetName/SetCategory expands and passes",
+                customNamed != null
+                && customNamed.Outcome == TestOutcome.Passed
+                && hasCustomCat);
+
+            TestCaseResult? enumClassCase = paramRun.FindTest("MyGame.EditTests.ParameterizedAttributeTests.TestCaseSourceFromEnumerableClass(\"unitas\",6)");
+            Check.That(
+                "TestCaseSource from enumerable sourceType expands and formats string argument in name",
+                enumClassCase != null && enumClassCase.Outcome == TestOutcome.Passed);
+
+            TestCaseResult? combCase = paramRun.FindTest("MyGame.EditTests.ParameterizedAttributeTests.CombinatorialValuesAndValueSource(2,\"B\",4)");
+            Check.That(
+                "Combinatorial [Values] and [ValueSource] produces Cartesian product test case",
+                combCase != null && combCase.Outcome == TestOutcome.Passed);
+
+            TestCaseResult? autoEnumBoolCase = paramRun.FindTest("MyGame.EditTests.ParameterizedAttributeTests.AutoBoolAndEnumValues(true,Green)");
+            autoEnumBoolCase ??= paramRun.FindTest("MyGame.EditTests.ParameterizedAttributeTests.AutoBoolAndEnumValues(True,Green)");
+            autoEnumBoolCase ??= paramRun.FindTest("MyGame.EditTests.ParameterizedAttributeTests.AutoBoolAndEnumValues(true,SampleColor.Green)");
+            Check.That(
+                "Auto [Values] on bool and enum expands all combinations (2 x 3 = 6)",
+                autoEnumBoolCase != null && autoEnumBoolCase.Outcome == TestOutcome.Passed);
+
+            ValidateNUnit3Xml(
+                File.ReadAllText(xmlPath),
+                expectedSelected: 23,
+                expectedTotal: 23,
+                expectedPassed: 21,
+                expectedFailed: 1,
+                expectedOverallResult: "Failed");
         }
 
         private static int RunTestingCliQuietly(string[] args)
@@ -588,8 +755,7 @@ namespace Unitas.Bridge.Tests
                     "--category",
                     "Smoke",
                     "--results",
-                    xmlPath,
-                    "--skip-compilation"
+                    xmlPath
                 });
 
                 Check.Equal("CLI run passing category exits 0", 0, passExit);
@@ -652,11 +818,6 @@ namespace Unitas.Bridge.Tests
 
         private static string CreateTempTestProject(string label)
         {
-            // One directory per group lets the repeated runs reuse the compiled
-            // test assemblies instead of recompiling the same sources every run.
-            // The process id keeps concurrent gate runs from sibling worktrees
-            // (which share the machine temp dir) from deleting this run's
-            // project mid-compile.
             int id = Interlocked.Increment(ref _projectCounter);
             string root = Path.Combine(
                 Path.GetTempPath(),

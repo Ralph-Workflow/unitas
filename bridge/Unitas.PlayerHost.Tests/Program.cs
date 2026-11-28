@@ -37,6 +37,7 @@ namespace Unitas.PlayerHost.Tests
                 PlayerHostBootTests.RunWithStagedBundle(bundleRoot);
                 PlayerHostScenePathTests.RunWithStagedBundle(bundleRoot);
                 PlayerHostCollectibleAlcTests.RunWithStagedBundle(bundleRoot);
+                PlayerHostHotReloadTests.Run(sampleRoot);
                 PlayerHostArtifactTests.Run();
             }
             finally

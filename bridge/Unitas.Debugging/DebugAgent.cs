@@ -4,6 +4,7 @@ using System.Globalization;
 using System.IO;
 using System.Net;
 using System.Net.Sockets;
+using System.Runtime.ExceptionServices;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -14,20 +15,19 @@ namespace Unitas.Debugging
         public const string DapPortEnvironmentVariable = "UNITAS_DAP_PORT";
 
         private const int SelfStartTimeoutMilliseconds = 10000;
-
-        /// <summary>
-        /// How long a self-started session waits for its client to configure it.
-        /// The script thread parks on <see cref="SessionConfigured"/> instead of
-        /// polling, so a loaded host cannot starve the adapter reader thread and
-        /// lose the breakpoint stop.
-        /// </summary>
         private const int SessionConfigurationTimeoutMilliseconds = 120000;
 
         private static readonly object Gate = new object();
         private static readonly ManualResetEventSlim SessionConfigured = new ManualResetEventSlim(false);
         private static readonly Dictionary<(string File, int Line), string?> Breakpoints = new Dictionary<(string File, int Line), string?>();
+        private static readonly HashSet<string> ExceptionFilters = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         private static SequencePointTable _sequencePoints = new SequencePointTable();
         private static DebugSession? _session;
+        private static DebugFrame? _lastFrame;
+        private static Exception? _lastPausedException;
+        private static bool _firstChanceSubscribed;
+        [ThreadStatic]
+        private static int _inExceptionHook;
         private static int _callDepth;
         private static int _selfStartState;
         private static int _selfStartedPort;
@@ -40,6 +40,8 @@ namespace Unitas.Debugging
             {
                 _sequencePoints = table ?? new SequencePointTable();
                 _callDepth = 0;
+                _lastFrame = null;
+                _lastPausedException = null;
             }
         }
 
@@ -131,6 +133,154 @@ namespace Unitas.Debugging
             }
         }
 
+        public static void SetExceptionBreakpoints(IEnumerable<string>? filters)
+        {
+            lock (Gate)
+            {
+                ExceptionFilters.Clear();
+                _lastPausedException = null;
+                if (filters != null)
+                {
+                    foreach (string filter in filters)
+                    {
+                        if (!string.IsNullOrWhiteSpace(filter))
+                        {
+                            ExceptionFilters.Add(filter.Trim());
+                        }
+                    }
+                }
+                UpdateFirstChanceSubscriptionUnderLock();
+            }
+        }
+
+        public static void ClearExceptionBreakpoints()
+        {
+            SetExceptionBreakpoints(null);
+        }
+
+        public static void NotifyException(Exception exception, bool isUnhandled = false)
+        {
+            ArgumentNullException.ThrowIfNull(exception);
+            EnsureDebugSession();
+            PauseOnExceptionCore(exception, isUnhandled, requireCallDepth: false);
+        }
+
+        public static void NotifyUnhandledException(Exception exception)
+        {
+            NotifyException(exception, isUnhandled: true);
+        }
+
+        private static void OnFirstChanceException(object? sender, FirstChanceExceptionEventArgs args)
+        {
+            _ = sender;
+            if (args.Exception == null || _inExceptionHook > 0)
+            {
+                return;
+            }
+            PauseOnExceptionCore(args.Exception, isUnhandled: false, requireCallDepth: true);
+        }
+
+        private static void PauseOnExceptionCore(Exception exception, bool isUnhandled, bool requireCallDepth)
+        {
+            if (_inExceptionHook > 0)
+            {
+                return;
+            }
+            DebugSession? session;
+            DebugFrame? baseFrame;
+            int depth;
+            lock (Gate)
+            {
+                session = _session;
+                depth = _callDepth;
+                if (session == null || (requireCallDepth && depth <= 0))
+                {
+                    return;
+                }
+                if (!MatchesExceptionFilterUnderLock(isUnhandled))
+                {
+                    return;
+                }
+                if (ReferenceEquals(_lastPausedException, exception))
+                {
+                    return;
+                }
+                _lastPausedException = exception;
+                baseFrame = _lastFrame ?? session.CurrentFrame;
+            }
+            _inExceptionHook++;
+            try
+            {
+                DebugFrame exceptionFrame = baseFrame != null
+                    ? new DebugFrame(
+                        baseFrame.SequencePointId,
+                        baseFrame.Method,
+                        baseFrame.File,
+                        baseFrame.Line,
+                        baseFrame.LocalNames,
+                        baseFrame.Locals,
+                        baseFrame.Depth,
+                        exception,
+                        isUnhandled)
+                    : new DebugFrame(
+                        0,
+                        "<exception>",
+                        string.Empty,
+                        0,
+                        Array.Empty<string>(),
+                        Array.Empty<object?>(),
+                        depth,
+                        exception,
+                        isUnhandled);
+                session.ClearStepAndPause();
+                session.Stop(exceptionFrame, "exception");
+            }
+            finally
+            {
+                _inExceptionHook--;
+            }
+        }
+
+        private static bool MatchesExceptionFilterUnderLock(bool isUnhandled)
+        {
+            if (ExceptionFilters.Count == 0)
+            {
+                return false;
+            }
+            if (ExceptionFilters.Contains("all")
+                || ExceptionFilters.Contains("thrown")
+                || ExceptionFilters.Contains("caught"))
+            {
+                return true;
+            }
+            if (isUnhandled
+                && (ExceptionFilters.Contains("uncaught")
+                    || ExceptionFilters.Contains("unhandled")
+                    || ExceptionFilters.Contains("user-unhandled")))
+            {
+                return true;
+            }
+            return false;
+        }
+
+        private static void UpdateFirstChanceSubscriptionUnderLock()
+        {
+            bool shouldSubscribe = _session != null
+                && (ExceptionFilters.Contains("all")
+                    || ExceptionFilters.Contains("thrown")
+                    || ExceptionFilters.Contains("caught"));
+            if (shouldSubscribe && !_firstChanceSubscribed)
+            {
+                AppDomain.CurrentDomain.FirstChanceException += OnFirstChanceException;
+                _firstChanceSubscribed = true;
+            }
+            else if (!shouldSubscribe && _firstChanceSubscribed)
+            {
+                AppDomain.CurrentDomain.FirstChanceException -= OnFirstChanceException;
+                _firstChanceSubscribed = false;
+            }
+        }
+
         public static DebugSession BeginSession(Stream dapTransport)
         {
             DapServer server = new DapServer(dapTransport);
@@ -139,6 +289,10 @@ namespace Unitas.Debugging
             {
                 _session = session;
                 _callDepth = 0;
+                _lastFrame = null;
+                _lastPausedException = null;
+                ExceptionFilters.Clear();
+                UpdateFirstChanceSubscriptionUnderLock();
             }
             server.Start();
             return session;
@@ -152,6 +306,10 @@ namespace Unitas.Debugging
             {
                 _session = session;
                 _callDepth = 0;
+                _lastFrame = null;
+                _lastPausedException = null;
+                ExceptionFilters.Clear();
+                UpdateFirstChanceSubscriptionUnderLock();
             }
             return session;
         }
@@ -225,6 +383,11 @@ namespace Unitas.Debugging
             {
                 return;
             }
+            DebugFrame frame = new DebugFrame(sequencePointId, point.Method, point.File, point.Line, point.LocalNames, locals, depth);
+            lock (Gate)
+            {
+                _lastFrame = frame;
+            }
             string stopReason = string.Empty;
             bool shouldStop = false;
             if (session != null && session.TryConsumeStepOrPause(depth, out string stepOrPauseReason))
@@ -251,7 +414,6 @@ namespace Unitas.Debugging
             {
                 return;
             }
-            DebugFrame frame = new DebugFrame(sequencePointId, point.Method, point.File, point.Line, point.LocalNames, locals, depth);
             session?.Stop(frame, stopReason);
         }
 
@@ -268,6 +430,18 @@ namespace Unitas.Debugging
                 session = _session;
                 depth = _callDepth;
                 point = _sequencePoints.FindByLocation(file, line);
+            }
+            DebugFrame frame = new DebugFrame(
+                point?.Id ?? 0,
+                point != null && !string.IsNullOrEmpty(point.Method) ? point.Method : method,
+                file ?? string.Empty,
+                line,
+                localNames,
+                locals,
+                depth);
+            lock (Gate)
+            {
+                _lastFrame = frame;
             }
             if (session == null)
             {
@@ -299,14 +473,6 @@ namespace Unitas.Debugging
             {
                 return;
             }
-            DebugFrame frame = new DebugFrame(
-                point?.Id ?? 0,
-                point != null && !string.IsNullOrEmpty(point.Method) ? point.Method : method,
-                file ?? string.Empty,
-                line,
-                localNames,
-                locals,
-                depth);
             session.Stop(frame, stopReason);
         }
 
@@ -501,6 +667,10 @@ namespace Unitas.Debugging
                 if (ReferenceEquals(_session, session))
                 {
                     _session = null;
+                    _lastFrame = null;
+                    _lastPausedException = null;
+                    ExceptionFilters.Clear();
+                    UpdateFirstChanceSubscriptionUnderLock();
                 }
             }
         }

@@ -39,7 +39,7 @@ namespace Unitas.Testing
             RegexOptions.Compiled);
 
         private static readonly Regex MethodSourceRegex = new Regex(
-            @"((?:\s*" + AttributePattern + @"\s*)+)(?:(public|private|protected|internal)\s+)?(?:(virtual|override|new|sealed|static)\s+)*(void|IEnumerator|System\.Collections\.IEnumerator)\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(([^)]*)\)",
+            @"((?:\s*" + AttributePattern + @"\s*)+)(?:(public|private|protected|internal)\s+)?(?:(virtual|override|new|sealed|static)\s+)*([A-Za-z_][A-Za-z0-9_<>,.\[\]?]*)\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(((?:[^()]|\((?:[^()]|\([^()]*\))*\))*)\)",
             RegexOptions.Compiled);
 
         private static readonly Regex RetryAttrRegex = new Regex(
@@ -143,7 +143,7 @@ namespace Unitas.Testing
                     allDiagnostics);
             }
 
-            HashSet<string> baseDefines = DefinesAndResponseParser.BuildBaseDefines(compileOptions);
+            HashSet<string> baseDefines = DefinesAndResponseParser.BuildBaseDefines(compileOptions, fullProjectRoot);
             List<DiscoveredTestCaseDescriptor> allDescriptors = new List<DiscoveredTestCaseDescriptor>();
             List<FixtureGenerationPlan> allFixturePlans = new List<FixtureGenerationPlan>();
             Dictionary<string, SupplementalTestMetadata> metadataByMethodKey =
@@ -178,6 +178,61 @@ namespace Unitas.Testing
                     assemblyPostBuildTypes);
             }
 
+            AssemblyLoadContext testLoadContext = CreateAndPopulateTestLoadContext(outputDir, compileResult);
+
+            if (allFixturePlans.Count > 0)
+            {
+                TestExecutionRegistry.Clear();
+                if (!CompileAndLoadTestGlue(
+                    outputDir,
+                    compileResult,
+                    compileOptions,
+                    allFixturePlans,
+                    metadataByMethodKey,
+                    lifecycleByClassKey,
+                    assemblyPrebuildTypes,
+                    assemblyPostBuildTypes,
+                    allDiagnostics,
+                    testLoadContext))
+                {
+                    return BuildCompileFailureResult(
+                        fullProjectRoot,
+                        effectiveOptions,
+                        runStopwatch.Elapsed.TotalSeconds,
+                        testAssemblies,
+                        allDiagnostics);
+                }
+
+                IReadOnlyList<DiscoveredTestCaseDescriptor> dynamicDescriptors =
+                    TestExecutionRegistry.RegisteredDynamicDescriptors;
+                for (int d = 0; d < dynamicDescriptors.Count; d++)
+                {
+                    allDescriptors.Add(dynamicDescriptors[d]);
+                }
+            }
+
+            LastCompilationCache = new CachedTestCompilation(
+                fullProjectRoot,
+                outputDir,
+                allDescriptors,
+                metadataByMethodKey,
+                allDiagnostics);
+
+            return ExecuteCompiledTestRun(
+                fullProjectRoot,
+                outputDir,
+                effectiveOptions,
+                runStopwatch,
+                testAssemblies,
+                allDescriptors,
+                metadataByMethodKey,
+                allDiagnostics);
+        }
+
+        private static AssemblyLoadContext CreateAndPopulateTestLoadContext(
+            string outputDir,
+            ScriptCompilationResult compileResult)
+        {
             AssemblyLoadContext testLoadContext = new AssemblyLoadContext(
                 "UnitasTestRun_" + Guid.NewGuid().ToString("N", CultureInfo.InvariantCulture),
                 isCollectible: true);
@@ -222,46 +277,7 @@ namespace Unitas.Testing
                 glueAsm.CreateInstance("UnitasGeneratedGlue");
             }
 
-            if (allFixturePlans.Count > 0)
-            {
-                TestExecutionRegistry.Clear();
-                if (!CompileAndLoadTestGlue(
-                    outputDir,
-                    compileResult,
-                    compileOptions,
-                    allFixturePlans,
-                    metadataByMethodKey,
-                    lifecycleByClassKey,
-                    assemblyPrebuildTypes,
-                    assemblyPostBuildTypes,
-                    allDiagnostics,
-                    testLoadContext))
-                {
-                    return BuildCompileFailureResult(
-                        fullProjectRoot,
-                        effectiveOptions,
-                        runStopwatch.Elapsed.TotalSeconds,
-                        testAssemblies,
-                        allDiagnostics);
-                }
-            }
-
-            LastCompilationCache = new CachedTestCompilation(
-                fullProjectRoot,
-                outputDir,
-                allDescriptors,
-                metadataByMethodKey,
-                allDiagnostics);
-
-            return ExecuteCompiledTestRun(
-                fullProjectRoot,
-                outputDir,
-                effectiveOptions,
-                runStopwatch,
-                testAssemblies,
-                allDescriptors,
-                metadataByMethodKey,
-                allDiagnostics);
+            return testLoadContext;
         }
 
         private sealed class CachedTestCompilation

@@ -10,12 +10,13 @@ namespace Unitas.Scripting
         {
             if (args == null || args.Length == 0)
             {
-                Console.Error.WriteLine("Usage: Unitas.Scripting <compile|generate-ide|diagnose|symbols|usages|attach-component|play|loop|scenario> <projectRoot> [--player] [--development] [--debug] [--target <platform>] [--arch <arch>] [--define <SYMBOL>] [--type <TypeName>] [--script <ScriptOrGuid>] [--prefab <PrefabPath>] [--object <ObjectName>] [--field <Name=Value>] [--usages <ScriptOrGuid>] [--play [<SceneOrPrefabPath>]] [--ticks <N>] | scenario <projectRoot> <scenario.json> [--repeat 2] [--frame-rates 30,60,144,240]");
+                Console.Error.WriteLine("Usage: Unitas.Scripting <compile|reload|generate-ide|diagnose|symbols|usages|attach-component|play|loop|scenario> <projectRoot> [--player] [--development] [--debug] [--target <platform>] [--arch <arch>] [--define <SYMBOL>] [--type <TypeName>] [--script <ScriptOrGuid>] [--prefab <PrefabPath>] [--object <ObjectName>] [--field <Name=Value>] [--usages <ScriptOrGuid>] [--play [<SceneOrPrefabPath>]] [--ticks <N>] | scenario <projectRoot> <scenario.json> [--repeat 2] [--frame-rates 30,60,144,240]");
                 return 1;
             }
 
             string command = args[0];
             bool isCompile = string.Equals(command, "compile", StringComparison.OrdinalIgnoreCase);
+            bool isReload = string.Equals(command, "reload", StringComparison.OrdinalIgnoreCase);
             bool isGenerateIde = string.Equals(command, "generate-ide", StringComparison.OrdinalIgnoreCase);
             bool isDiagnose = string.Equals(command, "diagnose", StringComparison.OrdinalIgnoreCase);
             bool isSymbols = string.Equals(command, "symbols", StringComparison.OrdinalIgnoreCase);
@@ -26,6 +27,7 @@ namespace Unitas.Scripting
             bool isScenario = string.Equals(command, "scenario", StringComparison.OrdinalIgnoreCase);
 
             if (!isCompile
+                && !isReload
                 && !isGenerateIde
                 && !isDiagnose
                 && !isSymbols
@@ -35,7 +37,7 @@ namespace Unitas.Scripting
                 && !isLoop
                 && !isScenario)
             {
-                Console.Error.WriteLine("Unknown command '" + command + "'. Expected 'compile', 'generate-ide', 'diagnose', 'symbols', 'usages', 'attach-component', 'play', 'loop', or 'scenario'.");
+                Console.Error.WriteLine("Unknown command '" + command + "'. Expected 'compile', 'reload', 'generate-ide', 'diagnose', 'symbols', 'usages', 'attach-component', 'play', 'loop', or 'scenario'.");
                 return 1;
             }
 
@@ -67,6 +69,11 @@ namespace Unitas.Scripting
                 out Dictionary<string, string> serializedFields,
                 out bool debuggingEnabled);
 
+            if (isReload)
+            {
+                return RunReloadCommand(projectRoot, options);
+            }
+
             return DispatchCliCommand(
                 projectRoot,
                 options,
@@ -87,6 +94,27 @@ namespace Unitas.Scripting
                 playTicks,
                 serializedFields,
                 debuggingEnabled);
+        }
+
+        private static int RunReloadCommand(string projectRoot, ScriptCompilationOptions options)
+        {
+            ScriptDomainReload.Result reloadResult = ScriptDomainReload.Reload(new ScriptDomainReload.Request
+            {
+                ProjectRoot = projectRoot,
+                Options = options,
+            });
+            IReadOnlyList<ScriptDiagnostic> diagnostics = reloadResult.Diagnostics;
+            for (int i = 0; i < diagnostics.Count; i++)
+            {
+                Console.WriteLine(diagnostics[i].FormatCli());
+            }
+
+            if (!reloadResult.Succeeded && !string.IsNullOrEmpty(reloadResult.Error))
+            {
+                Console.Error.WriteLine(reloadResult.Error);
+            }
+
+            return reloadResult.Succeeded ? 0 : 1;
         }
 
         private static int RunScenarioCommand(string projectRoot, string[] args)

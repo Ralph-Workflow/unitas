@@ -29,6 +29,12 @@ namespace Unitas.Scripting
         WebGL = 6
     }
 
+    public enum ScriptApiCompatibilityLevel
+    {
+        NetStandard21 = 0,
+        Net46 = 1
+    }
+
     public sealed class ScriptCompilationOptions
     {
         public bool IsEditor { get; set; } = true;
@@ -38,6 +44,8 @@ namespace Unitas.Scripting
         public ScriptTargetPlatform TargetPlatform { get; set; } = DetectDefaultHostPlatform();
 
         public string TargetArchitecture { get; set; } = DetectDefaultHostArchitecture();
+
+        public ScriptApiCompatibilityLevel? ApiCompatibilityLevel { get; set; }
 
         public bool IsProjectTrusted { get; set; } = true;
 

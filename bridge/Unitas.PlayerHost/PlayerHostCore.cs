@@ -1,10 +1,12 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Runtime.Loader;
 using Unitas.Bridge;
 using Unitas.Bridge.Scripting;
+using Unitas.Scripting;
 using UnityEngine;
 
 namespace Unitas.PlayerHost
@@ -22,6 +24,13 @@ namespace Unitas.PlayerHost
         AlreadyInitialized = 8,
     }
 
+    public enum ScriptChangesWhilePlayingPreference
+    {
+        RecompileAndContinuePlaying = 0,
+        RecompileAfterFinishedPlaying = 1,
+        StopPlayingAndRecompile = 2,
+    }
+
     public static class PlayerHostCore
     {
         private static readonly object Gate = new object();
@@ -29,6 +38,34 @@ namespace Unitas.PlayerHost
             new StreamWriter(Console.OpenStandardError()) { AutoFlush = true };
         private static BridgeHost? _host;
         private static AssemblyLoadContext? _loadContext;
+        private static string? _bundleRoot;
+        private static string? _managedDir;
+        private static string _lastWatchedStamp = string.Empty;
+        private static string _lastAttemptedSignature = string.Empty;
+        private static ScriptChangesWhilePlayingPreference? _preferenceOverride;
+
+        public static ScriptChangesWhilePlayingPreference ScriptChangesWhilePlaying
+        {
+            get
+            {
+                lock (Gate)
+                {
+                    if (_preferenceOverride.HasValue)
+                    {
+                        return _preferenceOverride.Value;
+                    }
+
+                    return PlayerHostHotReloadWatcher.ReadConfiguredPreference(_bundleRoot);
+                }
+            }
+            set
+            {
+                lock (Gate)
+                {
+                    _preferenceOverride = value;
+                }
+            }
+        }
 
         public static BridgeHost? Host
         {
@@ -78,6 +115,7 @@ namespace Unitas.PlayerHost
                     {
                         Console.SetOut(ManagedLogWriter);
                     }
+
                     string fullBundleRoot = Path.GetFullPath(bundleRoot);
                     string fullScenePath = Path.GetFullPath(startupScenePath);
                     if (!File.Exists(fullScenePath))
@@ -92,22 +130,10 @@ namespace Unitas.PlayerHost
                         return (int)PlayerHostStage.BundleInvalid;
                     }
 
-                    string[] assemblies = Directory.GetFiles(managedDir, "*.dll");
-                    Array.Sort(assemblies, StringComparer.Ordinal);
-                    loadContext = ScriptGlueRegistry.CreateCollectibleContext("UnitasPlayerHost", managedDir);
-                    foreach (string path in assemblies)
+                    loadContext = LoadManagedAssemblies(managedDir);
+                    if (loadContext == null)
                     {
-                        try
-                        {
-                            ScriptGlueRegistry.LoadGlueAssembly(path, loadContext);
-                        }
-                        catch (Exception)
-                        {
-                            ScriptGlueRegistry.ClearSession();
-                            loadContext.Unload();
-                            loadContext = null;
-                            return (int)PlayerHostStage.AssemblyLoadFailed;
-                        }
+                        return (int)PlayerHostStage.AssemblyLoadFailed;
                     }
 
                     Application.PersistentDataPathOverride = Path.GetFullPath(persistRoot);
@@ -116,6 +142,10 @@ namespace Unitas.PlayerHost
                     host.LoadScene(fullScenePath);
                     _host = host;
                     _loadContext = loadContext;
+                    _bundleRoot = fullBundleRoot;
+                    _managedDir = managedDir;
+                    _lastWatchedStamp = PlayerHostHotReloadWatcher.ComputeQuickFileStamp(fullBundleRoot);
+                    _lastAttemptedSignature = PlayerHostHotReloadWatcher.ComputeProjectScriptSignature(fullBundleRoot);
                     host = null;
                     loadContext = null;
                     return (int)PlayerHostStage.Ok;
@@ -148,6 +178,12 @@ namespace Unitas.PlayerHost
 
                 try
                 {
+                    PollAndReloadScriptChanges(host);
+                    if (_host == null)
+                    {
+                        return (int)PlayerHostStage.Ok;
+                    }
+
                     host.Tick(deltaSeconds);
                     UnityEngine.UI.Ui.PumpClicks();
                     return (int)PlayerHostStage.Ok;
@@ -172,6 +208,10 @@ namespace Unitas.PlayerHost
                 _host = null;
                 AssemblyLoadContext? loadContext = _loadContext;
                 _loadContext = null;
+                _bundleRoot = null;
+                _managedDir = null;
+                _lastWatchedStamp = string.Empty;
+                _lastAttemptedSignature = string.Empty;
                 try
                 {
                     host.Shutdown();
@@ -187,6 +227,151 @@ namespace Unitas.PlayerHost
                     loadContext?.Unload();
                 }
             }
+        }
+
+        private static AssemblyLoadContext? LoadManagedAssemblies(string managedDir)
+        {
+            string[] assemblies = Directory.GetFiles(managedDir, "*.dll");
+            Array.Sort(assemblies, StringComparer.Ordinal);
+            AssemblyLoadContext loadContext = ScriptGlueRegistry.CreateCollectibleContext("UnitasPlayerHost", managedDir);
+            string glueFileName = ScriptCompilation.GeneratedGlueAssemblyName + ".dll";
+            string? gluePath = null;
+            foreach (string path in assemblies)
+            {
+                if (string.Equals(Path.GetFileName(path), glueFileName, StringComparison.OrdinalIgnoreCase))
+                {
+                    gluePath = path;
+                    continue;
+                }
+
+                string simpleName = Path.GetFileNameWithoutExtension(path);
+                bool alreadyInDefault = false;
+                foreach (var existing in AssemblyLoadContext.Default.Assemblies)
+                {
+                    if (string.Equals(existing.GetName().Name, simpleName, StringComparison.OrdinalIgnoreCase))
+                    {
+                        alreadyInDefault = true;
+                        break;
+                    }
+                }
+
+                if (alreadyInDefault)
+                {
+                    continue;
+                }
+
+                try
+                {
+                    ScriptGlueRegistry.LoadAssemblyIntoContext(path, loadContext);
+                }
+                catch (Exception)
+                {
+                    ScriptGlueRegistry.ClearSession();
+                    loadContext.Unload();
+                    return null;
+                }
+            }
+
+            if (gluePath != null)
+            {
+                try
+                {
+                    ScriptGlueRegistry.LoadGlueAssembly(gluePath, loadContext);
+                }
+                catch (Exception)
+                {
+                    ScriptGlueRegistry.ClearSession();
+                    loadContext.Unload();
+                    return null;
+                }
+            }
+
+            return loadContext;
+        }
+
+        private static void PollAndReloadScriptChanges(BridgeHost host)
+        {
+            string? bundleRoot = _bundleRoot;
+            string? managedDir = _managedDir;
+            if (string.IsNullOrEmpty(bundleRoot) || string.IsNullOrEmpty(managedDir))
+            {
+                return;
+            }
+
+            string currentStamp = PlayerHostHotReloadWatcher.ComputeQuickFileStamp(bundleRoot);
+            if (string.IsNullOrEmpty(currentStamp)
+                || string.Equals(currentStamp, _lastWatchedStamp, StringComparison.Ordinal))
+            {
+                return;
+            }
+
+            ScriptChangesWhilePlayingPreference preference =
+                _preferenceOverride ?? PlayerHostHotReloadWatcher.ReadConfiguredPreference(bundleRoot);
+            if (preference == ScriptChangesWhilePlayingPreference.RecompileAfterFinishedPlaying)
+            {
+                return;
+            }
+
+            string currentSignature = PlayerHostHotReloadWatcher.ComputeProjectScriptSignature(bundleRoot);
+            if (string.IsNullOrEmpty(currentSignature)
+                || string.Equals(currentSignature, _lastAttemptedSignature, StringComparison.Ordinal))
+            {
+                _lastWatchedStamp = currentStamp;
+                return;
+            }
+
+            _lastAttemptedSignature = currentSignature;
+
+            if (preference == ScriptChangesWhilePlayingPreference.StopPlayingAndRecompile)
+            {
+                ExecuteReloadWithoutLiveSession(bundleRoot, managedDir, currentStamp);
+                Shutdown();
+                return;
+            }
+
+            ExecuteHotReloadOnLiveSession(host, bundleRoot, managedDir, currentStamp);
+        }
+
+        private static void ExecuteReloadWithoutLiveSession(string bundleRoot, string managedDir, string stamp)
+        {
+            ScriptDomainReload.Result result = ScriptDomainReload.Reload(new ScriptDomainReload.Request
+            {
+                ProjectRoot = bundleRoot,
+                Options = PlayerHostHotReloadWatcher.BuildReloadCompilationOptions(managedDir),
+                LiveInstances = Array.Empty<MonoBehaviour>(),
+                ReplacedContext = _loadContext,
+            });
+            PlayerHostHotReloadWatcher.EmitDiagnostics(result.Diagnostics);
+            if (result.Succeeded)
+            {
+                _loadContext = result.Context;
+                _lastWatchedStamp = stamp;
+            }
+            else if (!string.IsNullOrEmpty(result.Error))
+            {
+                Debug.LogError(result.Error);
+            }
+        }
+
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        private static void ExecuteHotReloadOnLiveSession(
+            BridgeHost host,
+            string bundleRoot,
+            string managedDir,
+            string stamp)
+        {
+            ScriptDomainReload.Result reloadResult = PlayerHostHotReloadWatcher.ReloadLiveSession(
+                host,
+                bundleRoot,
+                managedDir,
+                _loadContext);
+            if (!reloadResult.Succeeded)
+            {
+                return;
+            }
+
+            _loadContext = reloadResult.Context;
+            _lastWatchedStamp = stamp;
         }
 
         private static void BindRuntimeLibrary(string bundleRoot)

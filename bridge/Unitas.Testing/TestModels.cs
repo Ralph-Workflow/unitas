@@ -179,9 +179,30 @@ namespace Unitas.Testing
         private static readonly Dictionary<string, RegisteredTestExecutionBinding> Bindings =
             new Dictionary<string, RegisteredTestExecutionBinding>(StringComparer.Ordinal);
 
+        private static readonly List<DiscoveredTestCaseDescriptor> DynamicDescriptors =
+            new List<DiscoveredTestCaseDescriptor>();
+
+        public static IReadOnlyList<DiscoveredTestCaseDescriptor> RegisteredDynamicDescriptors => DynamicDescriptors;
+
         public static void Clear()
         {
             Bindings.Clear();
+            DynamicDescriptors.Clear();
+        }
+
+        public static void RegisterDynamicDescriptor(DiscoveredTestCaseDescriptor descriptor)
+        {
+            ArgumentNullException.ThrowIfNull(descriptor);
+            for (int i = 0; i < DynamicDescriptors.Count; i++)
+            {
+                if (string.Equals(DynamicDescriptors[i].Id, descriptor.Id, StringComparison.Ordinal))
+                {
+                    DynamicDescriptors[i] = descriptor;
+                    return;
+                }
+            }
+
+            DynamicDescriptors.Add(descriptor);
         }
 
         public static void RegisterSync(string id, Action execute, Action? tearDown = null)

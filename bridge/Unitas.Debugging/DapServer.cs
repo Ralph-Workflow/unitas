@@ -64,13 +64,25 @@ namespace Unitas.Debugging
         public void NotifyStopped(DebugFrame frame, string reason)
         {
             ArgumentNullException.ThrowIfNull(frame);
+            string resolvedReason = string.IsNullOrEmpty(reason) ? "breakpoint" : reason;
+            string description = frame.Method;
             JsonObject body = new JsonObject
             {
-                ["reason"] = string.IsNullOrEmpty(reason) ? "breakpoint" : reason,
+                ["reason"] = resolvedReason,
                 ["threadId"] = MainThreadId,
-                ["allThreadsStopped"] = true,
-                ["description"] = frame.Method
+                ["allThreadsStopped"] = true
             };
+            if (frame.Exception != null && string.Equals(resolvedReason, "exception", StringComparison.Ordinal))
+            {
+                string typeName = frame.ExceptionTypeName;
+                string message = frame.Exception.Message ?? string.Empty;
+                string text = string.IsNullOrEmpty(message) ? typeName : typeName + ": " + message;
+                description = frame.IsExceptionUnhandled
+                    ? "Paused on unhandled exception: " + text
+                    : "Paused on exception: " + text;
+                body["text"] = text;
+            }
+            body["description"] = description;
             SendEvent("stopped", body);
         }
 
@@ -126,7 +138,36 @@ namespace Unitas.Debugging
                         ["supportsConfigurationDoneRequest"] = true,
                         ["supportsConditionalBreakpoints"] = true,
                         ["supportsEvaluateForHovers"] = true,
-                        ["supportsTerminateRequest"] = false
+                        ["supportsExceptionInfoRequest"] = true,
+                        ["supportsExceptionFilterOptions"] = true,
+                        ["supportsTerminateRequest"] = false,
+                        ["exceptionBreakpointFilters"] = new JsonArray
+                        {
+                            new JsonObject
+                            {
+                                ["filter"] = "all",
+                                ["label"] = "All Exceptions",
+                                ["description"] = "Break when any managed exception is thrown",
+                                ["default"] = false,
+                                ["supportsCondition"] = true
+                            },
+                            new JsonObject
+                            {
+                                ["filter"] = "uncaught",
+                                ["label"] = "Uncaught Exceptions",
+                                ["description"] = "Break on unhandled managed exceptions",
+                                ["default"] = false,
+                                ["supportsCondition"] = true
+                            },
+                            new JsonObject
+                            {
+                                ["filter"] = "user-unhandled",
+                                ["label"] = "User-Unhandled Exceptions",
+                                ["description"] = "Break on user-unhandled managed exceptions",
+                                ["default"] = false,
+                                ["supportsCondition"] = true
+                            }
+                        }
                     });
                     break;
                 case "launch":
@@ -142,6 +183,12 @@ namespace Unitas.Debugging
                     break;
                 case "setBreakpoints":
                     HandleSetBreakpoints(request);
+                    break;
+                case "setExceptionBreakpoints":
+                    HandleSetExceptionBreakpoints(request);
+                    break;
+                case "exceptionInfo":
+                    HandleExceptionInfo(request);
                     break;
                 case "configurationDone":
                     DebugAgent.MarkConfigured();
@@ -245,6 +292,66 @@ namespace Unitas.Debugging
             SendResponse(request, true, new JsonObject { ["breakpoints"] = verified });
         }
 
+        private void HandleSetExceptionBreakpoints(JsonObject request)
+        {
+            JsonObject? arguments = request["arguments"] as JsonObject;
+            System.Collections.Generic.List<string> filters = new System.Collections.Generic.List<string>();
+            JsonArray breakpoints = new JsonArray();
+            if (arguments?["filters"] is JsonArray filterNodes)
+            {
+                foreach (JsonNode? node in filterNodes)
+                {
+                    string filterId = ReadString(node);
+                    if (!string.IsNullOrEmpty(filterId))
+                    {
+                        filters.Add(filterId);
+                        breakpoints.Add(new JsonObject { ["verified"] = true });
+                    }
+                }
+            }
+            if (arguments?["filterOptions"] is JsonArray optionNodes)
+            {
+                foreach (JsonNode? node in optionNodes)
+                {
+                    string filterId = ReadString(node?["filterId"]);
+                    if (!string.IsNullOrEmpty(filterId))
+                    {
+                        filters.Add(filterId);
+                        breakpoints.Add(new JsonObject { ["verified"] = true });
+                    }
+                }
+            }
+            DebugAgent.SetExceptionBreakpoints(filters);
+            SendResponse(request, true, new JsonObject { ["breakpoints"] = breakpoints });
+        }
+
+        private void HandleExceptionInfo(JsonObject request)
+        {
+            DebugFrame? frame = DebugAgent.CurrentFrame;
+            Exception? exception = frame?.Exception;
+            if (frame == null || exception == null)
+            {
+                SendError(request, "No active exception at the current stopped frame.");
+                return;
+            }
+            string typeName = frame.ExceptionTypeName;
+            string message = exception.Message ?? string.Empty;
+            string breakMode = frame.IsExceptionUnhandled ? "unhandled" : "always";
+            SendResponse(request, true, new JsonObject
+            {
+                ["exceptionId"] = typeName,
+                ["description"] = message,
+                ["breakMode"] = breakMode,
+                ["details"] = new JsonObject
+                {
+                    ["message"] = message,
+                    ["typeName"] = typeName,
+                    ["fullTypeName"] = typeName,
+                    ["stackTrace"] = exception.StackTrace ?? frame.Method
+                }
+            });
+        }
+
         private void HandleEvaluate(JsonObject request)
         {
             DebugFrame? frame = DebugAgent.CurrentFrame;
@@ -255,6 +362,19 @@ namespace Unitas.Debugging
             }
             JsonObject? arguments = request["arguments"] as JsonObject;
             string expression = ReadString(arguments?["expression"]);
+            string trimmed = expression.Trim();
+            if (frame.Exception != null && (string.Equals(trimmed, "$exception", StringComparison.Ordinal) || string.Equals(trimmed, "exception", StringComparison.Ordinal)))
+            {
+                string typeName = frame.ExceptionTypeName;
+                string message = frame.Exception.Message ?? string.Empty;
+                string rendered = string.IsNullOrEmpty(message) ? typeName : typeName + ": " + message;
+                SendResponse(request, true, new JsonObject
+                {
+                    ["result"] = rendered,
+                    ["variablesReference"] = 0
+                });
+                return;
+            }
             if (!ConditionEvaluator.TryEvaluateValue(expression, frame.LocalNames, frame.Locals, out object? value, out string error))
             {
                 SendError(request, error);
@@ -316,6 +436,17 @@ namespace Unitas.Debugging
             JsonArray variables = new JsonArray();
             if (frame != null && reference == LocalsReference)
             {
+                if (frame.Exception != null)
+                {
+                    string typeName = frame.ExceptionTypeName;
+                    string message = frame.Exception.Message ?? string.Empty;
+                    variables.Add(new JsonObject
+                    {
+                        ["name"] = "$exception",
+                        ["value"] = string.IsNullOrEmpty(message) ? typeName : typeName + ": " + message,
+                        ["variablesReference"] = 0
+                    });
+                }
                 for (int index = 0; index < frame.Locals.Length; index++)
                 {
                     string name = index < frame.LocalNames.Count
