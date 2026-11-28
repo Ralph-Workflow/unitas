@@ -1,5 +1,5 @@
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 pub use unitas_asset::audio_import::{
     cook_audio_candidates, cook_project_audio, default_audio_cache_dir, is_audio_source_path,
@@ -27,9 +27,9 @@ pub use unitas_asset::texture::{
 pub use unitas_asset::video_import::{
     cook_project_videos, default_video_cache_dir, is_video_source_path, load_or_cook_video,
     load_or_cook_video_with_cache, CookedVideo, CookedVideoEntry, CookedVideoManifest,
-    VIDEO_IMPORTER_VERSION, COOKED_VIDEO_DIR_NAME, COOKED_VIDEO_EXTENSION,
-    COOKED_VIDEO_FORMAT_VERSION, COOKED_VIDEO_MAGIC, COOKED_VIDEO_MANIFEST_FILENAME,
-    COOKED_VIDEO_MANIFEST_FORMAT, COOKED_VIDEO_MANIFEST_FORMAT_VERSION,
+    COOKED_VIDEO_DIR_NAME, COOKED_VIDEO_EXTENSION, COOKED_VIDEO_FORMAT_VERSION, COOKED_VIDEO_MAGIC,
+    COOKED_VIDEO_MANIFEST_FILENAME, COOKED_VIDEO_MANIFEST_FORMAT,
+    COOKED_VIDEO_MANIFEST_FORMAT_VERSION, VIDEO_IMPORTER_VERSION,
 };
 
 use crate::bundle::BundleError;
@@ -49,11 +49,19 @@ pub fn stage_project_assets_without_raw_textures(
     copy_non_texture_directory(&source, &destination)
 }
 
+fn build_import_cache_dir(project_root: &Path, kind: &str) -> PathBuf {
+    let key = crate::sha256::content_hash_hex(project_root.to_string_lossy().as_bytes());
+    let base = crate::licensing::workspace_root()
+        .map(|root| root.join("target").join("unitas-cooked-import-cache"))
+        .unwrap_or_else(|| std::env::temp_dir().join("unitas-cooked-import-cache"));
+    base.join(key).join(kind)
+}
+
 pub fn stage_project_cooked_textures(
     project_root: &Path,
     output_dir: &Path,
 ) -> Result<(CookedTextureManifest, ImportSessionReport), BundleError> {
-    let cache_dir = default_texture_cache_dir(project_root);
+    let cache_dir = build_import_cache_dir(project_root, "texture");
     stage_project_cooked_textures_with_cache(project_root, &cache_dir, output_dir)
 }
 
@@ -71,7 +79,7 @@ pub fn stage_project_cooked_meshes(
     project_root: &Path,
     output_dir: &Path,
 ) -> Result<(CookedMeshManifest, ImportSessionReport), BundleError> {
-    let cache_dir = default_mesh_cache_dir(project_root);
+    let cache_dir = build_import_cache_dir(project_root, "mesh");
     stage_project_cooked_meshes_with_cache(project_root, &cache_dir, output_dir)
 }
 
@@ -129,7 +137,7 @@ pub fn stage_project_cooked_audio(
     project_root: &Path,
     output_dir: &Path,
 ) -> Result<(CookedAudioManifest, ImportSessionReport), BundleError> {
-    let cache_dir = default_audio_cache_dir(project_root);
+    let cache_dir = build_import_cache_dir(project_root, "audio");
     stage_project_cooked_audio_with_cache(project_root, &cache_dir, output_dir)
 }
 
@@ -146,7 +154,7 @@ pub fn stage_project_cooked_videos(
     project_root: &Path,
     output_dir: &Path,
 ) -> Result<(CookedVideoManifest, ImportSessionReport), BundleError> {
-    let cache_dir = default_video_cache_dir(project_root);
+    let cache_dir = build_import_cache_dir(project_root, "video");
     stage_project_cooked_videos_with_cache(project_root, &cache_dir, output_dir)
 }
 

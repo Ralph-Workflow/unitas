@@ -72,8 +72,7 @@ fn walker_x(runtime: &Runtime, agent: EntityId) -> Result<f64, Box<dyn Error>> {
 }
 
 #[test]
-fn nav_001_tick_writes_agent_movement_back_to_the_scene_transform(
-) -> Result<(), Box<dyn Error>> {
+fn nav_001_tick_writes_agent_movement_back_to_the_scene_transform() -> Result<(), Box<dyn Error>> {
     let mut runtime = load_temp_scene("nav_writeback", WALKER_SCENE)?;
     let agent = EntityId::new(entity_handle(&runtime, "Walker")?);
 
@@ -83,7 +82,9 @@ fn nav_001_tick_writes_agent_movement_back_to_the_scene_transform(
     runtime
         .navigation_mut()
         .add_agent(agent, "Walker", [START_X, 0.0, 0.5])?;
-    runtime.navigation_mut().set_destination(agent, DESTINATION)?;
+    runtime
+        .navigation_mut()
+        .set_destination(agent, DESTINATION)?;
 
     runtime.tick(TICK_DELTA)?;
     for frame in 1..=SIM_FRAMES {

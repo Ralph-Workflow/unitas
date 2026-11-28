@@ -403,7 +403,13 @@ fn staged_bundle_cooks_videos_and_runtime_loads_cooked_clip_without_source_file(
     Ok(())
 }
 
-fn synthetic_ivf_bytes(width: u16, height: u16, fps_num: u32, fps_den: u32, frames: u32) -> Vec<u8> {
+fn synthetic_ivf_bytes(
+    width: u16,
+    height: u16,
+    fps_num: u32,
+    fps_den: u32,
+    frames: u32,
+) -> Vec<u8> {
     let mut out = Vec::with_capacity(32);
     out.extend_from_slice(b"DKIF");
     out.extend_from_slice(&0u16.to_le_bytes());

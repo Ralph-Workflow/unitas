@@ -2,10 +2,9 @@ use std::error::Error;
 
 use unitas_animation::avatar_mask::AvatarMask;
 use unitas_animation::{
-    AnimationClip, Animator, CurveBinding, CurveBindingTarget, FloatCurve,
-    AnimatorController, AnimatorControllerLayer, AnimatorState, ConditionOp, Keyframe,
-    LayerBlendingMode, ParameterDef, StateMotion, StateTransition, TransitionCondition,
-    TransitionTarget, WrapMode,
+    AnimationClip, Animator, AnimatorController, AnimatorControllerLayer, AnimatorState,
+    ConditionOp, CurveBinding, CurveBindingTarget, FloatCurve, Keyframe, LayerBlendingMode,
+    ParameterDef, StateMotion, StateTransition, TransitionCondition, TransitionTarget, WrapMode,
 };
 
 fn pose_clip(name: &str, duration: f32, path: &str, value: f32) -> AnimationClip {
@@ -34,6 +33,13 @@ fn sample_x(result: &unitas_animation::AnimatorStepResult, path: &str) -> Option
             unitas_animation::AnimatedValue::Float(v) => Some(*v),
             _ => None,
         })
+}
+
+fn require_x(
+    result: &unitas_animation::AnimatorStepResult,
+    path: &str,
+) -> Result<f32, Box<dyn Error>> {
+    sample_x(result, path).ok_or_else(|| format!("missing binding for {path}").into())
 }
 
 #[test]
@@ -78,12 +84,14 @@ fn upper_layer_overrides_base_with_weighted_masked_blend() -> Result<(), Box<dyn
     assert_eq!(sample_x(&step, "Root/Arm"), Some(0.0));
     assert_eq!(sample_x(&step, "Root/Leg"), None);
 
-    animator.set_float("wave", 1.0).map_err(|d| format!("{d:?}"))?;
+    animator
+        .set_float("wave", 1.0)
+        .map_err(|d| format!("{d:?}"))?;
     let step = animator.step(0.1);
     assert_eq!(sample_x(&step, "Root"), Some(0.0));
     // Root/Arm is unique to the upper layer: at weight 0.5 it lerps from the
     // default value, so 10.0 lands halfway at 5.0.
-    let arm = sample_x(&step, "Root/Arm").ok_or("missing Root/Arm binding")?;
+    let arm = require_x(&step, "Root/Arm")?;
     assert!((arm - 5.0).abs() < 1e-4);
     Ok(())
 }
@@ -115,7 +123,7 @@ fn zero_weight_layer_advances_but_does_not_blend() -> Result<(), Box<dyn Error>>
 
     let mut animator = Animator::new(controller);
     let step = animator.step(0.1);
-    let root = sample_x(&step, "Root").ok_or("missing Root binding")?;
+    let root = require_x(&step, "Root")?;
     assert!((root - 2.0).abs() < 1e-4);
     Ok(())
 }
@@ -171,9 +179,9 @@ fn layer_controller_survives_binary_wire_roundtrip() -> Result<(), Box<dyn Error
     // Layer 0 contributes Root/Arm at weight 0.25 (8.0 * 0.25 = 2.0, lerped
     // from the default); layer 1 (additive, approximated as override) has
     // weight 1.0 and injects Root/Leg = 4.0.
-    let arm = sample_x(&step, "Root/Arm").ok_or("missing Root/Arm binding")?;
+    let arm = require_x(&step, "Root/Arm")?;
     assert!((arm - 2.0).abs() < 1e-3);
-    let leg = sample_x(&step, "Root/Leg").ok_or("missing Root/Leg binding")?;
+    let leg = require_x(&step, "Root/Leg")?;
     assert!((leg - 4.0).abs() < 1e-3);
     Ok(())
 }

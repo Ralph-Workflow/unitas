@@ -438,7 +438,9 @@ fn read_extensions(
     Ok(())
 }
 
-fn read_layers_extension(cursor: &mut Cursor<'_>) -> Result<Vec<AnimatorControllerLayer>, AnimationError> {
+fn read_layers_extension(
+    cursor: &mut Cursor<'_>,
+) -> Result<Vec<AnimatorControllerLayer>, AnimationError> {
     if cursor.remaining() < 4 || cursor.peek_u32()? != EXTENSION_LAYERS_MAGIC {
         return Ok(Vec::new());
     }

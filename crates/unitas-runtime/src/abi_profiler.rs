@@ -1,7 +1,8 @@
 use std::cell::RefCell;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::Instant;
+
+use crate::time::Instant;
 
 const CAPTURE_MAGIC: u32 = 0x5052_4643;
 const CAPTURE_VERSION: u32 = 1;

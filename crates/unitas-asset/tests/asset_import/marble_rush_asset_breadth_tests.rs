@@ -439,7 +439,10 @@ fn the_sample_project_settings_expose_tags_layers_and_the_build_scene_list() -> 
     assert_eq!(settings.fixed_timestep(), 0.02);
     assert_eq!(settings.time_scale, 1.0);
     assert_eq!(settings.gravity, [0.0, -9.81, 0.0]);
-    assert_eq!(settings.identity.product_name.as_deref(), Some("Marble Rush"));
+    assert_eq!(
+        settings.identity.product_name.as_deref(),
+        Some("Marble Rush")
+    );
     assert_eq!(settings.quality.levels.len(), 3);
 
     let tag_manager = settings

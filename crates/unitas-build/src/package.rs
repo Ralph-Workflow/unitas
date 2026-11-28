@@ -224,7 +224,7 @@ pub fn package_windows_app(
     package_player_directory(
         manifest,
         staged_dir,
-        output_dir,
+        &output_dir.join(bundle_name(&manifest.product_name)),
         player_binary,
         licensing,
         license_text,
@@ -243,7 +243,7 @@ pub fn package_linux_app(
     package_player_directory(
         manifest,
         staged_dir,
-        output_dir,
+        &output_dir.join(bundle_name(&manifest.product_name)),
         player_binary,
         licensing,
         license_text,
@@ -254,7 +254,7 @@ pub fn package_linux_app(
 pub fn package_web_app(
     manifest: &BundleManifest,
     staged_dir: &Path,
-    output_dir: &Path,
+    package_dir: &Path,
     player_binary: &Path,
     licensing: &LicensingRecord,
     license_text: Option<&Path>,
@@ -268,7 +268,7 @@ pub fn package_web_app(
     let packaged = package_player_directory(
         manifest,
         staged_dir,
-        output_dir,
+        package_dir,
         &wasm_source,
         licensing,
         license_text,
@@ -396,100 +396,196 @@ fn web_index_html(manifest: &BundleManifest, wasm_filename: &str) -> String {
     )
 }
 
+const WEB_LOADER_JS_TEMPLATE: &str = r#"(function () {
+  const DEFAULT_WASM_URL = "__WASM_URL__";
+  const MAX_DELTA_SECONDS = 0.1;
+  const state = { booted: false, frameCount: 0, error: null };
+
+  function publishState() {
+    if (typeof window !== "undefined") {
+      window.__unitas = {
+        booted: state.booted,
+        frameCount: state.frameCount,
+        error: state.error
+      };
+    }
+  }
+
+  function reportError(target, message) {
+    if (target) {
+      target.hidden = false;
+      target.textContent = String(message);
+    }
+  }
+
+  function fail(errorElement, message) {
+    state.error = String(message);
+    reportError(errorElement, message);
+    if (typeof console !== "undefined" && typeof console.error === "function") {
+      console.error(message);
+    }
+    publishState();
+  }
+
+  function startFrameLoop(instance, errorElement) {
+    const wasmExports = instance.exports;
+    let previous = null;
+    let running = true;
+    const frame = function (timestamp) {
+      if (!running) {
+        return;
+      }
+      let delta = 0;
+      if (previous !== null) {
+        delta = (timestamp - previous) / 1000;
+      }
+      previous = timestamp;
+      if (!(delta >= 0)) {
+        delta = 0;
+      }
+      if (delta > MAX_DELTA_SECONDS) {
+        delta = MAX_DELTA_SECONDS;
+      }
+      const status = wasmExports.unitas_web_tick(delta);
+      if (status < 0) {
+        running = false;
+        fail(errorElement, "unitas_web_tick failed with status " + status);
+        return;
+      }
+      state.frameCount = wasmExports.unitas_web_frame_count();
+      publishState();
+      window.requestAnimationFrame(frame);
+    };
+    if (typeof window.requestAnimationFrame !== "function") {
+      fail(errorElement, "requestAnimationFrame is not available in this browser");
+      return function () {};
+    }
+    window.requestAnimationFrame(frame);
+    return function () {
+      running = false;
+    };
+  }
+
+  function createUnityInstance(canvas, config, onProgress) {
+    const resolvedConfig = config || {};
+    const codeUrl = resolvedConfig.codeUrl || DEFAULT_WASM_URL;
+    const errorElement = typeof document !== "undefined" ? document.getElementById("unitas-error") : null;
+    const statusElement = typeof document !== "undefined" ? document.getElementById("unitas-status") : null;
+    if (typeof WebAssembly === "undefined") {
+      const message = "WebAssembly is not supported in this browser";
+      fail(errorElement, message);
+      return Promise.reject(new Error(message));
+    }
+    if (typeof onProgress === "function") {
+      onProgress(0.0);
+    }
+    const unavailableImport = function () {
+      throw new Error("this WebAssembly import belongs to the wgpu backend, which the web player does not wire yet");
+    };
+    const imports = {
+      env: {},
+      __wbindgen_placeholder__: new Proxy({}, { get: function () { return unavailableImport; } }),
+      __wbindgen_externref_xform__: new Proxy({}, { get: function () { return unavailableImport; } }),
+    };
+    return fetch(codeUrl)
+      .then(function (response) {
+        if (!response.ok) {
+          throw new Error("Failed to download WebAssembly module " + codeUrl + " (HTTP " + response.status + ")");
+        }
+        if (typeof onProgress === "function") {
+          onProgress(0.5);
+        }
+        if (typeof WebAssembly.instantiateStreaming === "function") {
+          return WebAssembly.instantiateStreaming(response.clone(), imports).catch(function () {
+            return response.arrayBuffer().then(function (bytes) {
+              return WebAssembly.instantiate(bytes, imports);
+            });
+          });
+        }
+        return response.arrayBuffer().then(function (bytes) {
+          return WebAssembly.instantiate(bytes, imports);
+        });
+      })
+      .then(function (instantiated) {
+        if (typeof onProgress === "function") {
+          onProgress(1.0);
+        }
+        const instance = instantiated.instance;
+        const wasmExports = instance.exports;
+        const required = ["unitas_web_boot", "unitas_web_tick", "unitas_web_frame_count"];
+        for (const name of required) {
+          if (typeof wasmExports[name] !== "function") {
+            throw new Error("the WebAssembly module does not export " + name);
+          }
+        }
+        const bootStatus = wasmExports.unitas_web_boot();
+        if (bootStatus !== 0) {
+          throw new Error("unitas_web_boot failed with status " + bootStatus);
+        }
+        state.booted = true;
+        publishState();
+        if (statusElement) {
+          statusElement.textContent = "Running";
+        }
+        const stop = startFrameLoop(instance, errorElement);
+        return {
+          canvas: canvas,
+          module: instantiated.module,
+          instance: instance,
+          SetFullscreen: function (fullscreen) {
+            if (fullscreen && canvas && typeof canvas.requestFullscreen === "function") {
+              canvas.requestFullscreen();
+            } else if (!fullscreen && typeof document !== "undefined" && typeof document.exitFullscreen === "function") {
+              document.exitFullscreen();
+            }
+          },
+          SendMessage: function () {},
+          Quit: function () {
+            stop();
+            return Promise.resolve();
+          }
+        };
+      })
+      .catch(function (error) {
+        const message = error && error.message ? error.message : String(error);
+        fail(errorElement, message);
+        if (typeof resolvedConfig.showBanner === "function") {
+          resolvedConfig.showBanner(message, "error");
+        }
+        throw error;
+      });
+  }
+
+  publishState();
+  if (typeof window !== "undefined") {
+    window.createUnityInstance = createUnityInstance;
+    window.addEventListener("DOMContentLoaded", function () {
+      const canvas = document.getElementById("unitas-canvas");
+      const wasmAttr = document.body ? document.body.getAttribute("data-wasm") : null;
+      if (canvas) {
+        createUnityInstance(canvas, { codeUrl: wasmAttr || DEFAULT_WASM_URL }).catch(function () {});
+      }
+    });
+  }
+})();
+"#;
+
 fn web_loader_js(wasm_filename: &str) -> String {
-    format!(
-        "(function () {{\n\
-         \x20 const DEFAULT_WASM_URL = \"{wasm_filename}\";\n\
-         \x20 function reportError(target, message) {{\n\
-         \x20   if (target) {{\n\
-         \x20     target.hidden = false;\n\
-         \x20     target.textContent = String(message);\n\
-         \x20   }}\n\
-         \x20 }}\n\
-         \x20 function createUnityInstance(canvas, config, onProgress) {{\n\
-         \x20   const resolvedConfig = config || {{}};\n\
-         \x20   const codeUrl = resolvedConfig.codeUrl || DEFAULT_WASM_URL;\n\
-         \x20   const errorElement = typeof document !== \"undefined\" ? document.getElementById(\"unitas-error\") : null;\n\
-         \x20   const statusElement = typeof document !== \"undefined\" ? document.getElementById(\"unitas-status\") : null;\n\
-         \x20   if (typeof WebAssembly === \"undefined\") {{\n\
-         \x20     const message = \"WebAssembly is not supported in this browser\";\n\
-         \x20     reportError(errorElement, message);\n\
-         \x20     return Promise.reject(new Error(message));\n\
-         \x20   }}\n\
-         \x20   if (typeof onProgress === \"function\") {{\n\
-         \x20     onProgress(0.0);\n\
-         \x20   }}\n\
-         \x20   const imports = {{ env: {{}} }};\n\
-         \x20   return fetch(codeUrl)\n\
-         \x20     .then(function (response) {{\n\
-         \x20       if (!response.ok) {{\n\
-         \x20         throw new Error(\"Failed to download WebAssembly module \" + codeUrl + \" (HTTP \" + response.status + \")\");\n\
-         \x20       }}\n\
-         \x20       if (typeof onProgress === \"function\") {{\n\
-         \x20         onProgress(0.5);\n\
-         \x20       }}\n\
-         \x20       if (typeof WebAssembly.instantiateStreaming === \"function\") {{\n\
-         \x20         return WebAssembly.instantiateStreaming(response.clone(), imports).catch(function () {{\n\
-         \x20           return response.arrayBuffer().then(function (bytes) {{\n\
-         \x20             return WebAssembly.instantiate(bytes, imports);\n\
-         \x20           }});\n\
-         \x20         }});\n\
-         \x20       }}\n\
-         \x20       return response.arrayBuffer().then(function (bytes) {{\n\
-         \x20         return WebAssembly.instantiate(bytes, imports);\n\
-         \x20       }});\n\
-         \x20     }})\n\
-         \x20     .then(function ( instantiated ) {{\n\
-         \x20       if (typeof onProgress === \"function\") {{\n\
-         \x20         onProgress(1.0);\n\
-         \x20       }}\n\
-         \x20       if (statusElement) {{\n\
-         \x20         statusElement.textContent = \"Ready\";\n\
-         \x20       }}\n\
-         \x20       return {{\n\
-         \x20         canvas: canvas,\n\
-         \x20         module: instantiated.module,\n\
-         \x20         instance: instantiated.instance,\n\
-         \x20         SetFullscreen: function (fullscreen) {{\n\
-         \x20           if (fullscreen && canvas && typeof canvas.requestFullscreen === \"function\") {{\n\
-         \x20             canvas.requestFullscreen();\n\
-         \x20           }} else if (!fullscreen && typeof document !== \"undefined\" && typeof document.exitFullscreen === \"function\") {{\n\
-         \x20             document.exitFullscreen();\n\
-         \x20           }}\n\
-         \x20         }},\n\
-         \x20         SendMessage: function () {{}},\n\
-         \x20         Quit: function () {{\n\
-         \x20           return Promise.resolve();\n\
-         \x20         }}\n\
-         \x20       }};\n\
-         \x20     }})\n\
-         \x20     .catch(function (error) {{\n\
-         \x20       const message = error && error.message ? error.message : String(error);\n\
-         \x20       reportError(errorElement, message);\n\
-         \x20       if (typeof resolvedConfig.showBanner === \"function\") {{\n\
-         \x20         resolvedConfig.showBanner(message, \"error\");\n\
-         \x20       }}\n\
-         \x20       throw error;\n\
-         \x20     }});\n\
-         \x20 }}\n\
-         \x20 if (typeof window !== \"undefined\") {{\n\
-         \x20   window.createUnityInstance = createUnityInstance;\n\
-         \x20   window.addEventListener(\"DOMContentLoaded\", function () {{\n\
-         \x20     const canvas = document.getElementById(\"unitas-canvas\");\n\
-         \x20     const wasmAttr = document.body ? document.body.getAttribute(\"data-wasm\") : null;\n\
-         \x20     if (canvas) {{\n\
-         \x20       createUnityInstance(canvas, {{ codeUrl: wasmAttr || DEFAULT_WASM_URL }}).catch(function () {{}});\n\
-         \x20     }}\n\
-         \x20   }});\n\
-         \x20 }}\n\
-         }})();\n"
-    )
+    WEB_LOADER_JS_TEMPLATE.replace("__WASM_URL__", &js_string_escape(wasm_filename))
+}
+
+fn js_string_escape(value: &str) -> String {
+    value
+        .replace('\\', "\\\\")
+        .replace('"', "\\\"")
+        .replace('\n', "\\n")
+        .replace('\r', "\\r")
 }
 
 fn package_player_directory(
     manifest: &BundleManifest,
     staged_dir: &Path,
-    output_dir: &Path,
+    app_dir: &Path,
     player_binary: &Path,
     licensing: &LicensingRecord,
     license_text: Option<&Path>,
@@ -501,7 +597,6 @@ fn package_player_directory(
         });
     }
     let base_name = bundle_name(&manifest.product_name);
-    let app_dir = output_dir.join(&base_name);
     let data_dir = app_dir.join(format!("{base_name}{DATA_DIR_SUFFIX}"));
     create_dir_all(&data_dir)?;
 
@@ -523,7 +618,7 @@ fn package_player_directory(
 
     let manifest_path = data_dir.join(BUNDLE_MANIFEST_FILENAME);
     Ok(PackagedPlayer {
-        app_dir,
+        app_dir: app_dir.to_path_buf(),
         executable_path,
         data_dir,
         manifest_path,
@@ -719,6 +814,73 @@ fn finalize_packaged_target_report(
     report
         .with_target_availability(availability)
         .with_desktop_packaging(desktop_packaging)
+}
+
+pub fn package_web_target(
+    config: &BuildConfiguration,
+    output_dir: &Path,
+) -> Result<PackagedTarget, PackageError> {
+    let target = BuildTarget::WEB_WASM32;
+    let label = target.os_name().to_string();
+    let target_dir = output_dir.to_path_buf();
+    create_dir_all(&target_dir)?;
+    let staged_dir = target_dir.join(STAGED_DIR_NAME);
+
+    let mut target_config = config.clone();
+    target_config.target = target;
+
+    let started = Instant::now();
+    let BuildOutcomeBundle { bundle, mut report } =
+        execute_build_for_host(&target_config, &staged_dir, 0, Some(target));
+    let Some(staged) = bundle else {
+        let reasons = report
+            .errors
+            .iter()
+            .map(|diagnostic| format!("{}: {}", diagnostic.code, diagnostic.message))
+            .collect::<Vec<_>>()
+            .join("; ");
+        return Err(PackageError::BuildFailed {
+            path: target_dir,
+            message: reasons,
+        });
+    };
+    report.elapsed_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
+
+    let (app_path, launch_artifact) =
+        package_staged_target_app(config, target, &staged, &staged_dir, &target_dir)?;
+
+    let host = BuildTarget::current_host().unwrap_or_else(BuildTarget::host);
+    let report = finalize_packaged_target_report(
+        report,
+        target,
+        host,
+        output_dir,
+        &target_dir,
+        &launch_artifact,
+        &config.product_name,
+    );
+
+    let build_report_path = target_dir.join(BUILD_REPORT_FILENAME);
+    report
+        .write_to_file(&build_report_path)
+        .map_err(|error| PackageError::Io {
+            path: build_report_path.clone(),
+            message: error.to_string(),
+        })?;
+
+    fs::remove_dir_all(&staged_dir).map_err(|error| PackageError::Io {
+        path: staged_dir,
+        message: error.to_string(),
+    })?;
+
+    Ok(PackagedTarget {
+        target,
+        label,
+        app_path,
+        launch_artifact,
+        build_report_path,
+        launched: false,
+    })
 }
 
 pub fn package_desktop_targets(
@@ -1475,10 +1637,7 @@ mod tests {
             None,
         )?;
 
-        assert_eq!(
-            packaged.app_dir,
-            output_dir.join("web-layout").join("PackagedGame")
-        );
+        assert_eq!(packaged.app_dir, output_dir.join("web-layout"));
         assert_eq!(
             packaged.executable_path,
             packaged.app_dir.join("PackagedGame.wasm")
@@ -1508,6 +1667,9 @@ mod tests {
         assert!(loader_js.contains("WebAssembly.instantiate"));
         assert!(loader_js.contains("createUnityInstance"));
         assert!(loader_js.contains("PackagedGame.wasm"));
+        assert!(loader_js.contains("unitas_web_boot"));
+        assert!(loader_js.contains("unitas_web_tick"));
+        assert!(loader_js.contains("window.__unitas"));
 
         assert_eq!(
             packaged.data_dir,
@@ -1526,5 +1688,29 @@ mod tests {
 
         let _ = fs::remove_dir_all(&output_dir);
         Ok(())
+    }
+
+    #[test]
+    fn web_loader_js_boots_the_runtime_and_drives_the_frame_loop() {
+        let loader = web_loader_js("PackagedGame.wasm");
+        assert!(loader.contains("unitas_web_boot()"));
+        assert!(loader.contains("unitas_web_tick(delta)"));
+        assert!(loader.contains("unitas_web_frame_count()"));
+        assert!(loader.contains("window.__unitas"));
+        assert!(loader.contains("requestAnimationFrame"));
+        assert!(loader.contains("MAX_DELTA_SECONDS = 0.1"));
+        assert!(loader.contains("\"Running\""));
+        assert!(loader.contains("console.error"));
+        assert!(loader.contains("unitas-error"));
+        assert!(loader.contains("unitas-status"));
+        assert!(loader.contains("PackagedGame.wasm"));
+        assert!(!loader.contains("__WASM_URL__"));
+    }
+
+    #[test]
+    fn web_loader_js_escapes_the_wasm_file_name() {
+        let loader = web_loader_js("Odd\"Name.wasm");
+        assert!(loader.contains("Odd\\\"Name.wasm"));
+        assert!(!loader.contains("__WASM_URL__"));
     }
 }

@@ -75,6 +75,10 @@ pub enum ToolPresence {
     DotnetRuntimePack {
         rid: String,
     },
+    Browser {
+        env_var: String,
+        default_path: String,
+    },
 }
 
 impl ToolPresence {
@@ -95,6 +99,15 @@ impl ToolPresence {
                         .any(|alt| rust_standard_library_installed(alt))
             }
             ToolPresence::DotnetRuntimePack { rid } => dotnet_runtime_pack_installed(rid),
+            ToolPresence::Browser {
+                env_var,
+                default_path,
+            } => std::env::var_os(env_var)
+                .map_or_else(
+                    || std::path::PathBuf::from(default_path),
+                    std::path::PathBuf::from,
+                )
+                .exists(),
         }
     }
 }
@@ -222,7 +235,32 @@ pub struct WebRuntimeCompileGap {
     pub failure_summary: &'static str,
 }
 
-pub const WEB_RUNTIME_WASM32_GAPS: [WebRuntimeCompileGap; 0] = [];
+pub const WEB_RUNTIME_WASM32_GAPS: [WebRuntimeCompileGap; 4] = [
+    WebRuntimeCompileGap {
+        crate_name: "unitas-runtime",
+        version: "0.1.0",
+        dependency_chain: "unitas-runtime has no unitas-dotnet dependency, and libloading sits under [target.'cfg(not(target_arch = \"wasm32\"))'.dependencies] in crates/unitas-runtime/Cargo.toml",
+        failure_summary: "managed C# script execution is unavailable on web: the wasm32 runtime ships no managed scripting host and cannot dynamically load one",
+    },
+    WebRuntimeCompileGap {
+        crate_name: "unitas-runtime",
+        version: "0.1.0",
+        dependency_chain: "unitas-runtime video decode path; ffmpeg_libraries_available and decode_cooked_video are cfg-gated in crates/unitas-runtime/src/video.rs",
+        failure_summary: "video decode reports PlatformLimited on wasm32 because FFmpeg dynamic decoding is not available there",
+    },
+    WebRuntimeCompileGap {
+        crate_name: "unitas-runtime",
+        version: "0.1.0",
+        dependency_chain: "unitas-runtime time source; the cfg(target_arch = \"wasm32\") zero-elapsed Instant stub in crates/unitas-runtime/src/time.rs",
+        failure_summary: "profiler and timing report zero elapsed on wasm32 until a browser time source replaces the stub Instant",
+    },
+    WebRuntimeCompileGap {
+        crate_name: "unitas-runtime",
+        version: "0.1.0",
+        dependency_chain: "unitas-runtime presenter, window, and input modules plus the unitas-render and unitas-audio device backends",
+        failure_summary: "rendering, input, and audio output are not wired on web yet: the packaged wasm module boots and ticks headlessly but cannot present frames, read browser input, or play sound",
+    },
+];
 
 pub const fn web_runtime_wasm32_gaps() -> &'static [WebRuntimeCompileGap] {
     &WEB_RUNTIME_WASM32_GAPS
@@ -269,6 +307,25 @@ fn rust_requirement(
                 .collect(),
         },
         version: Some(ToolCommand::new("rustc", &["--version"])),
+    }
+}
+
+fn browser_requirement(
+    tool: &str,
+    required_range: &str,
+    purpose: &str,
+    env_var: &str,
+    default_path: &str,
+) -> ToolchainRequirement {
+    ToolchainRequirement {
+        tool: tool.to_string(),
+        required_range: required_range.to_string(),
+        purpose: purpose.to_string(),
+        presence: ToolPresence::Browser {
+            env_var: env_var.to_string(),
+            default_path: default_path.to_string(),
+        },
+        version: None,
     }
 }
 
@@ -470,20 +527,21 @@ fn web_toolchain(target: BuildTarget) -> TargetToolchain {
     TargetToolchain {
         target,
         requirements: vec![
-            command_requirement(
-                "emcc",
-                "Emscripten 3.1.56 or newer",
-                "Emscripten C/C++ compiler and WebAssembly bundler that links the Web player bundle",
-                &["--version"],
-            ),
             rust_requirement(
                 target.rust_triple(),
                 target.alternate_rust_triples(),
                 "Rust compiler and standard library that builds the WebAssembly player for wasm32-unknown-unknown",
             ),
+            browser_requirement(
+                "chrome",
+                "Google Chrome 120 or newer",
+                "Chrome browser that launches the packaged WebAssembly player for the web play lane",
+                "CHROME_PATH",
+                "/Applications/Google Chrome.app",
+            ),
         ],
         resolving_action: String::from(
-            "install and activate the Emscripten SDK with 'emsdk install latest && emsdk activate latest' so 'emcc' is on PATH, and add the Rust WebAssembly target with 'rustup target add wasm32-unknown-unknown'",
+            "add the Rust WebAssembly target with 'rustup target add wasm32-unknown-unknown' and install Google Chrome for the web play lane, or point CHROME_PATH at the Chrome executable when it does not live at /Applications/Google Chrome.app",
         ),
     }
 }

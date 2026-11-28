@@ -216,7 +216,7 @@ impl BuildTarget {
             (TargetOs::MacOs, _) => "clang",
             (TargetOs::Linux, TargetArch::X86_64) => "x86_64-linux-gnu-gcc",
             (TargetOs::Linux, TargetArch::Arm64) => "aarch64-linux-gnu-gcc",
-            (TargetOs::Web, _) | (_, TargetArch::Wasm32) => "emcc",
+            (TargetOs::Web, _) | (_, TargetArch::Wasm32) => "rust-lld",
         }
     }
 

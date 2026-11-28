@@ -292,43 +292,64 @@ fn assert_desktop_packaging_outcome(outcome: &unitas_build::DesktopPackageOutcom
 }
 
 #[test]
-fn web_target_probes_emcc_and_wasm32_and_reports_externally_unavailable_when_emcc_is_missing(
+fn web_target_probes_wasm32_rust_target_and_chrome_and_reports_unavailable_when_a_web_tool_is_missing(
 ) -> TestResult {
     assert_web_target_properties();
     assert_web_toolchain_requirements();
 
     let availability = probe_target_availability(BuildTarget::WEB_WASM32);
-    let emcc_probe = availability
-        .tools
-        .iter()
-        .find(|probe| probe.tool == "emcc")
-        .ok_or("web target availability must probe emcc")?;
     let rustc_probe = availability
         .tools
         .iter()
         .find(|probe| probe.tool == "rustc")
-        .ok_or("web target availability must probe rustc wasm32-unknown-unknown")?;
-    assert!(!rustc_probe.required_range.is_empty());
+        .ok_or("web target availability must probe the rustc wasm32-unknown-unknown standard library, the toolchain the web lane actually invokes via 'cargo build -p unitas-runtime --target wasm32-unknown-unknown'")?;
+    assert!(rustc_probe
+        .required_range
+        .contains("wasm32-unknown-unknown"));
+    let chrome_probe = availability
+        .tools
+        .iter()
+        .find(|probe| probe.tool == "chrome")
+        .ok_or("web target availability must probe the Chrome browser (CHROME_PATH, then /Applications/Google Chrome.app) that runs the packaged wasm player in the web play lane")?;
 
-    if !emcc_probe.present {
+    if !(rustc_probe.present && chrome_probe.present) {
         assert!(!availability.is_available());
         assert_eq!(availability.state(), "externally_unavailable");
-        let unavailable = availability
-            .unavailable
-            .as_ref()
-            .ok_or("missing emcc must mark web target externally unavailable")?;
+        let unavailable = availability.unavailable.as_ref().ok_or(
+            "a missing web toolchain component must mark the web target externally unavailable",
+        )?;
         assert_eq!(unavailable.cause, ToolchainCause::MissingToolchain);
-        assert_eq!(unavailable.tool, "emcc");
-        assert!(unavailable.resolving_action.contains("emsdk"));
+        let expected_tool = if !rustc_probe.present {
+            "rustc"
+        } else {
+            "chrome"
+        };
+        assert_eq!(unavailable.tool, expected_tool);
+        assert!(
+            unavailable.resolving_action.contains("CHROME_PATH"),
+            "the resolving action must explain how to point unitas at Chrome"
+        );
+        assert!(
+            !unavailable.resolving_action.contains("emcc")
+                && !unavailable.resolving_action.contains("emsdk"),
+            "the resolving action must not name Emscripten: the web build runs 'cargo build -p unitas-runtime --target wasm32-unknown-unknown' and never invokes emcc, so the old emsdk instruction encoded a toolchain the build does not use"
+        );
     }
 
-    assert_web_attempt_outcome(emcc_probe.present)?;
+    assert_web_attempt_outcome(rustc_probe.present, chrome_probe.present)?;
 
     let gaps: &[WebRuntimeCompileGap] = web_runtime_wasm32_gaps();
-    assert!(
-        gaps.is_empty(),
-        "the wasm32 runtime compiles cleanly (cargo check -p unitas-runtime --target wasm32-unknown-unknown), so no wasm32 compile gap may remain recorded: {gaps:?}"
+    assert_eq!(
+        gaps.len(),
+        4,
+        "the wasm32 runtime compiles cleanly, but the four runtime capability gaps that remain on web (managed scripting, video decode, profiler timing, rendering/input/audio) must stay recorded: {gaps:?}"
     );
+    for gap in gaps {
+        assert!(!gap.crate_name.is_empty());
+        assert!(!gap.version.is_empty());
+        assert!(!gap.dependency_chain.is_empty());
+        assert!(!gap.failure_summary.is_empty());
+    }
     Ok(())
 }
 
@@ -340,7 +361,7 @@ fn assert_web_target_properties() {
         BuildTarget::WEB_WASM32.rust_triple(),
         "wasm32-unknown-unknown"
     );
-    assert_eq!(BuildTarget::WEB_WASM32.primary_linker(), "emcc");
+    assert_eq!(BuildTarget::WEB_WASM32.primary_linker(), "rust-lld");
     assert_eq!(
         BuildTarget::from_env("web", "wasm32"),
         Some(BuildTarget::WEB_WASM32)
@@ -358,18 +379,29 @@ fn assert_web_toolchain_requirements() {
         .iter()
         .map(|req| req.tool.as_str())
         .collect();
-    assert!(web_tools.contains(&"emcc"));
     assert!(web_tools.contains(&"rustc"));
+    assert!(
+        web_tools.contains(&"chrome"),
+        "the web toolchain must probe the Chrome browser that runs the packaged wasm player"
+    );
+    assert!(
+        !web_tools.contains(&"emcc"),
+        "the web toolchain must not require emcc: the web lane builds with 'cargo build -p unitas-runtime --target wasm32-unknown-unknown' and never invokes emcc, so the old emcc requirement encoded a toolchain the build does not use"
+    );
     assert!(web_toolchain
         .resolving_action
         .contains("rustup target add wasm32-unknown-unknown"));
-    assert!(web_toolchain.resolving_action.contains("emsdk"));
+    assert!(web_toolchain.resolving_action.contains("CHROME_PATH"));
+    assert!(
+        !web_toolchain.resolving_action.contains("emsdk"),
+        "the resolving action must not send users to the Emscripten SDK: the web build never invokes emcc"
+    );
 
     let targets = packaging_targets();
     assert!(targets.contains(&BuildTarget::WEB_WASM32));
 }
 
-fn assert_web_attempt_outcome(emcc_present: bool) -> TestResult {
+fn assert_web_attempt_outcome(rustc_present: bool, chrome_present: bool) -> TestResult {
     let workspace = std::env::temp_dir().join(format!(
         "unitas_build_web_target_outcome_{}",
         std::process::id()
@@ -379,14 +411,20 @@ fn assert_web_attempt_outcome(emcc_present: bool) -> TestResult {
     let mut web_config = host_config();
     web_config.target = BuildTarget::WEB_WASM32;
     let outcome = attempt_desktop_target(&web_config, BuildTarget::WEB_WASM32, &workspace)?;
-    if !emcc_present {
+    if !(rustc_present && chrome_present) {
         assert_eq!(outcome.state, "externally_unavailable");
         let unavailable = outcome
             .unavailable
             .as_ref()
-            .ok_or("web package outcome must record missing toolchain")?;
+            .ok_or("web package outcome must record the missing web toolchain component")?;
         assert_eq!(unavailable.cause, ToolchainCause::MissingToolchain);
-        assert_eq!(unavailable.tool, "emcc");
+        let expected_tool = if !rustc_present { "rustc" } else { "chrome" };
+        assert_eq!(unavailable.tool, expected_tool);
+        assert!(
+            !unavailable.resolving_action.contains("emcc")
+                && !unavailable.resolving_action.contains("emsdk"),
+            "the outcome must not direct users to Emscripten: the web build never invokes emcc"
+        );
         assert!(outcome.build_report_path.is_file());
         let report_text = std::fs::read_to_string(&outcome.build_report_path)?;
         assert!(report_text.contains("\"target\": \"web-wasm32\""));

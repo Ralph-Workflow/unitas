@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};
@@ -9,6 +9,7 @@ use crossbeam_deque::{Injector, Steal, Stealer, Worker};
 type Job = Box<dyn FnOnce() + Send + 'static>;
 
 const COMPLETED_WINDOW_WORDS: usize = 1_024;
+const INLINE_EXECUTION: bool = cfg!(target_arch = "wasm32");
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct JobHandle(u64);
@@ -134,19 +135,13 @@ struct Inner {
     shutdown: AtomicBool,
     live: AtomicUsize,
     active: AtomicUsize,
+    inline: bool,
+    inline_queue: Mutex<VecDeque<u64>>,
 }
 
-pub struct JobSystem {
-    inner: Arc<Inner>,
-    workers: Mutex<Vec<JoinHandle<()>>>,
-}
-
-impl JobSystem {
-    pub fn new(workers: usize) -> Self {
-        let count = workers.max(1);
-        let locals: Vec<Worker<u64>> = (0..count).map(|_| Worker::new_fifo()).collect();
-        let stealers: Vec<Stealer<u64>> = locals.iter().map(Worker::stealer).collect();
-        let inner = Arc::new(Inner {
+impl Inner {
+    fn new(inline: bool, stealers: Vec<Stealer<u64>>) -> Arc<Self> {
+        Arc::new(Self {
             injector: Injector::new(),
             stealers,
             records: Mutex::new(HashMap::new()),
@@ -158,7 +153,38 @@ impl JobSystem {
             shutdown: AtomicBool::new(false),
             live: AtomicUsize::new(0),
             active: AtomicUsize::new(0),
-        });
+            inline,
+            inline_queue: Mutex::new(VecDeque::new()),
+        })
+    }
+}
+
+pub struct JobSystem {
+    inner: Arc<Inner>,
+    workers: Mutex<Vec<JoinHandle<()>>>,
+}
+
+impl JobSystem {
+    pub fn new(workers: usize) -> Self {
+        if INLINE_EXECUTION {
+            Self::new_inline()
+        } else {
+            Self::new_threaded(workers)
+        }
+    }
+
+    pub fn new_inline() -> Self {
+        Self {
+            inner: Inner::new(true, Vec::new()),
+            workers: Mutex::new(Vec::new()),
+        }
+    }
+
+    fn new_threaded(workers: usize) -> Self {
+        let count = workers.max(1);
+        let locals: Vec<Worker<u64>> = (0..count).map(|_| Worker::new_fifo()).collect();
+        let stealers: Vec<Stealer<u64>> = locals.iter().map(Worker::stealer).collect();
+        let inner = Inner::new(false, stealers);
         let mut handles = Vec::with_capacity(count);
         for (index, local) in locals.into_iter().enumerate() {
             let shared = Arc::clone(&inner);
@@ -232,6 +258,9 @@ impl JobSystem {
     }
 
     pub fn complete(&self, handle: JobHandle) {
+        if self.inner.inline {
+            drain_inline(&self.inner);
+        }
         let Some(record) = lookup(&self.inner, handle.as_u64()) else {
             return;
         };
@@ -259,6 +288,9 @@ impl JobSystem {
     pub fn shutdown(&mut self) {
         self.inner.shutdown.store(true, Ordering::Release);
         notify(&self.inner);
+        if self.inner.inline {
+            drain_inline(&self.inner);
+        }
         let mut workers = lock(&self.workers);
         for handle in workers.drain(..) {
             let _joined = handle.join().is_ok();
@@ -388,8 +420,22 @@ fn mark_ready(inner: &Inner, id: u64, record: &Arc<Record>) {
 
 fn enqueue(inner: &Inner, id: u64) {
     inner.queued.fetch_add(1, Ordering::AcqRel);
-    inner.injector.push(id);
+    if inner.inline {
+        lock(&inner.inline_queue).push_back(id);
+    } else {
+        inner.injector.push(id);
+    }
     notify(inner);
+}
+
+fn drain_inline(inner: &Inner) {
+    loop {
+        let next = lock(&inner.inline_queue).pop_front();
+        let Some(id) = next else {
+            break;
+        };
+        run_job(inner, id);
+    }
 }
 
 fn notify(inner: &Inner) {
@@ -645,5 +691,106 @@ mod tests {
             !lock(&pool.inner.records).contains_key(&dependency.as_u64()),
             "the completed handle returned before its dependency record was released"
         );
+    }
+
+    #[test]
+    fn inline_jobs_run_on_the_calling_thread() {
+        let pool = JobSystem::new_inline();
+        let expected = thread::current().id();
+        let observed = Arc::new(Mutex::new(None));
+        let recorder = Arc::clone(&observed);
+        let handle = pool.schedule(
+            move || {
+                *lock(&recorder) = Some(thread::current().id());
+            },
+            &[],
+        );
+        pool.complete(handle);
+        assert_eq!(*lock(&observed), Some(expected));
+        assert!(pool.is_complete(handle));
+    }
+
+    #[test]
+    fn inline_dependent_job_observes_its_dependency_completed() {
+        let pool = JobSystem::new_inline();
+        let dependency_ran = Arc::new(AtomicBool::new(false));
+        let violations = Arc::new(AtomicUsize::new(0));
+        let flag = Arc::clone(&dependency_ran);
+        let dependency = pool.schedule(
+            move || {
+                flag.store(true, Ordering::SeqCst);
+            },
+            &[],
+        );
+        let observed = Arc::clone(&dependency_ran);
+        let counter = Arc::clone(&violations);
+        let dependent = pool.schedule(
+            move || {
+                if !observed.load(Ordering::SeqCst) {
+                    counter.fetch_add(1, Ordering::SeqCst);
+                }
+            },
+            &[dependency],
+        );
+        pool.complete(dependent);
+        assert_eq!(violations.load(Ordering::SeqCst), 0);
+        assert!(pool.is_complete(dependency));
+        assert!(pool.is_complete(dependent));
+    }
+
+    #[test]
+    fn inline_parallel_for_covers_the_full_range_on_the_calling_thread() {
+        let pool = JobSystem::new_inline();
+        let seen = Arc::new(Mutex::new(Vec::<i64>::new()));
+        let recorder = Arc::clone(&seen);
+        let handle = pool.schedule_parallel_for(
+            10,
+            3,
+            move |start, count| {
+                let mut entries = lock(&recorder);
+                for index in start..start + count {
+                    entries.push(index);
+                }
+            },
+            &[],
+        );
+        pool.complete(handle);
+        let mut entries = lock(&seen).clone();
+        entries.sort_unstable();
+        assert_eq!(entries, (0..10).collect::<Vec<i64>>());
+    }
+
+    #[test]
+    fn inline_parallel_for_runs_every_batch_on_the_calling_thread() {
+        let pool = JobSystem::new_inline();
+        let expected = thread::current().id();
+        let threads = Arc::new(Mutex::new(Vec::new()));
+        let recorder = Arc::clone(&threads);
+        let handle = pool.schedule_parallel_for(
+            10,
+            3,
+            move |_start, _count| {
+                lock(&recorder).push(thread::current().id());
+            },
+            &[],
+        );
+        pool.complete(handle);
+        let entries = lock(&threads).clone();
+        assert_eq!(entries.len(), 4);
+        assert!(entries.iter().all(|id| *id == expected));
+    }
+
+    #[test]
+    fn inline_schedule_rejects_an_unknown_dependency() {
+        let pool = JobSystem::new_inline();
+        let handle = pool.schedule(|| {}, &[JobHandle::from_u64(4_242)]);
+        assert!(!handle.is_valid());
+        assert_eq!(handle.as_u64(), 0);
+    }
+
+    #[test]
+    fn inline_system_reports_no_worker_threads() {
+        let pool = JobSystem::new_inline();
+        assert_eq!(pool.active_workers(), 0);
     }
 }

@@ -6,7 +6,7 @@ use std::process::ExitCode;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use unitas_build::control;
-use unitas_build::package::package_desktop_targets;
+use unitas_build::package::{package_desktop_targets, package_web_target};
 #[cfg(feature = "device")]
 use unitas_build::player::CANVAS_TEXT_SEPARATOR;
 use unitas_build::player::{install_project_trust, STARTUP_FAILURE_EXIT_CODE};
@@ -20,7 +20,7 @@ use unitas_build::{
     sample::stage_marble_rush_bundle_for_host_with_script_debugging, WindowedLaunchOptions,
 };
 
-const USAGE: &str = "usage: unitas-player [<bundle-dir> | --sample] [--windowed] [--frames <N>] [--dt <seconds>] [--verify-device <ref.bmp>] [--capture-reference <out.bmp>] [--control-stdio] [--package-sample <dir>] [--debug]";
+const USAGE: &str = "usage: unitas-player [<bundle-dir> | --sample] [--windowed] [--frames <N>] [--dt <seconds>] [--verify-device <ref.bmp>] [--capture-reference <out.bmp>] [--control-stdio] [--package-sample <dir>] [--package-web <dir>] [--debug]";
 
 const HELP: &str = "--debug   compile the staged Managed/ payload with script debugging enabled";
 
@@ -32,6 +32,7 @@ struct CliOptions {
     sample: bool,
     windowed: bool,
     package_sample: Option<PathBuf>,
+    package_web: Option<PathBuf>,
     frames: Option<usize>,
     delta_seconds: f64,
     width: u32,
@@ -51,6 +52,7 @@ impl Default for CliOptions {
             sample: false,
             windowed: false,
             package_sample: None,
+            package_web: None,
             frames: None,
             delta_seconds: 1.0 / 60.0,
             width: 1280,
@@ -81,6 +83,7 @@ where
         && options.verify_device.is_none()
         && !options.control_stdio
         && options.package_sample.is_none()
+        && options.package_web.is_none()
         && !options.help
     {
         return Err(String::from(USAGE));
@@ -110,6 +113,10 @@ where
         "--package-sample" => {
             let raw = next_value(iter, "missing directory for '--package-sample'")?;
             options.package_sample = Some(PathBuf::from(raw));
+        }
+        "--package-web" => {
+            let raw = next_value(iter, "missing directory for '--package-web'")?;
+            options.package_web = Some(PathBuf::from(raw));
         }
         "--capture-reference" => {
             let raw = next_value(iter, "missing path for '--capture-reference'")?;
@@ -226,6 +233,25 @@ fn run_package_sample(output_dir: &Path, script_debugging: bool) -> ExitCode {
     ExitCode::SUCCESS
 }
 
+fn run_package_web(output_dir: &Path, script_debugging: bool) -> ExitCode {
+    let config = match marble_rush_build_configuration(None) {
+        Ok(config) => config.with_script_debugging(script_debugging),
+        Err(error) => {
+            eprintln!("unitas-player packaging failed: {error}");
+            return ExitCode::from(STARTUP_FAILURE_EXIT_CODE);
+        }
+    };
+    let packaged = match package_web_target(&config, output_dir) {
+        Ok(packaged) => packaged,
+        Err(error) => {
+            eprintln!("unitas-player packaging failed: {error}");
+            return ExitCode::from(STARTUP_FAILURE_EXIT_CODE);
+        }
+    };
+    println!("packaged_app[web]={}", packaged.app_path.display());
+    ExitCode::SUCCESS
+}
+
 fn main() -> ExitCode {
     let args = env::args().skip(1);
     let cli = match parse_cli_args(args) {
@@ -243,6 +269,10 @@ fn main() -> ExitCode {
 
     if let Some(ref output_dir) = cli.package_sample {
         return run_package_sample(output_dir, cli.script_debugging);
+    }
+
+    if let Some(ref output_dir) = cli.package_web {
+        return run_package_web(output_dir, cli.script_debugging);
     }
 
     if cli.control_stdio {
@@ -582,5 +612,24 @@ mod tests {
         assert!(USAGE.contains("--debug"));
         assert!(HELP.contains("--debug"));
         Ok(())
+    }
+
+    #[test]
+    fn package_web_flag_is_parsed_for_the_web_package() -> Result<(), Box<dyn std::error::Error>> {
+        let cli = parse_cli_args([String::from("--package-web"), String::from("target/web")])
+            .map_err(std::io::Error::other)?;
+        assert_eq!(cli.package_web, Some(PathBuf::from("target/web")));
+        assert!(cli.package_sample.is_none());
+        assert!(USAGE.contains("--package-web"));
+        Ok(())
+    }
+
+    #[test]
+    fn package_web_flag_requires_a_directory() {
+        let error = parse_cli_args([String::from("--package-web")]);
+        assert_eq!(
+            error,
+            Err(String::from("missing directory for '--package-web'"))
+        );
     }
 }

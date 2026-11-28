@@ -2475,7 +2475,7 @@ pub const OWNED_FEATURE_CAPABILITIES: &[OwnedFeatureCapability] = &[
                 location: "crates/unitas-build/src/package.rs",
                 evidence: &[
                     "crates/unitas-build/src/package.rs::packaged_web_app_stages_real_wasm_module_index_html_and_loader_js",
-                    "crates/unitas-build/tests/build/target_availability.rs::web_target_probes_emcc_and_wasm32_and_reports_externally_unavailable_when_emcc_is_missing",
+                    "crates/unitas-build/tests/build/target_availability.rs::web_target_probes_wasm32_rust_target_and_chrome_and_reports_unavailable_when_a_web_tool_is_missing",
                 ],
                 missing: None,
             },

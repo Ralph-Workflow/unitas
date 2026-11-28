@@ -1880,7 +1880,12 @@ impl Animator {
     }
 
     fn sample_state(&self, state_index: usize, prev_time: f32, current_time: f32) -> ClipSample {
-        self.sample_state_in(&self.controller.states, state_index, prev_time, current_time)
+        self.sample_state_in(
+            &self.controller.states,
+            state_index,
+            prev_time,
+            current_time,
+        )
     }
 
     fn sample_state_in(
@@ -2245,8 +2250,7 @@ impl Animator {
                     fired_events: Vec::new(),
                     normalized_time: src.normalized_time
                         + (dst.normalized_time - src.normalized_time) * alpha,
-                    wrapped_time: src.wrapped_time
-                        + (dst.wrapped_time - src.wrapped_time) * alpha,
+                    wrapped_time: src.wrapped_time + (dst.wrapped_time - src.wrapped_time) * alpha,
                 }
             }
         } else {
@@ -2265,7 +2269,9 @@ impl Animator {
         player.frames += 1;
         self.layer_players[layer_index] = player;
         let bindings = self.apply_write_defaults_in(
-            self.controller.layers[layer_index].states.get(player.current_state),
+            self.controller.layers[layer_index]
+                .states
+                .get(player.current_state),
             &self.layer_defaults[layer_index],
             sample.bindings,
         );
@@ -2371,9 +2377,7 @@ pub fn blend_layer_bindings(
         }
         let value = match &item.value {
             AnimatedValue::Float(_) => AnimatedValue::Float(0.0).blend(&item.value, w),
-            AnimatedValue::Vector3(_) => {
-                AnimatedValue::Vector3([0.0; 3]).blend(&item.value, w)
-            }
+            AnimatedValue::Vector3(_) => AnimatedValue::Vector3([0.0; 3]).blend(&item.value, w),
             AnimatedValue::Quaternion(_) => {
                 AnimatedValue::Quaternion([0.0, 0.0, 0.0, 1.0]).blend(&item.value, w)
             }

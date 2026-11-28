@@ -1,7 +1,7 @@
 export DOTNET_ROOT := $(dir $(realpath $(shell command -v dotnet)))
 export PATH := $(DOTNET_ROOT):$(PATH)
 
-.PHONY: verify verify-gates verify-scan-gates verify-static-gates verify-test-gates verify-dotnet-gates verify-device verify-unsafe verify-samples verify-benchmark verify-perf test test-steps lint typecheck policy-validate bypass-audit banned-constructs comment-audit secret-scan deps runtime-build dotnet-build dotnet-format dotnet-test dotnet-test-run zone-gate size-gate editor-shell-run
+.PHONY: verify verify-gates verify-scan-gates verify-static-gates verify-test-gates verify-dotnet-gates verify-device verify-web verify-unsafe verify-samples verify-benchmark verify-perf test test-steps lint typecheck policy-validate bypass-audit banned-constructs comment-audit secret-scan deps runtime-build dotnet-build dotnet-format dotnet-test dotnet-test-run zone-gate size-gate editor-shell-run
 
 VERIFY_BUDGET_SECONDS := 124
 SUITE_BUDGET_SECONDS := 61
@@ -197,6 +197,14 @@ verify-device:
 	@echo "evidence: lane exit status and captured GPU/audio/input artifacts"
 	@echo "review: when the player gains a new platform"
 	@python3 tools/verify_device.py
+
+verify-web:
+	@echo "owner: platforms"
+	@echo "trigger: changes to the web bootstrap, web packaging, or the wasm runtime surface"
+	@echo "lane: make verify-web (non-default)"
+	@echo "evidence: the lane report at target/web-lane/report.json, the captured browser console log and screenshot, and the lane exit status"
+	@echo "review: when the web player gains managed scripting or rendering"
+	@python3 tools/verify_web.py
 
 verify-perf:
 	@echo "owner: content and simulation"

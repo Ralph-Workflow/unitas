@@ -6,7 +6,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 #[cfg(not(target_arch = "wasm32"))]
 use libloading::Library;
@@ -14,6 +14,7 @@ use unitas_asset::video_import::{CookedVideo, load_or_cook_video};
 use unitas_core::EntityId;
 
 use crate::runtime::Runtime;
+use crate::time::Instant;
 
 #[cfg(not(target_arch = "wasm32"))]
 const AVMEDIA_TYPE_VIDEO: c_int = 0;

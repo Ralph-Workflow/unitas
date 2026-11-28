@@ -25,10 +25,12 @@ mod scene_query;
 pub mod scriptable_object;
 pub mod scripting;
 pub mod terrain;
+mod time;
 pub mod timeline;
 pub mod trails;
 pub mod ui;
 pub mod video;
+pub mod web;
 pub mod window;
 
 pub use abi::*;

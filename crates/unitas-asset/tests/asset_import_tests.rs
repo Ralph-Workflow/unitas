@@ -265,6 +265,10 @@ mod import_pool_tests;
 mod inflate_tests;
 #[path = "asset_import/json_tests.rs"]
 mod json_tests;
+#[path = "asset_import/marble_rush_asset_breadth_tests.rs"]
+mod marble_rush_asset_breadth_tests;
+#[path = "asset_import/marble_rush_project_tests.rs"]
+mod marble_rush_project_tests;
 #[path = "asset_import/model_tests.rs"]
 mod model_tests;
 #[path = "asset_import/packages_tests.rs"]
@@ -281,10 +285,6 @@ mod prefab_variant_tests;
 mod primitive_tests;
 #[path = "asset_import/project_tests.rs"]
 mod project_tests;
-#[path = "asset_import/marble_rush_asset_breadth_tests.rs"]
-mod marble_rush_asset_breadth_tests;
-#[path = "asset_import/marble_rush_project_tests.rs"]
-mod marble_rush_project_tests;
 #[path = "asset_import/scene_particle_trail_tests.rs"]
 mod scene_particle_trail_tests;
 #[path = "asset_import/scene_save_tests.rs"]

@@ -2,9 +2,8 @@ use std::error::Error;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use unitas_animation::{
-    Animator, AnimatorController, LayerBlendingMode, StateMotion,
-};
+use unitas_animation::controller::TransitionSource;
+use unitas_animation::{Animator, AnimatorController, LayerBlendingMode, StateMotion};
 use unitas_asset::anim_import::{import_animator_controller, AnimImportError};
 use unitas_asset::meta::GuidIndex;
 
@@ -64,8 +63,16 @@ AnimationClip:
 fn write_fixture_assets(dir: &Path) -> Result<GuidIndex, Box<dyn Error>> {
     let fixtures: [(&str, &str, String); 4] = [
         ("PoseA.anim", CLIP_A_GUID, anim_yaml("PoseA", "Root", 0.0)),
-        ("PoseB.anim", CLIP_B_GUID, anim_yaml("PoseB", "Root/Arm", 10.0)),
-        ("PoseC.anim", CLIP_C_GUID, anim_yaml("PoseC", "Root/Leg", 4.0)),
+        (
+            "PoseB.anim",
+            CLIP_B_GUID,
+            anim_yaml("PoseB", "Root/Arm", 10.0),
+        ),
+        (
+            "PoseC.anim",
+            CLIP_C_GUID,
+            anim_yaml("PoseC", "Root/Leg", 4.0),
+        ),
         (
             "UpperBody.mask",
             MASK_GUID,
@@ -82,12 +89,15 @@ AvatarMask:
   m_Mask: 0
   m_HumanoidBodyMask: []
 "
-                .to_string(),
+            .to_string(),
         ),
     ];
     for (file_name, guid, body) in fixtures {
         fs::write(dir.join(file_name), body)?;
-        fs::write(dir.join(format!("{file_name}.meta")), format!("guid: {guid}\n"))?;
+        fs::write(
+            dir.join(format!("{file_name}.meta")),
+            format!("guid: {guid}\n"),
+        )?;
     }
     Ok(GuidIndex::build(dir)?)
 }
@@ -197,7 +207,9 @@ fn imports_multi_layer_controller_with_mask_weight_and_direct_blend_tree(
     assert_eq!(layer.name, "Upper Body");
     assert!((layer.weight - 0.5).abs() < 1e-6);
     assert_eq!(layer.blending_mode, LayerBlendingMode::Override);
-    let mask = layer.mask.as_ref().ok_or("layer mask imported")?;
+    let Some(mask) = layer.mask.as_ref() else {
+        return Err("layer mask imported".into());
+    };
     assert!(mask.includes_path("Root/Arm"));
     assert!(!mask.includes_path("Root/Leg"));
     assert_eq!(layer.states.len(), 1);
@@ -215,9 +227,11 @@ fn imports_multi_layer_controller_with_mask_weight_and_direct_blend_tree(
     let decoded = AnimatorController::decode_binary(&controller.encode_binary())?;
     assert_eq!(decoded, controller);
     let mut animator = Animator::new(decoded);
-    animator.set_float("wave", 1.0).map_err(|d| format!("{d:?}"))?;
+    animator
+        .set_float("wave", 1.0)
+        .map_err(|d| format!("{d:?}"))?;
     let step = animator.step(0.1);
-    let arm = step
+    let Some(arm) = step
         .bindings
         .iter()
         .find(|binding| binding.target.object_path == "Root/Arm")
@@ -225,7 +239,9 @@ fn imports_multi_layer_controller_with_mask_weight_and_direct_blend_tree(
             unitas_animation::AnimatedValue::Float(v) => Some(*v),
             _ => None,
         })
-        .ok_or("masked arm binding present")?;
+    else {
+        return Err("masked arm binding present".into());
+    };
     // Layer weight 0.5 blends the 10.0 arm pose halfway onto the base.
     assert!((arm - 5.0).abs() < 1e-3, "arm value {arm}");
 
@@ -316,8 +332,7 @@ AnimatorStateTransition:
 ";
 
 #[test]
-fn imports_nested_state_machines_with_machine_node_transitions(
-) -> Result<(), Box<dyn Error>> {
+fn imports_nested_state_machines_with_machine_node_transitions() -> Result<(), Box<dyn Error>> {
     let dir = unique_temp_dir("nested")?;
     let guids = write_fixture_assets(&dir)?;
     let controller_path = dir.join("Nested.controller");
@@ -329,22 +344,26 @@ fn imports_nested_state_machines_with_machine_node_transitions(
     assert_eq!(names, vec!["Idle", "Walk", "Run"]);
     assert_eq!(controller.entry_state, 0);
     // Transition targeting the sub-machine node enters its default state (Run, index 2).
-    let idle_to_move = controller
+    let Some(idle_to_move) = controller
         .transitions
         .iter()
-        .find(|t| t.source() == unitas_animation::controller::TransitionSource::State(0))
-        .ok_or("Idle transition")?;
+        .find(|t| t.source() == TransitionSource::State(0))
+    else {
+        return Err("Idle transition missing".into());
+    };
     assert_eq!(
         idle_to_move.target,
         unitas_animation::TransitionTarget::State(2)
     );
     // The machine-node transition (m_StateMachineTransitions) resolves to the
     // sub-machine's default state as its source.
-    let machine_to_walk = controller
+    let Some(machine_to_walk) = controller
         .transitions
         .iter()
-        .find(|t| t.source() == unitas_animation::controller::TransitionSource::State(2))
-        .ok_or("machine-node transition")?;
+        .find(|t| t.source() == TransitionSource::State(2))
+    else {
+        return Err("machine-node transition missing".into());
+    };
     assert_eq!(
         machine_to_walk.target,
         unitas_animation::TransitionTarget::State(1)
@@ -353,10 +372,14 @@ fn imports_nested_state_machines_with_machine_node_transitions(
 
     // Runtime: done=true moves Idle -> Run; back=true moves Run -> Walk.
     let mut animator = Animator::new(controller);
-    animator.set_bool("done", true).map_err(|d| format!("{d:?}"))?;
+    animator
+        .set_bool("done", true)
+        .map_err(|d| format!("{d:?}"))?;
     let step = animator.step(0.1);
     assert_eq!(step.state_info.state_name, "Run");
-    animator.set_bool("back", true).map_err(|d| format!("{d:?}"))?;
+    animator
+        .set_bool("back", true)
+        .map_err(|d| format!("{d:?}"))?;
     let step = animator.step(0.1);
     assert_eq!(step.state_info.state_name, "Walk");
 
@@ -405,7 +428,10 @@ BlendTree:
     fs::write(&controller_path, yaml)?;
     match import_animator_controller(&controller_path, &guids) {
         Err(AnimImportError::MalformedController { member, reason, .. }) => {
-            assert!(member.contains("m_DirectBlendParameter"), "member: {member}");
+            assert!(
+                member.contains("m_DirectBlendParameter"),
+                "member: {member}"
+            );
             assert!(reason.contains("empty"), "reason: {reason}");
         }
         other => return Err(format!("expected MalformedController, got {other:?}").into()),
