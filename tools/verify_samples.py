@@ -72,6 +72,13 @@ SCENARIOS: tuple[tuple[str, str, tuple[str, ...], bool], ...] = (
     ),
     ("collect_all", "collect_all.json", ("--repeat", "2"), False),
     ("collect_chime", "collect_chime.json", ("--repeat", "2"), False),
+    ("music_loop", "music_loop.json", ("--repeat", "2"), False),
+    (
+        "spatial_audio_physics_lab",
+        "spatial_audio_physics_lab.json",
+        ("--repeat", "2"),
+        False,
+    ),
     (
         "scene_audio_clip_binding",
         "scene_audio_clip_binding.json",
@@ -134,6 +141,12 @@ SCENARIOS: tuple[tuple[str, str, tuple[str, ...], bool], ...] = (
     (
         "one_way_platform",
         "../../2d-platformer/Scenarios/one_way_platform.json",
+        ("--repeat", "2"),
+        False,
+    ),
+    (
+        "rootway_render",
+        "../../2d-platformer/Scenarios/rootway_render.json",
         ("--repeat", "2"),
         False,
     ),

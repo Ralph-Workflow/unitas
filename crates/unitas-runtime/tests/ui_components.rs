@@ -10,8 +10,14 @@ use unitas_runtime::{
     test_write_path_buffer, unitas_runtime_input_mouse_button_event,
     unitas_runtime_input_pointer_move, unitas_runtime_load_scene, unitas_runtime_new,
     unitas_runtime_path_buffer, unitas_runtime_render_buffer, unitas_runtime_render_camera_create,
-    unitas_runtime_render_frame, unitas_runtime_tick, unitas_runtime_ui_pointer_over,
-    unitas_runtime_ui_poll_clicks, unitas_runtime_ui_text_set,
+    unitas_runtime_render_frame, unitas_runtime_tick, unitas_runtime_ui_canvas_group_set,
+    unitas_runtime_ui_canvas_scaler_set, unitas_runtime_ui_pointer_over,
+    unitas_runtime_ui_poll_clicks, unitas_runtime_ui_rect_mask_set,
+    unitas_runtime_ui_screen_dpi_set, unitas_runtime_ui_slider_create,
+    unitas_runtime_ui_slider_get_value, unitas_runtime_ui_slider_set_value,
+    unitas_runtime_ui_slider_take_value_changed, unitas_runtime_ui_text_set,
+    unitas_runtime_ui_toggle_create, unitas_runtime_ui_toggle_get,
+    unitas_runtime_ui_toggle_set_value, unitas_runtime_ui_toggle_take_value_changed,
 };
 
 /// A scene with a canvas, a text element and a button. The canvas root is
@@ -401,6 +407,183 @@ fn the_ui_abi_sets_the_text_and_reports_the_click() -> Result<(), Box<dyn Error>
         unitas_runtime_ui_poll_clicks(handle, 0, 16),
         0,
         "the clicks are consumed by the poll"
+    );
+
+    let _ = std::fs::remove_dir_all(&temp_dir);
+    Ok(())
+}
+
+#[test]
+fn runtime_toggles_flip_through_pointer_clicks_and_report_events() -> Result<(), Box<dyn Error>> {
+    let (temp_dir, scene_path) = write_scene("toggle")?;
+    let mut runtime = Runtime::new()?;
+    runtime.load_scene(&scene_path)?;
+    let button = entity_id(&runtime, "PlayButton")?;
+
+    assert!(
+        runtime.set_ui_toggle(unitas_runtime::canvas::UiToggleComponent {
+            entity: unitas_core::EntityId::new(button),
+            ..unitas_runtime::canvas::UiToggleComponent::default()
+        })
+    );
+    runtime.tick(TICK_DELTA)?;
+    runtime.input_pointer_move(BUTTON_CENTER.0, BUTTON_CENTER.1);
+    runtime.input_mouse_button_event(PRIMARY_MOUSE_BUTTON, true);
+    runtime.tick(TICK_DELTA)?;
+    runtime.input_mouse_button_event(PRIMARY_MOUSE_BUTTON, false);
+    runtime.tick(TICK_DELTA)?;
+    assert!(
+        runtime.ui_toggle(button).is_some_and(|toggle| toggle.is_on),
+        "the pointer click flips the toggle"
+    );
+    assert_eq!(
+        runtime.take_ui_toggle_value_changed().len(),
+        1,
+        "the flip reports one value changed event"
+    );
+    assert!(runtime.set_ui_toggle_value(button, false, true));
+    assert!(
+        runtime
+            .ui_toggle(button)
+            .is_some_and(|toggle| !toggle.is_on)
+    );
+    assert_eq!(runtime.take_ui_toggle_value_changed().len(), 1);
+    assert!(!runtime.set_ui_toggle_value(0, true, false));
+
+    let _ = std::fs::remove_dir_all(&temp_dir);
+    Ok(())
+}
+
+#[test]
+fn runtime_sliders_follow_the_pointer_and_clamp_to_whole_numbers() -> Result<(), Box<dyn Error>> {
+    let (temp_dir, scene_path) = write_scene("slider")?;
+    let mut runtime = Runtime::new()?;
+    runtime.load_scene(&scene_path)?;
+    let button = entity_id(&runtime, "PlayButton")?;
+
+    assert!(
+        runtime.set_ui_slider(unitas_runtime::canvas::UiSliderComponent {
+            entity: unitas_core::EntityId::new(button),
+            value: 10.0,
+            min_value: 0.0,
+            max_value: 10.0,
+            whole_numbers: true,
+            ..unitas_runtime::canvas::UiSliderComponent::default()
+        })
+    );
+    runtime.tick(TICK_DELTA)?;
+    runtime.input_pointer_move(300.0, BUTTON_CENTER.1);
+    runtime.input_mouse_button_event(PRIMARY_MOUSE_BUTTON, true);
+    runtime.tick(TICK_DELTA)?;
+    runtime.input_pointer_move(BUTTON_CENTER.0, BUTTON_CENTER.1);
+    runtime.tick(TICK_DELTA)?;
+    assert_eq!(
+        runtime.ui_slider(button).map(|slider| slider.value),
+        Some(5.0),
+        "dragging to the track middle sets half the range"
+    );
+    runtime.input_pointer_move(500.0, BUTTON_CENTER.1);
+    runtime.input_mouse_button_event(PRIMARY_MOUSE_BUTTON, false);
+    runtime.tick(TICK_DELTA)?;
+    assert_eq!(
+        runtime.ui_slider(button).map(|slider| slider.value),
+        Some(10.0),
+        "releasing at the track end sets the maximum"
+    );
+    assert_eq!(
+        runtime.take_ui_slider_value_changed().len(),
+        3,
+        "press, drag and release each notify once"
+    );
+    assert!(runtime.set_ui_slider_value(button, 4.6, false));
+    assert_eq!(
+        runtime.ui_slider(button).map(|slider| slider.value),
+        Some(5.0),
+        "whole number sliders round assigned values"
+    );
+
+    let _ = std::fs::remove_dir_all(&temp_dir);
+    Ok(())
+}
+
+#[test]
+fn the_ui_abi_drives_toggles_sliders_scalers_groups_and_masks() -> Result<(), Box<dyn Error>> {
+    let (temp_dir, scene_path) = write_scene("controls-abi")?;
+    let scene = scene_path
+        .to_str()
+        .ok_or(String::from("non-utf8 temp path"))?
+        .to_string();
+    let label = entity_id_for(&scene_path, "ScoreLabel")?;
+    let button = entity_id_for(&scene_path, "PlayButton")?;
+    let canvas = entity_id_for(&scene_path, "HudCanvas")?;
+
+    let handle = unitas_runtime_new();
+    if handle == 0 {
+        return Err(String::from("runtime handle creation failed").into());
+    }
+    let address = unitas_runtime_path_buffer(handle, 512);
+    if address == 0 {
+        return Err(String::from("path buffer allocation failed").into());
+    }
+    test_write_path_buffer(handle, scene.as_bytes())?;
+    assert_eq!(
+        unitas_runtime_load_scene(handle, address, scene.len() as u64),
+        0
+    );
+
+    assert_eq!(
+        unitas_runtime_ui_toggle_create(handle, button, 0, 1, 0, 0),
+        0
+    );
+    assert_eq!(unitas_runtime_ui_toggle_set_value(handle, button, 1, 1), 0);
+    assert_eq!(unitas_runtime_ui_toggle_get(handle, button), 1);
+    assert_eq!(unitas_runtime_ui_toggle_take_value_changed(handle), 1);
+    let mut toggle_event = [0u8; 9];
+    test_read_path_buffer(handle, &mut toggle_event)?;
+    assert_eq!(u64::from_le_bytes(toggle_event[..8].try_into()?), button);
+    assert_eq!(toggle_event[8], 1);
+    assert_eq!(
+        unitas_runtime_ui_toggle_create(handle, 0, 0, 1, 0, 0),
+        -2,
+        "a zero object id is rejected"
+    );
+
+    assert_eq!(
+        unitas_runtime_ui_slider_create(handle, label, 0.0, 10.0, 0.0, 1, 0, 1, 0, 0),
+        0
+    );
+    assert_eq!(unitas_runtime_ui_slider_set_value(handle, label, 4.4, 1), 0);
+    assert_eq!(unitas_runtime_ui_slider_get_value(handle, label), 4.0);
+    assert_eq!(unitas_runtime_ui_slider_take_value_changed(handle), 1);
+    let mut slider_event = [0u8; 12];
+    test_read_path_buffer(handle, &mut slider_event)?;
+    assert_eq!(u64::from_le_bytes(slider_event[..8].try_into()?), label);
+    assert_eq!(f32::from_le_bytes(slider_event[8..12].try_into()?), 4.0);
+    assert_eq!(
+        unitas_runtime_ui_slider_create(handle, label, 0.0, 10.0, 0.0, 1, 9, 1, 0, 0),
+        -2,
+        "an unknown direction is rejected"
+    );
+
+    assert_eq!(
+        unitas_runtime_ui_canvas_scaler_set(handle, canvas, 0, 2.0, 800.0, 600.0, 0, 0.5, 2, 96.0),
+        0
+    );
+    assert_eq!(
+        unitas_runtime_ui_canvas_scaler_set(handle, canvas, 9, 2.0, 800.0, 600.0, 0, 0.5, 2, 96.0),
+        -2,
+        "an unknown scale mode is rejected"
+    );
+    assert_eq!(
+        unitas_runtime_ui_canvas_group_set(handle, button, 0.5, 1, 1, 0, 1),
+        0
+    );
+    assert_eq!(unitas_runtime_ui_rect_mask_set(handle, button, 1), 0);
+    assert_eq!(unitas_runtime_ui_screen_dpi_set(handle, 254.0), 0);
+    assert_eq!(
+        unitas_runtime_ui_screen_dpi_set(handle, -1.0),
+        -2,
+        "a negative dpi is rejected"
     );
 
     let _ = std::fs::remove_dir_all(&temp_dir);

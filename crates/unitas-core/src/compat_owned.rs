@@ -2148,11 +2148,22 @@ pub const OWNED_FEATURE_CAPABILITIES: &[OwnedFeatureCapability] = &[
                 missing: None,
             },
             OwnedCapabilityPart {
-                behavior: "URP 14.x and HDRP 14.x pipeline asset import and translation, custom RenderPipelineAsset and ScriptableRenderContext execution, Shader Graph asset import and graph editing, CommandBuffer and ComputeShader dispatch, decals, projectors, and stereo XR rendering are executed",
+                behavior: "URP 14.x pipeline assets, Universal Renderer data, and per-quality render pipeline overrides import; the effective pipeline per quality level is resolved from GraphicsSettings and QualitySettings; and unsupported URP features are reported per camera and quality level without silent fallback",
+                location: "crates/unitas-asset/src/urp_pipeline.rs",
+                evidence: &[
+                    "crates/unitas-asset/tests/urp_pipeline_tests.rs::urp_asset_and_renderer_data_parse_from_urp_14_serialized_yaml",
+                    "crates/unitas-asset/tests/urp_pipeline_tests.rs::quality_level_custom_render_pipeline_overrides_the_graphics_default",
+                    "crates/unitas-runtime/tests/render_tests.rs::urp_project_reports_unsupported_features_per_camera_and_quality_level",
+                    "crates/unitas-runtime/tests/render_tests.rs::urp_forward_project_renders_scene_geometry_through_the_lit_path",
+                ],
+                missing: None,
+            },
+            OwnedCapabilityPart {
+                behavior: "URP camera stacking, Forward+, and Deferred rendering execution, HDRP 14.x pipeline asset import and translation, custom RenderPipelineAsset and ScriptableRenderContext execution, Shader Graph asset import and graph editing, CommandBuffer and ComputeShader dispatch, decals, projectors, and stereo XR rendering are executed",
                 location: "crates/unitas-render/src/render_graph.rs",
                 evidence: &[],
                 missing: Some(
-                    "URP 14.x and HDRP 14.x pipeline asset import and translation, custom RenderPipelineAsset and ScriptableRenderContext execution, Shader Graph asset import and visual or MCP graph editing, CommandBuffer and ComputeShader dispatch, decals, projectors, and stereo XR rendering are not implemented",
+                    "URP camera stacking, Forward+, and Deferred rendering execution, HDRP 14.x pipeline asset import and translation, custom RenderPipelineAsset and ScriptableRenderContext execution, Shader Graph asset import and visual or MCP graph editing, CommandBuffer and ComputeShader dispatch, decals, projectors, and stereo XR rendering are not implemented",
                 ),
             },
         ],

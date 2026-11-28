@@ -27,6 +27,7 @@ CHIME_LEAD_IN_SECONDS = 0.5
 CHIME_TONE_SECONDS = 0.25
 CHIME_TEST_SECONDS = 1.0
 CHIME_TONE_AMPLITUDE = 0.5
+PICKUP_FRAME = 30
 
 
 def write_capture(
@@ -81,30 +82,44 @@ def test_the_collected_chime_frame_is_read_from_the_player_log() -> None:
 def test_a_silent_capture_fails_the_chime_check(tmp_path: Path) -> None:
     capture = tmp_path / "silent.wav"
     write_capture(capture, None)
-    reason, summary = verify_device.chime_capture_reason(capture)
+    reason, summary = verify_device.chime_capture_reason(capture, PICKUP_FRAME)
     assert reason is not None
     assert "no collect chime" in reason
     assert summary == ""
 
 
-def test_a_capture_carrying_the_chime_band_passes_the_chime_check(tmp_path: Path) -> None:
+def test_a_capture_carrying_the_chime_band_at_the_pickup_passes_the_chime_check(
+    tmp_path: Path,
+) -> None:
     capture = tmp_path / "chime.wav"
     write_capture(capture, verify_device.CHIME_FREQUENCY_HZ)
-    reason, summary = verify_device.chime_capture_reason(capture)
+    reason, summary = verify_device.chime_capture_reason(capture, PICKUP_FRAME)
     assert reason is None
-    assert "audio energy in the window" in summary
+    assert "audio energy" in summary
 
 
-def test_a_capture_that_carries_the_band_before_the_injection_fails(tmp_path: Path) -> None:
+def test_a_capture_that_carries_the_band_before_the_pickup_frame_fails(
+    tmp_path: Path,
+) -> None:
     capture = tmp_path / "early.wav"
     write_capture(capture, verify_device.CHIME_FREQUENCY_HZ, lead_in=0.0, tone_seconds=0.75)
-    reason, _summary = verify_device.chime_capture_reason(capture)
+    reason, _summary = verify_device.chime_capture_reason(capture, PICKUP_FRAME)
     assert reason is not None
-    assert "carries audio before the injected" in reason
+    assert "carries audio before the logged pickup" in reason
+
+
+def test_a_capture_whose_chime_arrives_after_the_pickup_window_fails(
+    tmp_path: Path,
+) -> None:
+    capture = tmp_path / "late.wav"
+    write_capture(capture, verify_device.CHIME_FREQUENCY_HZ, lead_in=0.7)
+    reason, _summary = verify_device.chime_capture_reason(capture, PICKUP_FRAME)
+    assert reason is not None
+    assert "no collect chime" in reason
 
 
 def test_a_missing_capture_fails_the_chime_check(tmp_path: Path) -> None:
-    reason, summary = verify_device.chime_capture_reason(tmp_path / "absent.wav")
+    reason, summary = verify_device.chime_capture_reason(tmp_path / "absent.wav", PICKUP_FRAME)
     assert reason is not None
     assert "wrote no audio capture" in reason
     assert summary == ""

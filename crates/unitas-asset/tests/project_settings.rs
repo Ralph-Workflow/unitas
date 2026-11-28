@@ -1019,6 +1019,7 @@ fn expected_quality_settings() -> QualitySettings {
                 anti_aliasing: 0,
                 v_sync_count: 0,
                 lod_bias: 0.7,
+                custom_render_pipeline_guid: None,
             },
             QualityLevel {
                 name: String::from("High"),
@@ -1031,6 +1032,7 @@ fn expected_quality_settings() -> QualitySettings {
                 anti_aliasing: 2,
                 v_sync_count: 1,
                 lod_bias: 1.0,
+                custom_render_pipeline_guid: None,
             },
         ],
         per_platform_default_quality: vec![

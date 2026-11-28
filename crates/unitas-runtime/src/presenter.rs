@@ -14,6 +14,7 @@ macro_rules! ffi_export {
 }
 
 use unitas_asset::project_settings::QualityLevel;
+use unitas_asset::urp_pipeline::{PipelineAssetKind, UrpPipelineAsset};
 #[cfg(feature = "device")]
 use unitas_audio::output::DeviceOutput;
 use unitas_core::{EntityId, Transform, rotate_vector};
@@ -374,6 +375,46 @@ pub fn post_settings_for_runtime(runtime: &Runtime) -> PostSettings {
     runtime
         .quality_level_for_target(DESKTOP_QUALITY_TARGET_GROUP)
         .map_or_else(PostSettings::default, post_settings_for_quality)
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum EffectiveRenderPipeline {
+    BuiltIn,
+    Urp { asset: UrpPipelineAsset },
+    OtherPipelineAsset { guid: String },
+    Unresolved { guid: String },
+}
+
+pub fn effective_render_pipeline(
+    runtime: &Runtime,
+    quality_level: usize,
+) -> EffectiveRenderPipeline {
+    let guid = runtime
+        .quality_settings()
+        .levels
+        .get(quality_level)
+        .and_then(|level| level.custom_render_pipeline_guid.clone())
+        .or_else(|| {
+            runtime
+                .graphics_settings()
+                .and_then(|settings| settings.custom_render_pipeline_guid())
+        });
+    match guid {
+        None => EffectiveRenderPipeline::BuiltIn,
+        Some(guid) => match runtime
+            .render_pipeline_assets()
+            .iter()
+            .find(|asset| asset.guid == guid)
+        {
+            Some(imported) => match &imported.kind {
+                PipelineAssetKind::UrpPipelineAsset(asset) => EffectiveRenderPipeline::Urp {
+                    asset: asset.clone(),
+                },
+                _ => EffectiveRenderPipeline::OtherPipelineAsset { guid },
+            },
+            None => EffectiveRenderPipeline::Unresolved { guid },
+        },
+    }
 }
 
 pub fn v_sync_count_for_runtime(runtime: &Runtime) -> u32 {
@@ -1438,9 +1479,9 @@ mod tests {
     use unitas_render::{Renderer, ShadowSettings};
 
     use super::{
-        DESKTOP_QUALITY_TARGET_GROUP, FrameInfo, GpuFramePresenter, WEB_QUALITY_TARGET_GROUP,
-        apply_pending_display_quality, shadow_settings_for_quality, shadow_settings_for_runtime,
-        with_display_settings,
+        DESKTOP_QUALITY_TARGET_GROUP, EffectiveRenderPipeline, FrameInfo, GpuFramePresenter,
+        WEB_QUALITY_TARGET_GROUP, apply_pending_display_quality, effective_render_pipeline,
+        shadow_settings_for_quality, shadow_settings_for_runtime, with_display_settings,
     };
     use crate::Runtime;
 
@@ -1461,6 +1502,79 @@ mod tests {
             anti_aliasing: 0,
             v_sync_count: 1,
             lod_bias: 1.0,
+            custom_render_pipeline_guid: None,
+        }
+    }
+
+    #[test]
+    fn effective_render_pipeline_prefers_the_quality_override_and_reports_unresolved_guids() {
+        let Ok(mut runtime) = Runtime::new() else {
+            return;
+        };
+        let graphics_guid = String::from("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+        let override_guid = String::from("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb");
+        let mut overridden = sample_quality_level("High", 2, 2, 50.0);
+        overridden.custom_render_pipeline_guid = Some(override_guid.clone());
+        runtime.quality_settings = QualitySettings {
+            current_quality: 1,
+            levels: vec![sample_quality_level("Low", 0, 0, 40.0), overridden],
+            per_platform_default_quality: vec![(DESKTOP_QUALITY_TARGET_GROUP.to_string(), 1)],
+        };
+        let mut graphics = unitas_asset::project_settings::GraphicsSettings::default();
+        assert!(
+            graphics
+                .set_custom_render_pipeline_guid(Some(&graphics_guid))
+                .is_ok()
+        );
+        runtime.graphics_settings = Some(graphics);
+        runtime.pipeline_assets = vec![imported_urp_asset(&override_guid)];
+
+        let resolved = effective_render_pipeline(&runtime, 1);
+        assert!(
+            matches!(resolved, EffectiveRenderPipeline::Urp { .. }),
+            "the quality-level override must win over the GraphicsSettings default"
+        );
+        let unresolved = effective_render_pipeline(&runtime, 0);
+        assert_eq!(
+            unresolved,
+            EffectiveRenderPipeline::Unresolved {
+                guid: graphics_guid.clone()
+            },
+            "a referenced asset that did not import must stay unresolved, not fall back"
+        );
+
+        runtime.pipeline_assets = vec![imported_urp_asset(&graphics_guid)];
+        let default_resolved = effective_render_pipeline(&runtime, 0);
+        assert!(
+            matches!(default_resolved, EffectiveRenderPipeline::Urp { .. }),
+            "without a quality override the GraphicsSettings default pipeline applies"
+        );
+
+        runtime.graphics_settings = None;
+        let built_in = effective_render_pipeline(&runtime, 0);
+        assert_eq!(built_in, EffectiveRenderPipeline::BuiltIn);
+    }
+
+    fn imported_urp_asset(guid: &str) -> unitas_asset::urp_pipeline::ImportedRenderPipelineAsset {
+        unitas_asset::urp_pipeline::ImportedRenderPipelineAsset {
+            guid: guid.to_string(),
+            path: std::path::PathBuf::from("Assets/Pipeline.asset"),
+            kind: unitas_asset::urp_pipeline::PipelineAssetKind::UrpPipelineAsset(
+                unitas_asset::urp_pipeline::UrpPipelineAsset {
+                    script_guid: Some(String::from(
+                        unitas_core::compat::URP_PIPELINE_ASSET_SCRIPT_GUID,
+                    )),
+                    default_renderer_index: 0,
+                    renderer_data_guids: Vec::new(),
+                    supports_hdr: true,
+                    msaa_sample_count: 1,
+                    render_scale: 1.0,
+                    require_depth_texture: false,
+                    require_opaque_texture: false,
+                    additional_lights_per_object_limit: 4,
+                    shadow_distance: 50.0,
+                },
+            ),
         }
     }
 

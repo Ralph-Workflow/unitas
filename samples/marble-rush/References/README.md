@@ -159,6 +159,41 @@ would admit a changed scene, and the old per-process draw order swapped the
 arena materials over 3.1 %-31.9 % of the pixels, so a tolerance below 0.5 %
 keeps every material regression visible.
 
+## What the 2026-11-27 U5 visual-pin attempt found (no references approved)
+
+Unit U5 set out to approve three more references — the ghost's translucent
+material, a collect-burst frame and a landing-dust frame — and approved none.
+The measurement basis, so the next attempt does not redo it:
+
+- **Collect burst does not rasterize in the capture.** A trial scenario drove
+the ball into `Pickup_1` (burst triggered at frame 8, log `[roll-a-ball]
+collect burst triggered pickup=Pickup_1`) and captured frames 6, 8, 12, 28
+and 58 from `Main Camera`. The frame-8 and frame-12 captures differ only in
+17 pixels of HUD timer text (`x` 25-28, `y` 6-10); the region around the
+`CollectBurst` emitter at (0, 0.75, 0) is unchanged. The system's play-on-awake
+burst at t=0 is equally invisible: captures at frames 3, 9, 21, 45 and 85 are
+byte-identical. The engine simulates and forwards the particle draw list to
+the capture path (`crates/unitas-runtime/src/capture.rs:93`), so the loss is
+in rasterization, not simulation or registration.
+- **Landing dust does not rasterize in the capture.** `LandingDust` plays from
+scene start (lifetime 0.8 s, so it must be visible for roughly the first
+hundred frames); captures at frames 3, 9, 21, 45 and 85 are byte-identical,
+including the emitter's floor region at (0, 0.05, 0). Same rasterization gap
+as the collect burst.
+- **The ghost has no translucent material in the render path.** The attempt
+ghost `GhostBall` is created by `ScoreManager` as a bare `GameObject` with
+only a `GhostReplay` component — no `MeshFilter`/`MeshRenderer` — and a
+capture at the end of `Scenarios/ghost_replay.scenario.json`'s replay (ghost
+at route end (2.25, 0.5, 3.3)) is byte-identical to a capture of the same
+scene with no ghost object: nothing reaches the draw list. The title screen's
+`AttractGhost` does carry a sphere renderer, but it is bound to `Marble.mat`
+(`_Color` alpha 1, opaque), so no translucent ghost material exists in the
+sample's assets either; making the ghost visible and translucent is a sample
+script/asset change, not a reference-approval step.
+
+No new BMP joins the set and no existing reference was touched; the nine
+approved references above stand unchanged.
+
 ## Approval
 
 Approved on 2026-11-25 by the development session that removed the draw-order

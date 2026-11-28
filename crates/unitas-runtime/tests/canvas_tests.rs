@@ -510,3 +510,437 @@ fn input_field_headless_canvas_capture_renders_entered_text_and_caret() {
         [255, 255, 255, 255]
     );
 }
+
+fn centered_transform(
+    entity: EntityId,
+    parent: Option<EntityId>,
+    pos: [f32; 2],
+    size: [f32; 2],
+) -> RectTransformComponent {
+    RectTransformComponent {
+        entity,
+        parent,
+        anchor_min: [0.5, 0.5],
+        anchor_max: [0.5, 0.5],
+        anchored_position: pos,
+        size_delta: size,
+        pivot: [0.5, 0.5],
+    }
+}
+
+const PANEL_ID: EntityId = EntityId::new(510);
+const WIDE_IMAGE_ID: EntityId = EntityId::new(520);
+const CLIPPED_BUTTON_ID: EntityId = EntityId::new(530);
+const PANEL_BUTTON_ID: EntityId = EntityId::new(540);
+const FREE_BUTTON_ID: EntityId = EntityId::new(550);
+const PANEL_RECT: [f32; 4] = [300.0, 200.0, 200.0, 200.0];
+const WIDE_IMAGE_RECT: [f32; 4] = [200.0, 100.0, 400.0, 400.0];
+const CLIPPED_BUTTON_RECT: [f32; 4] = [320.0, 120.0, 160.0, 40.0];
+const PANEL_BUTTON_RECT: [f32; 4] = [320.0, 340.0, 160.0, 40.0];
+
+fn plain_image(color: [f32; 4]) -> UiElementComponent {
+    UiElementComponent::Image(UiImageComponent {
+        entity: EntityId::new(0),
+        color,
+        sprite_guid: None,
+        draw_mode: SpriteDrawMode::Simple,
+        sprite_border: [0.0; 4],
+        enabled: true,
+    })
+}
+
+fn panel_binding() -> UiBinding {
+    let canvas_id = EntityId::new(500);
+    let set_entity = |element: &mut UiElementComponent, entity: EntityId| match element {
+        UiElementComponent::Image(image) => image.entity = entity,
+        UiElementComponent::Text(text) => text.entity = entity,
+        UiElementComponent::Button(button) => button.entity = entity,
+    };
+    let mut panel_image = plain_image([0.1, 0.1, 0.1, 1.0]);
+    set_entity(&mut panel_image, PANEL_ID);
+    let mut wide_image = plain_image([0.9, 0.2, 0.2, 1.0]);
+    set_entity(&mut wide_image, WIDE_IMAGE_ID);
+    let mut clipped_face = plain_image([0.2, 0.4, 0.6, 1.0]);
+    set_entity(&mut clipped_face, CLIPPED_BUTTON_ID);
+    let mut clipped_button = UiElementComponent::Button(unitas_asset::scene::UiButtonComponent {
+        entity: CLIPPED_BUTTON_ID,
+        target_graphic: None,
+        interactable: true,
+    });
+    set_entity(&mut clipped_button, CLIPPED_BUTTON_ID);
+    let mut panel_face = plain_image([0.2, 0.6, 0.4, 1.0]);
+    set_entity(&mut panel_face, PANEL_BUTTON_ID);
+    let mut panel_button = UiElementComponent::Button(unitas_asset::scene::UiButtonComponent {
+        entity: PANEL_BUTTON_ID,
+        target_graphic: None,
+        interactable: true,
+    });
+    set_entity(&mut panel_button, PANEL_BUTTON_ID);
+    let mut free_face = plain_image([0.6, 0.4, 0.2, 1.0]);
+    set_entity(&mut free_face, FREE_BUTTON_ID);
+    let mut free_button = UiElementComponent::Button(unitas_asset::scene::UiButtonComponent {
+        entity: FREE_BUTTON_ID,
+        target_graphic: None,
+        interactable: true,
+    });
+    set_entity(&mut free_button, FREE_BUTTON_ID);
+    UiBinding {
+        canvases: vec![CanvasComponent {
+            entity: canvas_id,
+            render_mode: CanvasRenderMode::ScreenSpaceOverlay,
+            sorting_order: 0,
+            scaler: None,
+        }],
+        rect_transforms: vec![
+            centered_transform(canvas_id, None, [0.0, 0.0], [800.0, 600.0]),
+            centered_transform(PANEL_ID, Some(canvas_id), [0.0, 0.0], [200.0, 200.0]),
+            centered_transform(WIDE_IMAGE_ID, Some(PANEL_ID), [0.0, 0.0], [400.0, 400.0]),
+            centered_transform(
+                CLIPPED_BUTTON_ID,
+                Some(WIDE_IMAGE_ID),
+                [0.0, 160.0],
+                [160.0, 40.0],
+            ),
+            centered_transform(PANEL_BUTTON_ID, Some(PANEL_ID), [0.0, -60.0], [160.0, 40.0]),
+            centered_transform(
+                FREE_BUTTON_ID,
+                Some(canvas_id),
+                [0.0, -220.0],
+                [160.0, 40.0],
+            ),
+        ],
+        elements: vec![
+            panel_image,
+            wide_image,
+            clipped_face,
+            clipped_button,
+            panel_face,
+            panel_button,
+            free_face,
+            free_button,
+        ],
+        layout_groups: Vec::new(),
+        content_size_fitters: Vec::new(),
+    }
+}
+
+#[test]
+fn match_width_or_height_interpolates_ratios_in_logarithmic_space() {
+    let base = canvas();
+    let mut scaler = base.scaler.clone().unwrap_or(CanvasScalerComponent {
+        ui_scale_mode: CanvasScaleMode::ScaleWithScreenSize,
+        reference_resolution: [800.0, 600.0],
+        screen_match_mode: CanvasMatchMode::MatchWidthOrHeight,
+        match_width_or_height: 0.5,
+    });
+    scaler.match_width_or_height = 0.25;
+    let quarter = CanvasComponent {
+        scaler: Some(scaler.clone()),
+        ..base.clone()
+    };
+    let expected = 2f32.powf(0.75);
+    assert!(
+        (canvas_scale_factor(&quarter, [1600.0, 600.0]) - expected).abs() < 1e-5,
+        "a quarter match blends a quarter of the way from the width ratio to the height ratio in log space"
+    );
+    scaler.match_width_or_height = 1.0;
+    let height = CanvasComponent {
+        scaler: Some(scaler),
+        ..base
+    };
+    assert_eq!(canvas_scale_factor(&height, [1600.0, 600.0]), 1.0);
+    let mut shrink = canvas();
+    if let Some(scaler) = shrink.scaler.as_mut() {
+        scaler.screen_match_mode = CanvasMatchMode::Shrink;
+    }
+    assert_eq!(canvas_scale_factor(&shrink, [1600.0, 600.0]), 1.0);
+    let mut expand = canvas();
+    if let Some(scaler) = expand.scaler.as_mut() {
+        scaler.screen_match_mode = CanvasMatchMode::Expand;
+    }
+    assert_eq!(canvas_scale_factor(&expand, [1600.0, 600.0]), 2.0);
+}
+
+#[test]
+fn canvas_scaler_override_constant_pixel_size_scales_layout() {
+    let state = CanvasState::new(panel_binding());
+    state.set_canvas_scaler(unitas_runtime::canvas::CanvasScalerOverride {
+        entity: EntityId::new(500),
+        ui_scale_mode: CanvasScaleMode::ConstantPixelSize,
+        scale_factor: 2.0,
+        reference_resolution: [800.0, 600.0],
+        screen_match_mode: CanvasMatchMode::MatchWidthOrHeight,
+        match_width_or_height: 0.5,
+        physical_unit: unitas_runtime::canvas::PhysicalUnit::Inches,
+        fallback_dpi: 96.0,
+    });
+    let (rect, scale) = state
+        .element_rect(WIDE_IMAGE_ID, [800.0, 600.0])
+        .unwrap_or(([0.0; 4], 1.0));
+    assert_eq!(scale, 2.0);
+    assert_eq!(rect, [0.0, -100.0, 800.0, 800.0]);
+}
+
+#[test]
+fn canvas_scaler_override_constant_physical_size_uses_dpi_then_fallback() {
+    let mut state = CanvasState::new(panel_binding());
+    state.set_canvas_scaler(unitas_runtime::canvas::CanvasScalerOverride {
+        entity: EntityId::new(500),
+        ui_scale_mode: CanvasScaleMode::ConstantPhysicalSize,
+        scale_factor: 1.0,
+        reference_resolution: [800.0, 600.0],
+        screen_match_mode: CanvasMatchMode::MatchWidthOrHeight,
+        match_width_or_height: 0.5,
+        physical_unit: unitas_runtime::canvas::PhysicalUnit::Centimeters,
+        fallback_dpi: 96.0,
+    });
+    let (_, fallback_scale) = state
+        .element_rect(WIDE_IMAGE_ID, [800.0, 600.0])
+        .unwrap_or(([0.0; 4], 1.0));
+    assert!(
+        (fallback_scale - 96.0 / 2.54).abs() < 1e-3,
+        "with no reported screen dpi the fallback dpi drives the physical scale"
+    );
+    state.set_screen_dpi(254.0);
+    let (_, dpi_scale) = state
+        .element_rect(WIDE_IMAGE_ID, [800.0, 600.0])
+        .unwrap_or(([0.0; 4], 1.0));
+    assert!(
+        (dpi_scale - 100.0).abs() < 1e-3,
+        "a reported screen dpi overrides the fallback"
+    );
+}
+
+#[test]
+fn toggles_flip_and_groups_keep_a_single_toggle_on() {
+    let mut binding = panel_binding();
+    let first = EntityId::new(600);
+    let second = EntityId::new(610);
+    binding.rect_transforms.push(centered_transform(
+        first,
+        Some(EntityId::new(500)),
+        [0.0, 100.0],
+        [240.0, 36.0],
+    ));
+    binding.rect_transforms.push(centered_transform(
+        second,
+        Some(EntityId::new(500)),
+        [0.0, -100.0],
+        [240.0, 36.0],
+    ));
+    let mut state = CanvasState::new(binding);
+    for entity in [first, second] {
+        state.set_toggle(unitas_runtime::canvas::UiToggleComponent {
+            entity,
+            group: Some(EntityId::new(700)),
+            ..unitas_runtime::canvas::UiToggleComponent::default()
+        });
+    }
+    assert!(state.set_toggle_value(first, true, true));
+    assert!(state.toggle(first).is_some_and(|toggle| toggle.is_on));
+    assert!(state.set_toggle_value(second, true, true));
+    assert!(
+        state.toggle(first).is_some_and(|toggle| !toggle.is_on),
+        "turning one grouped toggle on turns the others off"
+    );
+    assert_eq!(
+        state.take_toggle_value_changed(),
+        vec![
+            unitas_runtime::canvas::ToggleValueChangedEvent {
+                entity: first,
+                is_on: true,
+            },
+            unitas_runtime::canvas::ToggleValueChangedEvent {
+                entity: second,
+                is_on: true,
+            },
+        ],
+        "group exclusivity silences the toggle that was forced off"
+    );
+    let press = state
+        .element_rect(first, [800.0, 600.0])
+        .map(|(rect, _)| (rect[0] + rect[2] * 0.5, rect[1] + rect[3] * 0.5))
+        .unwrap_or((0.0, 0.0));
+    state.press_pointer(press, [800.0, 600.0]);
+    state.release_pointer(press, [800.0, 600.0]);
+    assert!(
+        state.toggle(first).is_some_and(|toggle| toggle.is_on),
+        "a pointer press and release over a toggle flips it"
+    );
+}
+
+#[test]
+fn sliders_clamp_round_and_follow_the_pointer_while_dragged() {
+    let mut state = CanvasState::new(panel_binding());
+    let slider_id = EntityId::new(620);
+    state.ensure_canvas_and_rect(slider_id, [800.0, 600.0]);
+    state.set_slider(unitas_runtime::canvas::UiSliderComponent {
+        entity: slider_id,
+        min_value: 0.0,
+        max_value: 10.0,
+        whole_numbers: true,
+        ..unitas_runtime::canvas::UiSliderComponent::default()
+    });
+    assert!(state.set_slider_value(slider_id, 7.6, false));
+    assert_eq!(
+        state.slider(slider_id).map(|slider| slider.value),
+        Some(8.0),
+        "whole number sliders round their value"
+    );
+    let (rect, _) = state
+        .element_rect(slider_id, [800.0, 600.0])
+        .unwrap_or(([0.0; 4], 1.0));
+    let left = (rect[0], rect[1] + rect[3] * 0.5);
+    let middle = (rect[0] + rect[2] * 0.5, rect[1] + rect[3] * 0.5);
+    let right = (rect[0] + rect[2], rect[1] + rect[3] * 0.5);
+    state.press_pointer(left, [800.0, 600.0]);
+    assert_eq!(state.slider(slider_id).map(|s| s.value), Some(0.0));
+    state.move_pointer(middle, [800.0, 600.0]);
+    assert_eq!(
+        state.slider(slider_id).map(|s| s.value),
+        Some(5.0),
+        "dragging across the slider track maps the pointer to the value"
+    );
+    state.release_pointer(right, [800.0, 600.0]);
+    assert_eq!(state.slider(slider_id).map(|s| s.value), Some(10.0));
+    assert_eq!(
+        state.take_slider_value_changed().len(),
+        3,
+        "each drag step notifies once"
+    );
+}
+
+#[test]
+fn rect_masks_clip_draw_items_and_pointer_hits_to_the_mask_area() {
+    let mut state = CanvasState::new(panel_binding());
+    let outside_point = (CLIPPED_BUTTON_RECT[0] + 20.0, CLIPPED_BUTTON_RECT[1] + 20.0);
+    let inside_point = (PANEL_BUTTON_RECT[0] + 20.0, PANEL_BUTTON_RECT[1] + 20.0);
+    assert_eq!(
+        state
+            .element_rect(WIDE_IMAGE_ID, [800.0, 600.0])
+            .map(|(rect, _)| rect),
+        Some(WIDE_IMAGE_RECT)
+    );
+    assert_eq!(
+        state.hit_test_button(outside_point, [800.0, 600.0]),
+        Some(CLIPPED_BUTTON_ID),
+        "before masking, the child button answers hits outside the panel area"
+    );
+    state.set_rect_mask(PANEL_ID, true);
+    let items = state.draw_items([800.0, 600.0]);
+    let masked_item = items
+        .iter()
+        .find(|item| item.rect_px == WIDE_IMAGE_RECT)
+        .ok_or("the masked image still draws");
+    if let Ok(item) = masked_item {
+        assert_eq!(
+            item.clip_rect,
+            Some(PANEL_RECT),
+            "the draw item carries the mask rect"
+        );
+    }
+    let mut image = Rgba8::new(800, 600);
+    let mut target = UiTarget {
+        image: &mut image,
+        ids: None,
+    };
+    composite_ui(&mut target, &items, 1, None);
+    let outside_pixel = ((outside_point.1 as u32) * 800 + outside_point.0 as u32) as usize * 4;
+    assert_eq!(
+        &image.pixels[outside_pixel..outside_pixel + 3],
+        &[0, 0, 0],
+        "pixels outside the mask area stay untouched"
+    );
+    assert_eq!(
+        state.hit_test_button(inside_point, [800.0, 600.0]),
+        Some(PANEL_BUTTON_ID),
+        "hits inside the mask area still land"
+    );
+    assert_eq!(
+        state.hit_test_button(outside_point, [800.0, 600.0]),
+        None,
+        "hits outside the mask area are clipped away"
+    );
+    assert_eq!(
+        state.hit_test_button((400.0, 520.0), [800.0, 600.0]),
+        Some(FREE_BUTTON_ID),
+        "unmasked siblings keep their full hit area"
+    );
+}
+
+#[test]
+fn canvas_groups_multiply_alpha_and_gate_interaction_down_the_hierarchy() {
+    let mut state = CanvasState::new(panel_binding());
+    let panel_button_center = (PANEL_BUTTON_RECT[0] + 20.0, PANEL_BUTTON_RECT[1] + 20.0);
+    state.set_canvas_group(unitas_runtime::canvas::UiCanvasGroupComponent {
+        entity: PANEL_ID,
+        alpha: 0.5,
+        ..unitas_runtime::canvas::UiCanvasGroupComponent::default()
+    });
+    let items = state.draw_items([800.0, 600.0]);
+    let panel_item = items
+        .iter()
+        .find(|item| item.rect_px == PANEL_RECT)
+        .ok_or("the panel draws");
+    if let Ok(item) = panel_item {
+        assert_eq!(item.color[3], 0.5, "the group alpha multiplies the panel");
+    }
+    let child_item = items
+        .iter()
+        .find(|item| item.rect_px == WIDE_IMAGE_RECT)
+        .ok_or("the child draws");
+    if let Ok(item) = child_item {
+        assert_eq!(item.color[3], 0.5, "the group alpha reaches descendants");
+    }
+    assert_eq!(
+        state.hit_test_button(panel_button_center, [800.0, 600.0]),
+        Some(PANEL_BUTTON_ID)
+    );
+    state.set_canvas_group(unitas_runtime::canvas::UiCanvasGroupComponent {
+        entity: PANEL_ID,
+        alpha: 0.5,
+        interactable: false,
+        ..unitas_runtime::canvas::UiCanvasGroupComponent::default()
+    });
+    assert_eq!(
+        state.hit_test_button(panel_button_center, [800.0, 600.0]),
+        None,
+        "a non-interactable group disables its descendants"
+    );
+    assert_eq!(
+        state.focusable_buttons([800.0, 600.0]),
+        vec![FREE_BUTTON_ID],
+        "a non-interactable group removes only its descendants from focus"
+    );
+    state.set_canvas_group(unitas_runtime::canvas::UiCanvasGroupComponent {
+        entity: PANEL_BUTTON_ID,
+        ignore_parent_groups: true,
+        ..unitas_runtime::canvas::UiCanvasGroupComponent::default()
+    });
+    assert_eq!(
+        state.hit_test_button(panel_button_center, [800.0, 600.0]),
+        Some(PANEL_BUTTON_ID),
+        "a nested group that ignores parent groups restores interaction"
+    );
+    state.set_canvas_group(unitas_runtime::canvas::UiCanvasGroupComponent {
+        entity: PANEL_ID,
+        alpha: 0.5,
+        blocks_raycasts: false,
+        ..unitas_runtime::canvas::UiCanvasGroupComponent::default()
+    });
+    assert_eq!(
+        state.hit_test_button((400.0, 140.0), [800.0, 600.0]),
+        None,
+        "a group that blocks no raycasts makes descendants transparent to hits"
+    );
+    assert_eq!(
+        state.hit_test_button(panel_button_center, [800.0, 600.0]),
+        Some(PANEL_BUTTON_ID),
+        "the group that ignores parent groups keeps its hits"
+    );
+    assert_eq!(
+        state.hit_test_button((400.0, 520.0), [800.0, 600.0]),
+        Some(FREE_BUTTON_ID),
+        "siblings outside every group keep their hits"
+    );
+}

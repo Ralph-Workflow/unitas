@@ -580,23 +580,13 @@ namespace UnityEngine
             _clip = nativeClip;
         }
 
+        // The native source identity is the id the runtime allocated for the
+        // source itself (scene materialisation or CreateSource(0) below) —
+        // never the GameObject's entity, which belongs to the scene world.
         internal bool TryGetEntityId(out ulong entityId)
         {
-            if (_nativeEntityId != 0UL)
-            {
-                entityId = _nativeEntityId;
-                return true;
-            }
-
-            GameObject? owner = gameObject;
-            if (owner != null && !owner.IsDestroyed && owner.NativeEntityId != 0UL)
-            {
-                entityId = owner.NativeEntityId;
-                return true;
-            }
-
-            entityId = 0UL;
-            return false;
+            entityId = _nativeEntityId;
+            return entityId != 0UL;
         }
 
         internal ulong EnsureNativeEntityId()
@@ -608,18 +598,15 @@ namespace UnityEngine
             }
 
             GameObject? owner = gameObject;
-            ulong ownerEntityId = owner != null && !owner.IsDestroyed ? owner.NativeEntityId : 0UL;
             IAudioProvider? provider = Provider;
             if (provider == null)
             {
-                return ownerEntityId;
+                return 0UL;
             }
 
-            _nativeEntityId = provider.CreateSource(ownerEntityId);
-            if (owner != null && !owner.IsDestroyed && owner.NativeEntityId == 0UL && _nativeEntityId != 0UL)
-            {
-                owner.AssignNativeEntityId(_nativeEntityId);
-            }
+            // 0 asks the runtime to allocate a dedicated source entity instead
+            // of borrowing the GameObject's identity.
+            _nativeEntityId = provider.CreateSource(0);
 
             if (_nativeEntityId != 0UL)
             {
@@ -702,7 +689,10 @@ namespace UnityEngine
             {
                 return entityId;
             }
-            return owner.NativeEntityId;
+
+            // No native source exists yet; the filter is applied when the
+            // source is created (ApplySiblingFilters), not onto the GameObject.
+            return 0UL;
         }
     }
 }

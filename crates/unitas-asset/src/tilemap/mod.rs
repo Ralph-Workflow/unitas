@@ -1,3 +1,5 @@
+pub mod scene;
+
 use std::fmt;
 use std::fs;
 use std::path::{Path, PathBuf};

@@ -1,0 +1,73 @@
+{
+  "name": "ccd_containment",
+  "steps": [
+    {
+      "load_scene": {
+        "path": "Assets/Scenes/PhysicsLab.unity"
+      }
+    },
+    {
+      "tick": {
+        "frames": 100,
+        "delta_seconds": 0.02
+      }
+    },
+    {
+      "load_scene": {
+        "path": "Assets/Scenes/PhysicsLab.unity"
+      }
+    },
+    {
+      "tick": {
+        "frames": 200,
+        "delta_seconds": 0.01
+      }
+    }
+  ],
+  "checkpoints": [
+    {
+      "id": "coarse_step_containment_held",
+      "after_step": 2,
+      "kind": "log",
+      "severity": "log",
+      "contains": "CorridorMarble containment held at coarse step"
+    },
+    {
+      "id": "coarse_step_no_tunneling",
+      "after_step": 2,
+      "kind": "transform_position",
+      "object": "CorridorMarble",
+      "expected": [
+        0,
+        0.5,
+        19.5
+      ],
+      "tolerance": 0.25
+    },
+    {
+      "id": "fine_step_containment_held",
+      "after_step": 4,
+      "kind": "log",
+      "severity": "log",
+      "contains": "CorridorMarble containment held at fine step"
+    },
+    {
+      "id": "fine_step_no_tunneling",
+      "after_step": 4,
+      "kind": "transform_position",
+      "object": "CorridorMarble",
+      "expected": [
+        0,
+        0.5,
+        19.5
+      ],
+      "tolerance": 0.25
+    },
+    {
+      "id": "frame_count_sanity",
+      "after_step": 4,
+      "kind": "frame_count",
+      "expected": 302
+    }
+  ]
+}

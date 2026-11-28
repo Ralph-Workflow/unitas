@@ -436,3 +436,60 @@ pub fn lookup_unsupported_family(
                 && entry.package_id == Some("com.unity.entities"))
     })
 }
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum RenderPipelineFamily {
+    BuiltIn,
+    Urp,
+    Hdrp,
+    Custom,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct RenderPipelineScriptEntry {
+    pub script_guid: &'static str,
+    pub family: RenderPipelineFamily,
+    pub recognized_form: &'static str,
+    pub owning_spec: &'static str,
+    pub owning_feature_id: &'static str,
+    pub observable_consequence: &'static str,
+}
+
+pub const RENDER_PIPELINE_SCRIPT_MATRIX: &[RenderPipelineScriptEntry] = &[
+    RenderPipelineScriptEntry {
+        script_guid: "bf2edee5c58d82540a51f03df9d42094",
+        family: RenderPipelineFamily::Urp,
+        recognized_form: "a UniversalRenderPipelineAsset serialized as render-pipelines.universal package script guid bf2edee5c58d82540a51f03df9d42094",
+        owning_spec: "rendering-and-animation.md",
+        owning_feature_id: "REN-006",
+        observable_consequence: "the URP asset imports, the effective pipeline per quality level is resolved against GraphicsSettings and QualitySettings overrides, and unsupported URP features are reported per camera and quality level",
+    },
+    RenderPipelineScriptEntry {
+        script_guid: "de640fe3d0db1804a85f9fc8f5cadab6",
+        family: RenderPipelineFamily::Urp,
+        recognized_form: "a UniversalRendererData asset serialized as render-pipelines.universal package script guid de640fe3d0db1804a85f9fc8f5cadab6",
+        owning_spec: "rendering-and-animation.md",
+        owning_feature_id: "REN-006",
+        observable_consequence: "the renderer data imports with its rendering path and renderer feature list so Forward+, Deferred, and renderer features are reported instead of silently dropped",
+    },
+    RenderPipelineScriptEntry {
+        script_guid: "a79441f348de89743a2939f4d699eac1",
+        family: RenderPipelineFamily::Urp,
+        recognized_form: "a UniversalAdditionalCameraData MonoBehaviour serialized as render-pipelines.universal package script guid a79441f348de89743a2939f4d699eac1",
+        owning_spec: "rendering-and-animation.md",
+        owning_feature_id: "REN-006",
+        observable_consequence: "per-camera URP data such as the overlay render type imports so camera stacking is reported per camera instead of silently dropped",
+    },
+];
+
+pub fn lookup_render_pipeline_script(
+    script_guid: &str,
+) -> Option<&'static RenderPipelineScriptEntry> {
+    RENDER_PIPELINE_SCRIPT_MATRIX
+        .iter()
+        .find(|entry| entry.script_guid == script_guid)
+}
+
+pub const URP_PIPELINE_ASSET_SCRIPT_GUID: &str = "bf2edee5c58d82540a51f03df9d42094";
+pub const URP_RENDERER_DATA_SCRIPT_GUID: &str = "de640fe3d0db1804a85f9fc8f5cadab6";
+pub const URP_ADDITIONAL_CAMERA_DATA_SCRIPT_GUID: &str = "a79441f348de89743a2939f4d699eac1";

@@ -51,7 +51,7 @@ pub const STARTUP_FAILURE_EXIT_CODE: u8 = 1;
 pub const STARTUP_MEASUREMENT_TIMEOUT_SECONDS: u64 = 20;
 pub const CANVAS_TEXT_SEPARATOR: &str = " | ";
 #[cfg(feature = "device")]
-const DEVICE_CAPTURE_CAPACITY_FRAMES: usize = 96_000;
+const WINDOWED_CAPTURE_SECONDS: u32 = 8;
 
 /// The code-execution capabilities the trust store grants this project.
 pub fn project_capabilities(bundle_dir: &Path) -> Option<ProjectCapabilities> {
@@ -988,12 +988,18 @@ pub fn run_device_verification(
         inject_demo_input: true,
     };
 
+    let audio_capture = unitas_audio::output::arm_capture(WINDOWED_CAPTURE_SECONDS);
     let windowed_result = launch_bundle_windowed(&temp_bundle_dir, &options)?;
 
     let audio_capture_path = Path::new("target/device-lane/device_audio.wav");
-    let audio_result = capture_device_chime(&startup_scene_path, audio_capture_path);
+    let audio_result = audio_capture.write_wav(audio_capture_path);
     let _ = fs::remove_dir_all(&temp_bundle_dir);
-    audio_result?;
+    audio_result.map_err(|error| PlayerStartupError::VerificationFailed {
+        message: format!(
+            "failed to write the device audio capture '{}': {error}",
+            audio_capture_path.display()
+        ),
+    })?;
 
     Ok(DeviceVerifyReport {
         width,
@@ -1011,76 +1017,6 @@ pub fn run_device_verification(
         shadow: windowed_result.shadow,
         reference_path: reference_bmp_path.to_path_buf(),
     })
-}
-
-#[cfg(feature = "device")]
-fn capture_device_chime(
-    startup_scene_path: &Path,
-    audio_capture_path: &Path,
-) -> Result<(), PlayerStartupError> {
-    let mut audio_runtime =
-        unitas_runtime::Runtime::new().map_err(|error| PlayerStartupError::RuntimeInit {
-            message: error.to_string(),
-        })?;
-    audio_runtime
-        .load_scene(startup_scene_path)
-        .map_err(|error| PlayerStartupError::SceneLoadFailed {
-            scene_path: startup_scene_path.to_path_buf(),
-            message: error.to_string(),
-        })?;
-    let chime_entity = audio_runtime
-        .find_entity_by_name("CollectChime")
-        .ok_or_else(|| PlayerStartupError::VerificationFailed {
-            message: String::from("the staged scene carries no CollectChime audio source"),
-        })?;
-    let menu_entity = audio_runtime
-        .find_entity_by_name("HudCanvas")
-        .ok_or_else(|| PlayerStartupError::VerificationFailed {
-            message: String::from("the staged scene carries no HudCanvas menu audio host"),
-        })?;
-    let chime_clip = audio_runtime
-        .audio()
-        .source(chime_entity)
-        .and_then(|source| source.clip)
-        .ok_or_else(|| PlayerStartupError::VerificationFailed {
-            message: String::from("the CollectChime audio source carries no clip"),
-        })?;
-    audio_runtime.audio_mut().ensure_source(menu_entity);
-    audio_runtime
-        .audio_mut()
-        .set_source_clip(menu_entity, Some(chime_clip));
-    audio_runtime
-        .audio_mut()
-        .set_source_group(menu_entity, unitas_audio::AudioMixerGroup::Menu);
-    audio_runtime.audio_mut().set_volume(menu_entity, 0.8);
-
-    let audio_capture = unitas_audio::output::arm_capture(8);
-    let audio_output =
-        unitas_audio::output::DeviceOutput::start_with_capacity(DEVICE_CAPTURE_CAPACITY_FRAMES)
-            .map_err(|error| PlayerStartupError::VerificationFailed {
-                message: error.to_string(),
-            })?;
-    let sample_rate = f64::from(audio_output.sample_rate());
-    let lead_in_frames = (sample_rate * 0.5).round() as usize;
-    let chime_frames = (sample_rate * 0.25).round() as usize;
-    audio_output.pump_world(audio_runtime.audio_mut(), lead_in_frames);
-    audio_runtime.audio_mut().play(chime_entity, true);
-    audio_output.pump_world(audio_runtime.audio_mut(), chime_frames);
-    audio_runtime.audio_mut().set_gameplay_paused(true);
-    audio_runtime.audio_mut().play(chime_entity, true);
-    audio_output.pump_world(audio_runtime.audio_mut(), chime_frames);
-    audio_runtime.audio_mut().play(menu_entity, true);
-    audio_output.pump_world(audio_runtime.audio_mut(), chime_frames);
-    drop(audio_output);
-
-    audio_capture
-        .write_wav(audio_capture_path)
-        .map_err(|error| PlayerStartupError::VerificationFailed {
-            message: format!(
-                "failed to write the device audio capture '{}': {error}",
-                audio_capture_path.display()
-            ),
-        })
 }
 
 pub fn measure_player_startup(launch_artifact: &Path) -> StartupMeasurement {

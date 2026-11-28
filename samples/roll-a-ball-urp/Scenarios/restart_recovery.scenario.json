@@ -1,0 +1,465 @@
+{
+  "name": "restart-recovery",
+  "steps": [
+    {
+      "load_scene": {
+        "path": "Assets/Scenes/RollABall.unity",
+        "mode": "single"
+      }
+    },
+    {
+      "inject_key": {
+        "key": "Return",
+        "pressed": true
+      }
+    },
+    {
+      "tick": {
+        "frames": 160,
+        "delta_seconds": 0.02
+      }
+    },
+    {
+      "inject_key": {
+        "key": "Return",
+        "pressed": false
+      }
+    },
+    {
+      "tick": {
+        "frames": 2,
+        "delta_seconds": 0.02
+      }
+    },
+    {
+      "inject_key": {
+        "key": "W",
+        "pressed": true
+      }
+    },
+    {
+      "tick": {
+        "frames": 20,
+        "delta_seconds": 0.02
+      }
+    },
+    {
+      "inject_key": {
+        "key": "W",
+        "pressed": false
+      }
+    },
+    {
+      "inject_key": {
+        "key": "D",
+        "pressed": true
+      }
+    },
+    {
+      "tick": {
+        "frames": 20,
+        "delta_seconds": 0.02
+      }
+    },
+    {
+      "inject_key": {
+        "key": "D",
+        "pressed": false
+      }
+    },
+    {
+      "inject_key": {
+        "key": "A",
+        "pressed": true
+      }
+    },
+    {
+      "tick": {
+        "frames": 35,
+        "delta_seconds": 0.02
+      }
+    },
+    {
+      "inject_key": {
+        "key": "A",
+        "pressed": false
+      }
+    },
+    {
+      "inject_key": {
+        "key": "R",
+        "pressed": true
+      }
+    },
+    {
+      "tick": {
+        "frames": 1,
+        "delta_seconds": 0.02
+      }
+    },
+    {
+      "inject_key": {
+        "key": "R",
+        "pressed": false
+      }
+    },
+    {
+      "tick": {
+        "frames": 1,
+        "delta_seconds": 0.02
+      }
+    },
+    {
+      "inject_key": {
+        "key": "W",
+        "pressed": true
+      }
+    },
+    {
+      "tick": {
+        "frames": 20,
+        "delta_seconds": 0.02
+      }
+    },
+    {
+      "inject_key": {
+        "key": "W",
+        "pressed": false
+      }
+    },
+    {
+      "inject_key": {
+        "key": "D",
+        "pressed": true
+      }
+    },
+    {
+      "tick": {
+        "frames": 20,
+        "delta_seconds": 0.02
+      }
+    },
+    {
+      "inject_key": {
+        "key": "D",
+        "pressed": false
+      }
+    },
+    {
+      "inject_key": {
+        "key": "A",
+        "pressed": true
+      }
+    },
+    {
+      "tick": {
+        "frames": 40,
+        "delta_seconds": 0.02
+      }
+    },
+    {
+      "inject_key": {
+        "key": "A",
+        "pressed": false
+      }
+    },
+    {
+      "inject_key": {
+        "key": "S",
+        "pressed": true
+      }
+    },
+    {
+      "tick": {
+        "frames": 40,
+        "delta_seconds": 0.02
+      }
+    },
+    {
+      "inject_key": {
+        "key": "S",
+        "pressed": false
+      }
+    },
+    {
+      "inject_key": {
+        "key": "D",
+        "pressed": true
+      }
+    },
+    {
+      "tick": {
+        "frames": 40,
+        "delta_seconds": 0.02
+      }
+    },
+    {
+      "inject_key": {
+        "key": "D",
+        "pressed": false
+      }
+    },
+    {
+      "tick": {
+        "frames": 3,
+        "delta_seconds": 0.02
+      }
+    },
+    {
+      "inject_key": {
+        "key": "S",
+        "pressed": true
+      }
+    },
+    {
+      "tick": {
+        "frames": 30,
+        "delta_seconds": 0.02
+      }
+    },
+    {
+      "inject_key": {
+        "key": "S",
+        "pressed": false
+      }
+    },
+    {
+      "inject_key": {
+        "key": "D",
+        "pressed": true
+      }
+    },
+    {
+      "tick": {
+        "frames": 30,
+        "delta_seconds": 0.02
+      }
+    },
+    {
+      "inject_key": {
+        "key": "D",
+        "pressed": false
+      }
+    },
+    {
+      "inject_key": {
+        "key": "W",
+        "pressed": true
+      }
+    },
+    {
+      "tick": {
+        "frames": 80,
+        "delta_seconds": 0.02
+      }
+    },
+    {
+      "inject_key": {
+        "key": "W",
+        "pressed": false
+      }
+    },
+    {
+      "inject_key": {
+        "key": "A",
+        "pressed": true
+      }
+    },
+    {
+      "tick": {
+        "frames": 80,
+        "delta_seconds": 0.02
+      }
+    },
+    {
+      "inject_key": {
+        "key": "A",
+        "pressed": false
+      }
+    },
+    {
+      "inject_key": {
+        "key": "S",
+        "pressed": true
+      }
+    },
+    {
+      "tick": {
+        "frames": 80,
+        "delta_seconds": 0.02
+      }
+    },
+    {
+      "inject_key": {
+        "key": "S",
+        "pressed": false
+      }
+    },
+    {
+      "inject_key": {
+        "key": "D",
+        "pressed": true
+      }
+    },
+    {
+      "tick": {
+        "frames": 80,
+        "delta_seconds": 0.02
+      }
+    },
+    {
+      "inject_key": {
+        "key": "D",
+        "pressed": false
+      }
+    },
+    {
+      "tick": {
+        "frames": 2,
+        "delta_seconds": 0.02
+      }
+    }
+  ],
+  "checkpoints": [
+    {
+      "id": "run-started",
+      "after_step": 3,
+      "kind": "log",
+      "severity": "log",
+      "contains": "Run started"
+    },
+    {
+      "id": "pre-restart-pickup",
+      "after_step": 10,
+      "kind": "transform_position",
+      "object": "PlayerBall",
+      "expected": [
+        2.85,
+        0.5,
+        3.0
+      ],
+      "tolerance": 0.02
+    },
+    {
+      "id": "restarted-position",
+      "after_step": 18,
+      "kind": "transform_position",
+      "object": "PlayerBall",
+      "expected": [
+        0.0,
+        0.5,
+        0.0
+      ],
+      "tolerance": 0.02
+    },
+    {
+      "id": "restarted-frames",
+      "after_step": 18,
+      "kind": "frame_count",
+      "expected": 240
+    },
+    {
+      "id": "retry-score-reset",
+      "after_step": 18,
+      "kind": "log",
+      "severity": "log",
+      "contains": "Retry complete score 0"
+    },
+    {
+      "id": "retry-pickups-restored",
+      "after_step": 18,
+      "kind": "log",
+      "severity": "log",
+      "contains": "Retry complete score 0 pickups 12"
+    },
+    {
+      "id": "retry-multiplier-reset",
+      "after_step": 18,
+      "kind": "log",
+      "severity": "log",
+      "contains": "Retry complete score 0 pickups 12 multiplier x1"
+    },
+    {
+      "id": "retry-gold-removed",
+      "after_step": 18,
+      "kind": "log",
+      "severity": "log",
+      "contains": "Gold pickup removed"
+    },
+    {
+      "id": "retry-timer-reset",
+      "after_step": 18,
+      "kind": "log",
+      "severity": "log",
+      "contains": "timer 0.000"
+    },
+    {
+      "id": "pickup-1-again",
+      "after_step": 23,
+      "kind": "transform_position",
+      "object": "PlayerBall",
+      "expected": [
+        2.85,
+        0.5,
+        3.0
+      ],
+      "tolerance": 0.02
+    },
+    {
+      "id": "pickup-2",
+      "after_step": 26,
+      "kind": "transform_position",
+      "object": "PlayerBall",
+      "expected": [
+        -2.85,
+        0.5,
+        3.0
+      ],
+      "tolerance": 0.02
+    },
+    {
+      "id": "gold-spawned-again",
+      "after_step": 26,
+      "kind": "log",
+      "severity": "log",
+      "contains": "Gold pickup spawned"
+    },
+    {
+      "id": "pickup-3",
+      "after_step": 29,
+      "kind": "transform_position",
+      "object": "PlayerBall",
+      "expected": [
+        -3.0,
+        0.5,
+        -2.85
+      ],
+      "tolerance": 0.02
+    },
+    {
+      "id": "pickup-4",
+      "after_step": 32,
+      "kind": "transform_position",
+      "object": "PlayerBall",
+      "expected": [
+        2.85,
+        0.5,
+        -3.0
+      ],
+      "tolerance": 0.02
+    },
+    {
+      "id": "win-log",
+      "after_step": 53,
+      "kind": "log",
+      "severity": "log",
+      "contains": "pickups collected"
+    },
+    {
+      "id": "total-frames",
+      "after_step": 53,
+      "kind": "frame_count",
+      "expected": 785
+    }
+  ]
+}

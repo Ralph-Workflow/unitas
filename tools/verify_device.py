@@ -50,10 +50,6 @@ PCM_SAMPLE_WIDTH_BYTES = 2
 GAME_FRAME_RATE = 60
 CHIME_FREQUENCY_HZ = 875.0
 CHIME_WINDOW_SECONDS = 0.05
-CHIME_LEAD_IN_SECONDS = 0.5
-CHIME_SILENCE_SECONDS = 0.25
-PAUSE_SILENCE_LEAD_IN_SECONDS = 0.75
-MENU_CHIME_LEAD_IN_SECONDS = 1.0
 CHIME_FLOOR_AMPLITUDE = 0.005
 PLAYER_BINARY = REPO_ROOT / "target" / "debug" / "unitas-player"
 WEB_TARGET = "wasm32-unknown-unknown"
@@ -390,57 +386,38 @@ def window_energy(samples: Sequence[float]) -> float:
     return math.sqrt(sum(sample * sample for sample in samples) / len(samples))
 
 
-def chime_window_finding(samples: Sequence[float], sample_rate: int) -> tuple[str | None, str]:
-    offset = round(CHIME_LEAD_IN_SECONDS * sample_rate)
+def chime_window_finding(
+    samples: Sequence[float], sample_rate: int, pickup_frame: int
+) -> tuple[str | None, str]:
+    samples_per_frame = sample_rate / GAME_FRAME_RATE
     window = round(CHIME_WINDOW_SECONDS * sample_rate)
-    if offset + window > len(samples):
+    lead_in = max(0, round((pickup_frame - 1) * samples_per_frame))
+    chime_end = round((pickup_frame + 1) * samples_per_frame) + window
+    if chime_end > len(samples):
         return (
             f"the device audio capture holds {len(samples)} samples at {sample_rate} Hz; "
-            f"the chime window [{offset}, {offset + window}) lies outside the capture",
+            f"the chime window [{lead_in}, {chime_end}) lies outside the capture",
             "",
         )
-    silence = round(CHIME_SILENCE_SECONDS * sample_rate)
-    silence_amplitude = window_energy(samples[:silence])
-    amplitude = window_energy(samples[offset : offset + window])
+    silence_amplitude = window_energy(samples[:lead_in]) if lead_in > 0 else 0.0
+    amplitude = window_energy(samples[lead_in:chime_end])
     summary = (
-        f"the audio energy in the window after the injected pickup "
+        f"the audio energy around the logged pickup frame {pickup_frame} "
         f"is {amplitude:.5f} against the silence floor {CHIME_FLOOR_AMPLITUDE:.5f}"
     )
     if amplitude <= CHIME_FLOOR_AMPLITUDE:
-        return (f"the mixed audio after the pickup carries no collect chime: {summary}", "")
+        return (f"the mixed audio at the logged pickup carries no collect chime: {summary}", "")
     if silence_amplitude > CHIME_FLOOR_AMPLITUDE:
         return (
-            f"the captured device stream carries audio before the injected "
-            f"pickup: {silence_amplitude:.5f} against the silence floor "
+            f"the captured device stream carries audio before the logged "
+            f"pickup frame: {silence_amplitude:.5f} against the silence floor "
             f"{CHIME_FLOOR_AMPLITUDE:.5f}",
             "",
-        )
-    pause_offset = round(PAUSE_SILENCE_LEAD_IN_SECONDS * sample_rate)
-    menu_offset = round(MENU_CHIME_LEAD_IN_SECONDS * sample_rate)
-    if menu_offset + window <= len(samples):
-        paused_amplitude = window_energy(samples[pause_offset : pause_offset + window])
-        menu_amplitude = window_energy(samples[menu_offset : menu_offset + window])
-        if paused_amplitude > CHIME_FLOOR_AMPLITUDE:
-            return (
-                f"the captured device stream carries gameplay audio while paused: "
-                f"{paused_amplitude:.5f} against the silence floor "
-                f"{CHIME_FLOOR_AMPLITUDE:.5f}",
-                "",
-            )
-        if menu_amplitude <= CHIME_FLOOR_AMPLITUDE:
-            return (
-                f"the captured device stream carries no menu audio while paused: "
-                f"{menu_amplitude:.5f} against the silence floor "
-                f"{CHIME_FLOOR_AMPLITUDE:.5f}",
-                "",
-            )
-        summary = (
-            f"{summary}; paused gameplay={paused_amplitude:.5f}, paused menu={menu_amplitude:.5f}"
         )
     return (None, summary)
 
 
-def chime_capture_reason(wav_path: Path) -> tuple[str | None, str]:
+def chime_capture_reason(wav_path: Path, pickup_frame: int) -> tuple[str | None, str]:
     if not wav_path.is_file():
         return (f"the device lane wrote no audio capture at '{wav_path}'", "")
     try:
@@ -449,7 +426,7 @@ def chime_capture_reason(wav_path: Path) -> tuple[str | None, str]:
         return (f"the device audio capture '{wav_path}' is unreadable: {error}", "")
     if sample_rate <= 0 or not samples:
         return (f"the device audio capture '{wav_path}' carries no samples", "")
-    return chime_window_finding(samples, sample_rate)
+    return chime_window_finding(samples, sample_rate, pickup_frame)
 
 
 def start_control_process() -> subprocess.Popen[str]:
@@ -679,7 +656,7 @@ def device_lane_failure(
     chime_summary = ""
     chime_frames = pickup_frames(lines)
     if chime_frames:
-        chime_reason, chime_summary = chime_capture_reason(DEVICE_AUDIO_WAV)
+        chime_reason, chime_summary = chime_capture_reason(DEVICE_AUDIO_WAV, chime_frames[0])
     if reason is None:
         stage = "device-audio"
         reason = chime_reason

@@ -2,23 +2,30 @@ use std::cell::RefCell;
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
+use unitas_asset::meta::GuidIndex;
 use unitas_asset::particle::ParticleSystemBinding;
 use unitas_asset::project_settings::{
-    Physics2DProjectSettings, PhysicsProjectSettings, QualityLevel, QualitySettings,
-    parse_physics_manager, parse_physics2d_settings, parse_quality_settings,
+    GraphicsSettings, Physics2DProjectSettings, PhysicsProjectSettings, QualityLevel,
+    QualitySettings, parse_graphics_settings, parse_physics_manager, parse_physics2d_settings,
+    parse_quality_settings,
 };
 use unitas_asset::scene::{
     AssembledScene, AudioSourceComponent, CharacterControllerComponent, ParticleBinding,
     PhysicsBinding, RenderBinding, ScriptBinding, TrailBinding, assemble_scene_file_bundle,
 };
 use unitas_asset::trail::TrailRendererBinding;
+use unitas_asset::urp_pipeline::{
+    ImportedRenderPipelineAsset, PipelineAssetKind, UrpPipelineAsset, UrpRenderingMode,
+    import_render_pipeline_asset,
+};
 use unitas_asset::{
     DEFAULT_FIXED_TIMESTEP, DEFAULT_GRAVITY, InputAxis, ProjectIdentity, parse_dynamics_manager,
     parse_input_manager, parse_player_settings, parse_time_manager,
 };
 use unitas_audio::{AudioSourceState, AudioWorld};
 use unitas_core::{
-    EntityId, SceneGraph, Transform, multiply_rotation, normalize_rotation, rotate_vector,
+    EntityId, SceneGraph, Transform, compat::URP_ADDITIONAL_CAMERA_DATA_SCRIPT_GUID,
+    multiply_rotation, normalize_rotation, rotate_vector,
 };
 use unitas_physics::navigation::NavMesh;
 use unitas_physics::particles::ParticleSystem;
@@ -29,6 +36,8 @@ use unitas_physics::{
 };
 use unitas_render::Renderer;
 use unitas_render::ui_pass::GlyphTextPainter;
+
+use crate::presenter::{EffectiveRenderPipeline, effective_render_pipeline};
 
 use self::runtime_physics::{
     BodySpec, body_descs, collect_character_controllers, collect_material_diagnostics,
@@ -66,6 +75,8 @@ mod runtime_input;
 mod runtime_physics;
 #[path = "runtime_render.rs"]
 mod runtime_render;
+#[path = "runtime_tilemap.rs"]
+mod runtime_tilemap;
 #[path = "runtime_ui.rs"]
 mod runtime_ui;
 
@@ -143,6 +154,59 @@ pub struct LoadedScene {
     pub(crate) entity_base: u64,
     pub(crate) entity_count: u64,
     pub(crate) rigid_bodies: std::collections::BTreeSet<EntityId>,
+    pub(crate) cameras: Vec<EntityId>,
+    pub(crate) urp_overlay_cameras: Vec<EntityId>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PipelineSource {
+    QualityOverride,
+    GraphicsDefault,
+    BuiltInDefault,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct QualityPipelineReport {
+    pub level_index: usize,
+    pub name: String,
+    pub source: PipelineSource,
+    pub pipeline: EffectiveRenderPipeline,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UnsupportedRenderFeature {
+    CameraStacking,
+    DeferredRendering,
+    ForwardPlusRendering,
+    Msaa,
+    RendererFeatures,
+}
+
+impl UnsupportedRenderFeature {
+    pub fn name(self) -> &'static str {
+        match self {
+            UnsupportedRenderFeature::CameraStacking => "camera-stacking",
+            UnsupportedRenderFeature::DeferredRendering => "deferred-rendering",
+            UnsupportedRenderFeature::ForwardPlusRendering => "forward-plus-rendering",
+            UnsupportedRenderFeature::Msaa => "msaa",
+            UnsupportedRenderFeature::RendererFeatures => "renderer-features",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct UnsupportedFeatureReport {
+    pub camera: String,
+    pub level_index: usize,
+    pub level_name: String,
+    pub feature: UnsupportedRenderFeature,
+    pub detail: String,
+}
+
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct RenderPipelineReport {
+    pub levels: Vec<QualityPipelineReport>,
+    pub unsupported: Vec<UnsupportedFeatureReport>,
 }
 
 impl LoadedScene {
@@ -277,6 +341,8 @@ pub struct Runtime {
     pub(crate) physics_settings: Option<PhysicsProjectSettings>,
     pub(crate) physics_2d_settings: Option<Physics2DProjectSettings>,
     pub(crate) quality_settings: QualitySettings,
+    pub(crate) graphics_settings: Option<GraphicsSettings>,
+    pub(crate) pipeline_assets: Vec<ImportedRenderPipelineAsset>,
     pub(crate) collision_payloads: HashMap<(u64, u64), CollisionPayload>,
     pub(crate) collision_payloads_2d: HashMap<(u64, u64), CollisionPayload2D>,
     pub(crate) callbacks: Option<Callbacks>,
@@ -333,6 +399,8 @@ impl Runtime {
             physics_settings: None,
             physics_2d_settings: None,
             quality_settings: QualitySettings::default(),
+            graphics_settings: None,
+            pipeline_assets: Vec::new(),
             collision_payloads: HashMap::new(),
             collision_payloads_2d: HashMap::new(),
             callbacks: None,
@@ -423,6 +491,7 @@ impl Runtime {
             &assembled.render,
             entity_base,
             &graph,
+            path,
         );
         let audio_sources = self.register_scene_audio_sources(
             assembled.audio_bindings,
@@ -449,6 +518,24 @@ impl Runtime {
         );
         let entity_count = graph.len() as u64;
         let rigid_bodies = rigidbodies.keys().copied().collect();
+        let cameras = assembled
+            .render
+            .cameras
+            .iter()
+            .map(|camera| EntityId::new(entity_base + camera.entity.as_u64()))
+            .collect();
+        let urp_overlay_cameras = assembled
+            .scripts
+            .iter()
+            .filter(|binding| {
+                binding.guid.trim() == URP_ADDITIONAL_CAMERA_DATA_SCRIPT_GUID
+                    && binding
+                        .fields
+                        .get("m_RenderType")
+                        .is_some_and(|value| value == "1")
+            })
+            .map(|binding| EntityId::new(entity_base + binding.entity.as_u64()))
+            .collect();
         let name = scene_name_from_path(path);
         Ok(LoadedScene {
             name,
@@ -467,6 +554,8 @@ impl Runtime {
             entity_base,
             entity_count,
             rigid_bodies,
+            cameras,
+            urp_overlay_cameras,
         })
     }
 
@@ -490,6 +579,7 @@ impl Runtime {
         render: &RenderBinding,
         entity_base: u64,
         graph: &SceneGraph,
+        path: &Path,
     ) -> Vec<(EntityId, String)> {
         let mut diagnostics = collect_material_diagnostics(physics, entity_base);
         diagnostics.extend(
@@ -497,7 +587,7 @@ impl Runtime {
                 .into_iter()
                 .map(|(entity, text)| (EntityId::new(entity_base + entity.as_u64()), text)),
         );
-        diagnostics.extend(self.populate_render_world(render, entity_base, graph));
+        diagnostics.extend(self.populate_render_world(render, entity_base, graph, path));
         diagnostics
     }
 
@@ -793,6 +883,8 @@ impl Runtime {
         self.physics_settings = settings.physics;
         self.physics_2d_settings = settings.physics_2d;
         self.quality_settings = settings.quality.clone();
+        self.graphics_settings = settings.graphics.clone();
+        self.pipeline_assets = settings.pipeline_assets.clone();
         if let Some(physics) = settings.physics.as_ref() {
             let matrix = layer_matrix_of(physics);
             self.physics.set_layer_collision_matrix_3d(&matrix);
@@ -825,6 +917,154 @@ impl Runtime {
             })
             .unwrap_or(self.quality_settings.current_quality);
         self.quality_settings.levels.get(index)
+    }
+
+    pub fn graphics_settings(&self) -> Option<&GraphicsSettings> {
+        self.graphics_settings.as_ref()
+    }
+
+    pub fn render_pipeline_assets(&self) -> &[ImportedRenderPipelineAsset] {
+        &self.pipeline_assets
+    }
+
+    pub fn render_pipeline_report(&self) -> RenderPipelineReport {
+        let mut levels = Vec::with_capacity(self.quality_settings.levels.len());
+        let mut unsupported = Vec::new();
+        for (index, level) in self.quality_settings.levels.iter().enumerate() {
+            let source = if level.custom_render_pipeline_guid.is_some() {
+                PipelineSource::QualityOverride
+            } else if self
+                .graphics_settings
+                .as_ref()
+                .and_then(|settings| settings.custom_render_pipeline_guid())
+                .is_some()
+            {
+                PipelineSource::GraphicsDefault
+            } else {
+                PipelineSource::BuiltInDefault
+            };
+            let pipeline = effective_render_pipeline(self, index);
+            if let EffectiveRenderPipeline::Urp { asset } = &pipeline {
+                self.report_urp_unsupported(index, &level.name, asset, &mut unsupported);
+            }
+            levels.push(QualityPipelineReport {
+                level_index: index,
+                name: level.name.clone(),
+                source,
+                pipeline,
+            });
+        }
+        RenderPipelineReport {
+            levels,
+            unsupported,
+        }
+    }
+
+    fn report_urp_unsupported(
+        &self,
+        level_index: usize,
+        level_name: &str,
+        asset: &UrpPipelineAsset,
+        unsupported: &mut Vec<UnsupportedFeatureReport>,
+    ) {
+        let cameras = self.camera_names_with_overlay();
+        let targets: Vec<(String, bool)> = if cameras.is_empty() {
+            vec![(String::from("*"), false)]
+        } else {
+            cameras
+        };
+        let renderer = usize::try_from(asset.default_renderer_index)
+            .ok()
+            .and_then(|index| asset.renderer_data_guids.get(index))
+            .and_then(|guid| guid.as_ref())
+            .and_then(|guid| {
+                self.pipeline_assets
+                    .iter()
+                    .find(|imported| &imported.guid == guid)
+            })
+            .and_then(|imported| match &imported.kind {
+                PipelineAssetKind::UrpRendererData(data) => Some(data),
+                _ => None,
+            });
+        for (camera, is_overlay) in &targets {
+            if asset.msaa_sample_count > 1 {
+                unsupported.push(UnsupportedFeatureReport {
+                    camera: camera.clone(),
+                    level_index,
+                    level_name: level_name.to_string(),
+                    feature: UnsupportedRenderFeature::Msaa,
+                    detail: format!(
+                        "URP asset requests MSAA x{} and the renderer has no MSAA support",
+                        asset.msaa_sample_count
+                    ),
+                });
+            }
+            if let Some(data) = renderer {
+                match data.rendering_mode {
+                    UrpRenderingMode::Deferred => {
+                        unsupported.push(UnsupportedFeatureReport {
+                            camera: camera.clone(),
+                            level_index,
+                            level_name: level_name.to_string(),
+                            feature: UnsupportedRenderFeature::DeferredRendering,
+                            detail: String::from(
+                                "URP Deferred rendering is not implemented for this renderer",
+                            ),
+                        });
+                    }
+                    UrpRenderingMode::ForwardPlus => {
+                        unsupported.push(UnsupportedFeatureReport {
+                            camera: camera.clone(),
+                            level_index,
+                            level_name: level_name.to_string(),
+                            feature: UnsupportedRenderFeature::ForwardPlusRendering,
+                            detail: String::from(
+                                "URP Forward+ rendering is not implemented for this renderer",
+                            ),
+                        });
+                    }
+                    _ => {}
+                }
+                if !data.renderer_feature_guids.is_empty() {
+                    unsupported.push(UnsupportedFeatureReport {
+                        camera: camera.clone(),
+                        level_index,
+                        level_name: level_name.to_string(),
+                        feature: UnsupportedRenderFeature::RendererFeatures,
+                        detail: format!(
+                            "{} renderer feature reference(s) on the default renderer are not executed",
+                            data.renderer_feature_guids.len()
+                        ),
+                    });
+                }
+            }
+            if *is_overlay {
+                unsupported.push(UnsupportedFeatureReport {
+                    camera: camera.clone(),
+                    level_index,
+                    level_name: level_name.to_string(),
+                    feature: UnsupportedRenderFeature::CameraStacking,
+                    detail: String::from(
+                        "URP overlay camera stacking is not implemented; the overlay camera does not composite",
+                    ),
+                });
+            }
+        }
+    }
+
+    fn camera_names_with_overlay(&self) -> Vec<(String, bool)> {
+        let mut cameras = Vec::new();
+        for scene in &self.scenes {
+            for entity in &scene.cameras {
+                let name = scene.graph.entity(*entity).map_or_else(
+                    || format!("camera-{}", entity.as_u64()),
+                    |entry| entry.name().to_string(),
+                );
+                let is_overlay = scene.urp_overlay_cameras.contains(entity);
+                cameras.push((name, is_overlay));
+            }
+        }
+        cameras
     }
 
     pub fn project_identity(&self) -> &ProjectIdentity {
@@ -2163,6 +2403,8 @@ fn discover_project_settings(scene_path: &Path) -> DiscoveredProject {
             physics: None,
             physics_2d: None,
             quality: QualitySettings::default(),
+            graphics: None,
+            pipeline_assets: Vec::new(),
         };
     };
     let fixed_timestep = match parse_time_manager(&settings_dir.join("TimeManager.asset")) {
@@ -2193,6 +2435,11 @@ fn discover_project_settings(scene_path: &Path) -> DiscoveredProject {
         Ok(Some(settings)) => settings,
         Ok(None) | Err(_) => QualitySettings::default(),
     };
+    let graphics = match parse_graphics_settings(&settings_dir.join("GraphicsSettings.asset")) {
+        Ok(Some(settings)) => Some(settings),
+        Ok(None) | Err(_) => None,
+    };
+    let pipeline_assets = resolve_pipeline_assets(&settings_dir, &graphics, &quality);
     DiscoveredProject {
         fixed_timestep,
         gravity,
@@ -2201,7 +2448,58 @@ fn discover_project_settings(scene_path: &Path) -> DiscoveredProject {
         physics,
         physics_2d,
         quality,
+        graphics,
+        pipeline_assets,
     }
+}
+
+fn resolve_pipeline_assets(
+    settings_dir: &Path,
+    graphics: &Option<GraphicsSettings>,
+    quality: &QualitySettings,
+) -> Vec<ImportedRenderPipelineAsset> {
+    let root = settings_dir.parent().unwrap_or(settings_dir);
+    let assets_root = root.join("Assets");
+    let index_root = if assets_root.is_dir() {
+        assets_root
+    } else {
+        root.to_path_buf()
+    };
+    let Ok(index) = GuidIndex::build(&index_root) else {
+        return Vec::new();
+    };
+    let mut queue: Vec<String> = graphics
+        .as_ref()
+        .and_then(|settings| settings.custom_render_pipeline_guid())
+        .into_iter()
+        .chain(
+            quality
+                .levels
+                .iter()
+                .filter_map(|level| level.custom_render_pipeline_guid.clone()),
+        )
+        .collect();
+    let mut imported_assets: Vec<ImportedRenderPipelineAsset> = Vec::new();
+    while let Some(guid) = queue.pop() {
+        if imported_assets.iter().any(|asset| asset.guid == guid) {
+            continue;
+        }
+        let trimmed = guid.trim();
+        let Some(path) = index
+            .get(trimmed)
+            .or_else(|| index.get(&trimmed.to_ascii_lowercase()))
+        else {
+            continue;
+        };
+        let Ok(imported) = import_render_pipeline_asset(&guid, path) else {
+            continue;
+        };
+        if let PipelineAssetKind::UrpPipelineAsset(asset) = &imported.kind {
+            queue.extend(asset.renderer_data_guids.iter().flatten().cloned());
+        }
+        imported_assets.push(imported);
+    }
+    imported_assets
 }
 
 struct DiscoveredProject {
@@ -2212,6 +2510,8 @@ struct DiscoveredProject {
     physics: Option<PhysicsProjectSettings>,
     physics_2d: Option<Physics2DProjectSettings>,
     quality: QualitySettings,
+    graphics: Option<GraphicsSettings>,
+    pipeline_assets: Vec<ImportedRenderPipelineAsset>,
 }
 
 fn map_input_axes(axes: Vec<InputAxis>) -> Vec<AxisConfig> {

@@ -1,0 +1,117 @@
+{
+  "name": "scene-edit-restore",
+  "scene": "samples/roll-a-ball/Assets/Scenes/RollABall.unity",
+  "steps": [
+    {
+      "editor_file_digest": {
+        "path": "samples/roll-a-ball/Assets/Scenes/RollABall.unity"
+      }
+    },
+    {
+      "editor_tool": {
+        "tool": "scene.open",
+        "arguments": {
+          "path": "Assets/Scenes/RollABall.unity"
+        }
+      }
+    },
+    {
+      "editor_tool": {
+        "tool": "scene.create_object",
+        "arguments": {
+          "name": "LaneProbe"
+        }
+      }
+    },
+    {
+      "editor_tool": {
+        "tool": "scene.save",
+        "arguments": {}
+      }
+    },
+    {
+      "editor_assert_file_changed": {
+        "path": "samples/roll-a-ball/Assets/Scenes/RollABall.unity"
+      }
+    },
+    {
+      "editor_tool": {
+        "tool": "scene.destroy_object",
+        "arguments": {
+          "fileId": 1000000534
+        }
+      }
+    },
+    {
+      "editor_tool": {
+        "tool": "scene.save",
+        "arguments": {}
+      }
+    },
+    {
+      "editor_assert_file_unchanged": {
+        "path": "samples/roll-a-ball/Assets/Scenes/RollABall.unity"
+      }
+    },
+    {
+      "editor_tool": {
+        "tool": "scene.set_property",
+        "arguments": {
+          "fileId": 1000000092,
+          "path": "m_LocalPosition.x",
+          "value": "3.5"
+        }
+      }
+    },
+    {
+      "editor_tool": {
+        "tool": "scene.save",
+        "arguments": {}
+      }
+    },
+    {
+      "editor_assert_file_changed": {
+        "path": "samples/roll-a-ball/Assets/Scenes/RollABall.unity"
+      }
+    },
+    {
+      "editor_tool": {
+        "tool": "editor.undo",
+        "arguments": {}
+      }
+    },
+    {
+      "editor_tool": {
+        "tool": "scene.save",
+        "arguments": {}
+      }
+    },
+    {
+      "editor_assert_file_unchanged": {
+        "path": "samples/roll-a-ball/Assets/Scenes/RollABall.unity"
+      }
+    },
+    {
+      "load_scene": {
+        "path": "samples/roll-a-ball/Assets/Scenes/RollABall.unity",
+        "mode": "single"
+      }
+    },
+    {
+      "tick": {
+        "frames": 2,
+        "delta_seconds": 0.02
+      }
+    }
+  ],
+  "checkpoints": [
+    {
+      "id": "pickup-restored-to-its-original-position",
+      "after_step": 1,
+      "kind": "transform_position",
+      "object": "Pickup_1",
+      "expected": [3, 0.75, 3],
+      "tolerance": 0.05
+    }
+  ]
+}

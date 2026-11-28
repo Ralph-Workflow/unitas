@@ -45,10 +45,11 @@ pub use player_loop::{
     PlayerLoopSystem,
 };
 pub use presenter::{
-    DisplaySettingsState, FrameInfo, GpuCameraBinding, GpuFramePresenter, GpuMeshBinding,
-    GpuWindowPresenter, WindowError, frame_pacing_interval, scene_gpu_meshes,
-    set_runtime_quality_level, shadow_settings_for_quality, shadow_settings_for_runtime,
-    transform_to_mat4, unitas_runtime_display_full_screen, unitas_runtime_display_height,
+    DisplaySettingsState, EffectiveRenderPipeline, FrameInfo, GpuCameraBinding, GpuFramePresenter,
+    GpuMeshBinding, GpuWindowPresenter, WindowError, effective_render_pipeline,
+    frame_pacing_interval, scene_gpu_meshes, set_runtime_quality_level,
+    shadow_settings_for_quality, shadow_settings_for_runtime, transform_to_mat4,
+    unitas_runtime_display_full_screen, unitas_runtime_display_height,
     unitas_runtime_display_quality_level, unitas_runtime_display_quit_requested,
     unitas_runtime_display_request_quit, unitas_runtime_display_reset,
     unitas_runtime_display_set_full_screen, unitas_runtime_display_set_quality_level,
@@ -59,7 +60,9 @@ pub use presenter::{
 };
 pub use runtime::{
     CONTACT_PHASE_2D_FLAG, Callbacks, DEFAULT_MAXIMUM_DELTA_TIME, LoadSceneMode, LoadedScene,
-    Runtime, ScriptInstance, unitas_runtime_bind_destroy_channel, unitas_runtime_mark_destroyed,
+    PipelineSource, QualityPipelineReport, RenderPipelineReport, Runtime, ScriptInstance,
+    UnsupportedFeatureReport, UnsupportedRenderFeature, unitas_runtime_bind_destroy_channel,
+    unitas_runtime_mark_destroyed,
 };
 pub use unitas_physics::BodyRole;
 pub use video::{

@@ -2800,6 +2800,113 @@ mod tests {
     }
 
     #[test]
+    fn shipped_music_loop_decodes_seamless_and_loops_sample_accurately_across_mix_buffer_sizes(
+    ) -> Result<(), AudioError> {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../samples/marble-rush/Assets/Audio/MusicLoop.wav");
+        let bytes = std::fs::read(&path).map_err(|err| AudioError::Io(err.to_string()))?;
+        let clip = parse_wav(&bytes)?;
+        assert_eq!(clip.channels, 2);
+        assert_eq!(clip.sample_rate, 44100);
+        assert_eq!(clip.frame_count(), 88200);
+        let frame_count = clip.frame_count();
+        let expected = clip.samples.clone();
+        let seam = (expected[(frame_count - 1) * 2] - expected[0])
+            .abs()
+            .max((expected[(frame_count - 1) * 2 + 1] - expected[1]).abs());
+        assert!(seam < 1e-3, "shipped loop seam discontinuity {seam}");
+        assert!(expected.iter().any(|sample| sample.abs() > 0.1));
+
+        let mut world = AudioWorld::new();
+        let clip_id = world.register_clip(clip);
+        let entity = EntityId::new(71);
+        world.ensure_source(entity);
+        world.set_source_clip(entity, Some(clip_id));
+        world.set_source_group(entity, AudioMixerGroup::Music);
+        world.set_looping(entity, true);
+        world.play(entity, false);
+
+        let mut bus = 1.0f32;
+        let mut absolute = 0usize;
+        let chunk_sizes = [7usize, 512, 44100, 333, 1024, 88200];
+        for (index, chunk) in chunk_sizes.iter().enumerate() {
+            if index == chunk_sizes.len() - 1 {
+                world.set_group_volume(AudioMixerGroup::Music, 0.25);
+                bus = 0.25;
+            }
+            let mixed = world.mix(*chunk);
+            for frame in 0..*chunk {
+                let expected_frame = (absolute + frame) % frame_count;
+                for channel in 0..2 {
+                    let actual = mixed[frame * OUTPUT_CHANNELS + channel];
+                    let wanted = expected[expected_frame * 2 + channel] * bus;
+                    assert!(
+                        (actual - wanted).abs() < 1e-6,
+                        "frame {} channel {channel}: actual {actual} wanted {wanted}",
+                        absolute + frame
+                    );
+                }
+            }
+            absolute += *chunk;
+        }
+        assert!(absolute > frame_count, "the mix must span the loop seam");
+        assert_eq!(world.source_state(entity), AudioSourceState::Playing);
+        let duration = frame_count as f64 / 44100.0;
+        assert!(world.source_time(entity) < duration);
+        Ok(())
+    }
+
+    #[cfg(feature = "device")]
+    #[test]
+    fn looping_music_reaches_the_device_capture_without_a_seam_gap() -> Result<(), AudioError> {
+        use crate::output::{arm_capture, FrameHandoff};
+
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../samples/marble-rush/Assets/Audio/MusicLoop.wav");
+        let bytes = std::fs::read(&path).map_err(|err| AudioError::Io(err.to_string()))?;
+        let clip = parse_wav(&bytes)?;
+        let frame_count = clip.frame_count();
+        let expected = clip.samples.clone();
+
+        let mut world = AudioWorld::new();
+        let clip_id = world.register_clip(clip);
+        let entity = EntityId::new(72);
+        world.ensure_source(entity);
+        world.set_source_clip(entity, Some(clip_id));
+        world.set_source_group(entity, AudioMixerGroup::Music);
+        world.set_looping(entity, true);
+        world.play(entity, false);
+
+        let handoff = FrameHandoff::new(1 << 20);
+        let capture = arm_capture(3);
+        handoff.enable_capture(capture.clone(), 44100);
+        let mut total = 0usize;
+        for chunk in [44100usize, 512, 44100] {
+            let mut mixed = vec![0.0f32; chunk * OUTPUT_CHANNELS];
+            world.mix_into(&mut mixed);
+            let report = handoff.push(&mixed);
+            assert_eq!(report.dropped_frames, 0);
+            total += chunk;
+        }
+        assert!(total > frame_count && total < frame_count * 2);
+        assert_eq!(capture.sample_rate(), 44100);
+
+        let captured = capture.mono_samples();
+        assert_eq!(captured.len(), total);
+        for (frame, actual) in captured.iter().enumerate() {
+            let expected_frame = frame % frame_count;
+            let wanted = (expected[expected_frame * 2] + expected[expected_frame * 2 + 1]) * 0.5;
+            assert!(
+                (actual - wanted).abs() < 1e-6,
+                "captured frame {frame}: actual {actual} wanted {wanted}"
+            );
+        }
+        assert!(captured.iter().any(|sample| sample.abs() > 0.1));
+        assert_eq!(world.source_state(entity), AudioSourceState::Playing);
+        Ok(())
+    }
+
+    #[test]
     fn logarithmic_linear_and_custom_rolloff_curves_follow_unity_distance_attenuation() {
         let mut world = AudioWorld::new();
         world.set_listener([0.0, 0.0, 0.0], [0.0, 0.0, 1.0]);

@@ -119,6 +119,7 @@ pub struct QualityLevel {
     pub anti_aliasing: u32,
     pub v_sync_count: u32,
     pub lod_bias: f64,
+    pub custom_render_pipeline_guid: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -344,6 +345,26 @@ impl GraphicsSettings {
 
     pub fn custom_render_pipeline_guid(&self) -> Option<String> {
         self.custom_render_pipeline_guid.clone()
+    }
+
+    pub fn set_custom_render_pipeline_guid(
+        &mut self,
+        guid: Option<&str>,
+    ) -> Result<(), ProjectSettingsError> {
+        self.custom_render_pipeline_guid = guid.map(str::to_string);
+        if let (Some(stream), Some(guid)) = (&mut self.stream, guid) {
+            let entries = root_mapping_mut(stream, "GraphicsSettings")?;
+            let node = Node::Mapping(vec![
+                (
+                    String::from("fileID"),
+                    Node::Scalar(String::from("11400000")),
+                ),
+                (String::from("guid"), Node::Scalar(guid.to_string())),
+                (String::from("type"), Node::Scalar(String::from("2"))),
+            ]);
+            set_mapping_node(entries, "m_CustomRenderPipeline", node);
+        }
+        Ok(())
     }
 
     pub fn transparency_sort_mode(&self) -> i64 {
@@ -1831,6 +1852,13 @@ pub fn parse_quality_settings_stream(
             anti_aliasing: parse_optional_u32(entry, "antiAliasing", 0, "QualitySettings")?,
             v_sync_count: parse_optional_u32(entry, "vSyncCount", 0, "QualitySettings")?,
             lod_bias: parse_optional_f64(entry, "lodBias", 1.0, "QualitySettings")?,
+            custom_render_pipeline_guid: entry
+                .get("customRenderPipeline")
+                .and_then(|node| node.get("guid"))
+                .and_then(Node::as_str)
+                .map(str::trim)
+                .filter(|guid| !guid.is_empty())
+                .map(str::to_string),
         });
     }
 

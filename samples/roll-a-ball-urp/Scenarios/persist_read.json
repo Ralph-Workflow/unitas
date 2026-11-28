@@ -1,0 +1,25 @@
+{
+  "name": "persist_read",
+  "steps": [
+    {
+      "load_scene": {
+        "path": "Assets/Scenes/RollABall.unity"
+      }
+    },
+    {
+      "tick": {
+        "frames": 5,
+        "delta_seconds": 0.016666666666666666
+      }
+    }
+  ],
+  "checkpoints": [
+    {
+      "id": "records_restored",
+      "after_step": 1,
+      "kind": "log",
+      "severity": "log",
+      "contains": "Records loaded medals arena1=gold bestTime 4.900 bestScore 50 arenas arena1,arena2 quality high bytes 160"
+    }
+  ]
+}

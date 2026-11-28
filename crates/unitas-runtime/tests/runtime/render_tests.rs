@@ -745,3 +745,180 @@ fn marble_rush_capture_draws_the_pickup_with_its_material_maps() -> Result<(), B
     );
     Ok(())
 }
+
+const TILEMAP_SCENE_YAML: &str = "%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!1 &100
+GameObject:
+  m_Name: Main Camera
+  m_Layer: 0
+  m_IsActive: 1
+--- !u!4 &101
+Transform:
+  m_GameObject: {fileID: 100}
+  m_LocalPosition: {x: 0, y: 0, z: -10}
+  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_Children: []
+  m_Father: {fileID: 0}
+--- !u!20 &102
+Camera:
+  m_GameObject: {fileID: 100}
+  orthographic: 1
+  orthographic size: 5.625
+  field of view: 60
+  near clip plane: 0.1
+  far clip plane: 100
+  m_BackGroundColor: {r: 0, g: 0, b: 0, a: 1}
+--- !u!1 &200
+GameObject:
+  m_Name: Ground
+  m_Layer: 0
+  m_IsActive: 1
+--- !u!4 &201
+Transform:
+  m_GameObject: {fileID: 200}
+  m_LocalPosition: {x: 0, y: -0.5, z: 0}
+  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_Children: []
+  m_Father: {fileID: 0}
+--- !u!1839735485 &202
+Tilemap:
+  m_GameObject: {fileID: 200}
+  m_TileAssetArray:
+  - m_RefCount: 2
+    m_TileAsset: {fileID: 11400000, guid: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb, type: 2}
+  m_TileAnchor: {x: 0.5, y: 0.5}
+  m_SortingLayer: 2
+  m_SortingOrder: -1
+  m_Tiles:
+  - m_X: 0
+    m_Y: -1
+    m_Z: 0
+    m_TileIndex: 0
+  - m_X: 1
+    m_Y: -1
+    m_Z: 0
+    m_TileIndex: 0
+";
+
+const TILE_ASSET_YAML: &str = "%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_GameObject: {fileID: 0}
+  m_Script: {fileID: 11500000, guid: dddddddddddddddddddddddddddddddd, type: 3}
+  m_Name: ground_tile
+  m_Sprite: {fileID: 21300000, guid: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa, type: 3}
+  m_Color: {r: 0.8, g: 0.9, b: 1.0, a: 1.0}
+  m_ColliderType: 2
+";
+
+fn write_tilemap_project(name: &str) -> Result<PathBuf, Box<dyn Error>> {
+    let assets = std::env::temp_dir()
+        .join(format!(
+            "unitas_tilemap_render_{}_{}",
+            std::process::id(),
+            name
+        ))
+        .join("Assets");
+    let scenes = assets.join("Scenes");
+    let tiles = assets.join("Tiles");
+    let sprites = assets.join("Sprites");
+    std::fs::create_dir_all(&scenes)?;
+    std::fs::create_dir_all(&tiles)?;
+    std::fs::create_dir_all(&sprites)?;
+    std::fs::write(
+        sprites.join("ground.tga.meta"),
+        "fileFormatVersion: 2\nguid: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\nTextureImporter:\n  textureType: 8\n  sRGBTexture: 1\n  maxTextureSize: 2048\n  mipmapEnabled: 0\n  spriteMode: 1\n  alphaIsTransparency: 0\n  wrapMode: 0\n  filterMode: 1\n",
+    )?;
+    let mut tga = vec![0u8; 18 + 16 * 16 * 3];
+    tga[2] = 2;
+    tga[12..14].copy_from_slice(&16u16.to_le_bytes());
+    tga[14..16].copy_from_slice(&16u16.to_le_bytes());
+    tga[16] = 24;
+    tga[17] = 0x20;
+    for chunk in tga[18..].chunks_exact_mut(3) {
+        chunk[0] = 200;
+        chunk[1] = 90;
+        chunk[2] = 40;
+    }
+    std::fs::write(sprites.join("ground.tga"), tga)?;
+    std::fs::write(
+        tiles.join("ground_tile.asset.meta"),
+        "fileFormatVersion: 2\nguid: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\n",
+    )?;
+    std::fs::write(tiles.join("ground_tile.asset"), TILE_ASSET_YAML)?;
+    let scene = scenes.join("TilemapScene.unity");
+    std::fs::write(&scene, TILEMAP_SCENE_YAML)?;
+    Ok(scene)
+}
+
+#[test]
+fn tilemap_cells_draw_through_the_sorted_sprite_path() -> Result<(), Box<dyn Error>> {
+    let scene = write_tilemap_project("sorted")?;
+    let mut runtime = Runtime::new()?;
+    runtime.load_scene(&scene)?;
+    let sprites = runtime.sprite_instances();
+    assert_eq!(
+        sprites.len(),
+        2,
+        "the two tilemap cells must draw as sprites, got {}",
+        sprites.len()
+    );
+    for sprite in &sprites {
+        assert_eq!(sprite.sorting_layer, 2);
+        assert_eq!(sprite.sorting_order, -1);
+        assert_eq!((sprite.texture.width, sprite.texture.height), (16, 16));
+        assert!(
+            (sprite.color[0] - 0.8).abs() < 1e-6
+                && (sprite.color[1] - 0.9).abs() < 1e-6
+                && (sprite.color[2] - 1.0).abs() < 1e-6,
+            "the tile color must reach the sprite draw"
+        );
+        assert!(
+            (sprite.model.get(0, 0) - 1.0).abs() < 1e-5,
+            "a tile cell must fill one world unit of width"
+        );
+    }
+    let mut translations: Vec<(f32, f32)> = sprites
+        .iter()
+        .map(|sprite| (sprite.model.get(3, 0), sprite.model.get(3, 1)))
+        .collect();
+    translations.sort_by(|a, b| a.0.total_cmp(&b.0));
+    let expected = [(0.5, -1.0), (1.5, -1.0)];
+    for (observed, want) in translations.iter().zip(expected.iter()) {
+        assert!(
+            (observed.0 - want.0).abs() < 1e-4 && (observed.1 - want.1).abs() < 1e-4,
+            "tile translation {observed:?} must land on the grid cell {want:?}"
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn platformer_main_camera_uses_the_pixel_perfect_orthographic_size() -> Result<(), Box<dyn Error>> {
+    let scene = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../samples/2d-platformer/Assets/Scenes/Rootway.unity");
+    let mut runtime = Runtime::new()?;
+    runtime.load_scene(&scene)?;
+    let camera = runtime
+        .scene_camera()
+        .ok_or("the platformer scene must expose a camera")?;
+    assert!(camera.params.orthographic);
+    assert!(
+        (camera.params.orthographic_size - 5.625).abs() < 1e-4,
+        "16 PPU with 180 vertical pixels gives orthographic size 5.625, got {}",
+        camera.params.orthographic_size
+    );
+    let sprites = runtime.sprite_instances();
+    assert!(
+        sprites
+            .iter()
+            .any(|sprite| sprite.sorting_layer == 2 && sprite.sorting_order == -1),
+        "the Rootway tilemap cells must draw on the Tiles sorting layer"
+    );
+    Ok(())
+}

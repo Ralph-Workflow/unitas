@@ -176,11 +176,13 @@ pub struct RenderSprite {
     pub enabled: bool,
     pub draw_mode: SpriteDrawMode,
     pub border: [f32; 4],
-    slices: Option<SpriteSlices>,
+    pub local_offset: [f32; 2],
+    pub world_size: Option<[f32; 2]>,
+    pub(crate) slices: Option<SpriteSlices>,
 }
 
 #[derive(Clone, Debug)]
-struct SpriteSlices {
+pub(crate) struct SpriteSlices {
     source: Arc<Image>,
     mode: SpriteDrawMode,
     parts: Vec<Arc<Image>>,
@@ -205,8 +207,8 @@ pub struct RenderWorld {
     lights: HashMap<u64, RenderLight>,
     lights_2d: HashMap<u64, RenderLight2D>,
     ambient: [f32; 3],
-    sprites: Vec<RenderSprite>,
-    sprite_asset_paths: HashMap<String, PathBuf>,
+    pub(crate) sprites: Vec<RenderSprite>,
+    pub(crate) sprite_asset_paths: HashMap<String, PathBuf>,
     sprite_texture_cache: HashMap<PathBuf, Arc<Image>>,
     camera_defaults: HashMap<EntityId, RenderCameraParams>,
     light_defaults: HashMap<EntityId, RenderLight>,
@@ -566,12 +568,14 @@ impl Runtime {
         binding: &RenderBinding,
         entity_base: u64,
         graph: &SceneGraph,
+        scene_path: &Path,
     ) -> Vec<(EntityId, String)> {
         let mut diagnostics = Vec::new();
         self.populate_scene_cameras(&binding.cameras, entity_base);
         self.populate_scene_renderers(&binding.renderers, entity_base, &mut diagnostics);
         self.populate_scene_sprites(&binding.sprites, entity_base, &mut diagnostics);
         self.populate_scene_lights(&binding.lights, entity_base, graph, &mut diagnostics);
+        diagnostics.extend(self.populate_scene_tilemaps(scene_path, entity_base));
         diagnostics
     }
 
@@ -690,6 +694,8 @@ impl Runtime {
                 enabled: sprite.enabled,
                 draw_mode: sprite.draw_mode,
                 border: sprite_border_from_meta(sprite.sprite_path.as_deref()),
+                local_offset: [0.0, 0.0],
+                world_size: None,
                 slices: None,
             });
         }
@@ -1024,10 +1030,12 @@ impl Runtime {
             let Some(transform) = self.entity_transform(adjusted.entity) else {
                 continue;
             };
-            adjusted.size = [
-                texture.width as f32 / SPRITE_PIXELS_PER_UNIT,
-                texture.height as f32 / SPRITE_PIXELS_PER_UNIT,
-            ];
+            if adjusted.world_size.is_none() {
+                adjusted.size = [
+                    texture.width as f32 / SPRITE_PIXELS_PER_UNIT,
+                    texture.height as f32 / SPRITE_PIXELS_PER_UNIT,
+                ];
+            }
             if adjusted.draw_mode == SpriteDrawMode::Simple {
                 sprites.push(unitas_render::Sprite {
                     texture,
@@ -1181,6 +1189,8 @@ impl Runtime {
                 enabled: true,
                 draw_mode: SpriteDrawMode::Simple,
                 border,
+                local_offset: [0.0, 0.0],
+                world_size: None,
                 slices: None,
             }),
         }
@@ -1288,7 +1298,7 @@ impl Runtime {
         }
     }
 
-    fn register_sprite_asset_root(&mut self, asset_path: &Path) {
+    pub(crate) fn register_sprite_asset_root(&mut self, asset_path: &Path) {
         let Some(parent) = asset_path.parent() else {
             return;
         };
@@ -1320,7 +1330,7 @@ impl Runtime {
         }
     }
 
-    fn load_cached_sprite_texture(&self, path: Option<&Path>) -> Option<Arc<Image>> {
+    pub(crate) fn load_cached_sprite_texture(&self, path: Option<&Path>) -> Option<Arc<Image>> {
         let path = path?;
         if let Some(cached) = self.render.sprite_texture_cache.get(path) {
             return Some(Arc::clone(cached));
@@ -1756,7 +1766,10 @@ fn sprite_model(transform: &Transform, sprite: &RenderSprite) -> Mat4 {
         0.0,
         1.0,
     ]);
-    crate::presenter::transform_to_mat4(transform) * scale
+    let mut offset = Mat4::identity();
+    offset.set(3, 0, sprite.local_offset[0]);
+    offset.set(3, 1, sprite.local_offset[1]);
+    crate::presenter::transform_to_mat4(transform) * offset * scale
 }
 
 fn sprite_part_model(

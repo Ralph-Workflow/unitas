@@ -27,6 +27,7 @@ pub mod texture;
 pub mod trail;
 pub mod trust;
 pub mod unity_yaml;
+pub mod urp_pipeline;
 pub mod video_import;
 
 pub use collision::{CollisionCookError, CollisionMesh};
@@ -65,3 +66,9 @@ pub use scene::{
     AUDIO_CLIP_CLASS, AUDIO_SOURCE_CLASS, MESH_COLLIDER_CLASS,
 };
 pub use unity_yaml::{AssetError, Document, Header, Node, Stream, YamlError, YamlNode};
+pub use urp_pipeline::{
+    classify_pipeline_asset_stream, import_render_pipeline_asset, parse_urp_pipeline_asset,
+    parse_urp_pipeline_asset_stream, parse_urp_renderer_data, parse_urp_renderer_data_stream,
+    ImportedRenderPipelineAsset, PipelineAssetKind, UrpPipelineAsset, UrpPipelineError,
+    UrpRendererData, UrpRenderingMode,
+};

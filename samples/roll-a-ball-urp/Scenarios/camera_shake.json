@@ -1,0 +1,161 @@
+{
+  "name": "camera_shake",
+  "steps": [
+    { "load_scene": { "path": "Assets/Scenes/RollABall.unity" } },
+    { "tick": { "frames": 2, "delta_seconds": 0.016666666666666666 } },
+    { "inject_key": { "key": "W", "pressed": true } },
+    { "inject_key": { "key": "Space", "pressed": true } },
+    { "tick": { "frames": 2, "delta_seconds": 0.016666666666666666 } },
+    { "inject_key": { "key": "Space", "pressed": false } },
+    { "tick": { "frames": 24, "delta_seconds": 0.016666666666666666 } },
+    { "inject_key": { "key": "W", "pressed": false } },
+    { "tick": { "frames": 10, "delta_seconds": 0.016666666666666666 } },
+    { "load_scene": { "path": "Assets/Scenes/Title.unity" } },
+    { "tick": { "frames": 2, "delta_seconds": 0.016666666666666666 } },
+    { "inject_pointer": { "x": 708, "y": 312 } },
+    { "tick": { "frames": 2, "delta_seconds": 0.016666666666666666 } },
+    { "inject_mouse_button": { "button": 0, "pressed": true } },
+    { "tick": { "frames": 2, "delta_seconds": 0.016666666666666666 } },
+    { "inject_mouse_button": { "button": 0, "pressed": false } },
+    { "tick": { "frames": 2, "delta_seconds": 0.016666666666666666 } },
+    { "load_scene": { "path": "Assets/Scenes/RollABall.unity" } },
+    { "tick": { "frames": 2, "delta_seconds": 0.016666666666666666 } },
+    { "inject_key": { "key": "W", "pressed": true } },
+    { "inject_key": { "key": "Space", "pressed": true } },
+    { "tick": { "frames": 2, "delta_seconds": 0.016666666666666666 } },
+    { "inject_key": { "key": "Space", "pressed": false } },
+    { "tick": { "frames": 24, "delta_seconds": 0.016666666666666666 } },
+    { "inject_key": { "key": "W", "pressed": false } },
+    { "tick": { "frames": 10, "delta_seconds": 0.016666666666666666 } },
+    { "load_scene": { "path": "Assets/Scenes/Title.unity" } },
+    { "tick": { "frames": 2, "delta_seconds": 0.016666666666666666 } },
+    { "inject_pointer": { "x": 640, "y": 312 } },
+    { "tick": { "frames": 2, "delta_seconds": 0.016666666666666666 } },
+    { "inject_mouse_button": { "button": 0, "pressed": true } },
+    { "tick": { "frames": 2, "delta_seconds": 0.016666666666666666 } },
+    { "inject_mouse_button": { "button": 0, "pressed": false } },
+    { "tick": { "frames": 2, "delta_seconds": 0.016666666666666666 } },
+    { "inject_pointer": { "x": 640, "y": 348 } },
+    { "tick": { "frames": 2, "delta_seconds": 0.016666666666666666 } },
+    { "inject_mouse_button": { "button": 0, "pressed": true } },
+    { "tick": { "frames": 2, "delta_seconds": 0.016666666666666666 } },
+    { "inject_mouse_button": { "button": 0, "pressed": false } },
+    { "tick": { "frames": 2, "delta_seconds": 0.016666666666666666 } },
+    { "load_scene": { "path": "Assets/Scenes/RollABall.unity" } },
+    { "tick": { "frames": 2, "delta_seconds": 0.016666666666666666 } },
+    { "inject_key": { "key": "W", "pressed": true } },
+    { "inject_key": { "key": "Space", "pressed": true } },
+    { "tick": { "frames": 2, "delta_seconds": 0.016666666666666666 } },
+    { "inject_key": { "key": "Space", "pressed": false } },
+    { "tick": { "frames": 24, "delta_seconds": 0.016666666666666666 } },
+    { "inject_key": { "key": "W", "pressed": false } },
+    { "tick": { "frames": 10, "delta_seconds": 0.016666666666666666 } },
+    { "load_scene": { "path": "Assets/Scenes/Title.unity" } },
+    { "tick": { "frames": 2, "delta_seconds": 0.016666666666666666 } },
+    { "inject_pointer": { "x": 708, "y": 348 } },
+    { "tick": { "frames": 2, "delta_seconds": 0.016666666666666666 } },
+    { "inject_mouse_button": { "button": 0, "pressed": true } },
+    { "tick": { "frames": 2, "delta_seconds": 0.016666666666666666 } },
+    { "inject_mouse_button": { "button": 0, "pressed": false } },
+    { "tick": { "frames": 2, "delta_seconds": 0.016666666666666666 } }
+  ],
+  "checkpoints": [
+    {
+      "id": "camera_shake_activates_on_dash_when_enabled",
+      "after_step": 5,
+      "kind": "log",
+      "severity": "log",
+      "contains": "Camera shake active dash 1"
+    },
+    {
+      "id": "camera_transform_displaced_during_active_shake",
+      "after_step": 5,
+      "kind": "transform_position",
+      "object": "Main Camera",
+      "expected": [0.15, 10.075, -11.19],
+      "tolerance": 0.02
+    },
+    {
+      "id": "pickup_collected_on_shaken_run",
+      "after_step": 9,
+      "kind": "log",
+      "severity": "log",
+      "contains": "Pickup collected score 1"
+    },
+    {
+      "id": "run_outcome_with_shake_enabled",
+      "after_step": 9,
+      "kind": "transform_position",
+      "object": "PlayerBall",
+      "expected": [0.0, 0.499931, 5.380007],
+      "tolerance": 0.01
+    },
+    {
+      "id": "camera_shake_disabled_from_settings_row",
+      "after_step": 17,
+      "kind": "log",
+      "severity": "log",
+      "contains": "Settings camera_shake 0"
+    },
+    {
+      "id": "camera_shake_suppressed_when_setting_is_off",
+      "after_step": 22,
+      "kind": "log",
+      "severity": "log",
+      "contains": "Camera shake suppressed dash camera_shake_off"
+    },
+    {
+      "id": "camera_transform_unshaken_when_setting_is_off",
+      "after_step": 22,
+      "kind": "transform_position",
+      "object": "Main Camera",
+      "expected": [0.0, 10.0, -11.19],
+      "tolerance": 0.02
+    },
+    {
+      "id": "identical_run_outcome_when_camera_shake_is_off",
+      "after_step": 26,
+      "kind": "transform_position",
+      "object": "PlayerBall",
+      "expected": [0.0, 0.499931, 5.380007],
+      "tolerance": 0.01
+    },
+    {
+      "id": "camera_shake_reenabled_before_reduced_motion",
+      "after_step": 34,
+      "kind": "log",
+      "severity": "log",
+      "contains": "Settings camera_shake 1"
+    },
+    {
+      "id": "reduced_motion_enabled_from_settings_panel",
+      "after_step": 40,
+      "kind": "log",
+      "severity": "log",
+      "contains": "Settings reduced_motion 1"
+    },
+    {
+      "id": "camera_shake_suppressed_by_reduced_motion",
+      "after_step": 45,
+      "kind": "log",
+      "severity": "log",
+      "contains": "Camera shake suppressed dash reduced_motion"
+    },
+    {
+      "id": "camera_transform_unshaken_under_reduced_motion",
+      "after_step": 45,
+      "kind": "transform_position",
+      "object": "Main Camera",
+      "expected": [0.0, 10.0, -11.19],
+      "tolerance": 0.02
+    },
+    {
+      "id": "identical_run_outcome_under_reduced_motion",
+      "after_step": 49,
+      "kind": "transform_position",
+      "object": "PlayerBall",
+      "expected": [0.0, 0.499931, 5.380007],
+      "tolerance": 0.01
+    }
+  ]
+}

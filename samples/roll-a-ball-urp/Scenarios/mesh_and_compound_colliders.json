@@ -1,0 +1,117 @@
+{
+  "name": "mesh_and_compound_colliders",
+  "absent_logs": [
+    "FrameMarble contact MeshFrame"
+  ],
+  "steps": [
+    {
+      "load_scene": {
+        "path": "Assets/Scenes/PhysicsLab.unity"
+      }
+    },
+    {
+      "tick": {
+        "frames": 40,
+        "delta_seconds": 0.02
+      }
+    }
+  ],
+  "checkpoints": [
+    {
+      "id": "frame_marble_passed_through_the_opening",
+      "after_step": 2,
+      "kind": "transform_position",
+      "object": "FrameMarble",
+      "expected": [
+        24,
+        0.5,
+        2
+      ],
+      "tolerance": 0.5
+    },
+    {
+      "id": "bar_marble_hit_the_frame_bar",
+      "after_step": 2,
+      "kind": "log",
+      "severity": "log",
+      "contains": "BarMarble contact MeshFrame"
+    },
+    {
+      "id": "bar_marble_stopped_at_the_frame_bar",
+      "after_step": 2,
+      "kind": "transform_position",
+      "object": "BarMarble",
+      "expected": [
+        25.5,
+        0.5,
+        -0.5
+      ],
+      "tolerance": 0.5
+    },
+    {
+      "id": "bar_marble_reported_the_mesh_collider",
+      "after_step": 2,
+      "kind": "log",
+      "severity": "log",
+      "contains": "BarMarble collider source MeshFrame"
+    },
+    {
+      "id": "sphere_marble_hit_the_compound_sphere",
+      "after_step": 2,
+      "kind": "log",
+      "severity": "log",
+      "contains": "SphereMarble contact CompoundTarget"
+    },
+    {
+      "id": "sphere_marble_contact_came_from_the_offset_sphere_collider",
+      "after_step": 2,
+      "kind": "log",
+      "severity": "log",
+      "contains": "SphereMarble collider source CompoundTarget sphere"
+    },
+    {
+      "id": "sphere_marble_stopped_at_the_compound_sphere",
+      "after_step": 2,
+      "kind": "transform_position",
+      "object": "SphereMarble",
+      "expected": [
+        33.5,
+        0.5,
+        -1
+      ],
+      "tolerance": 0.5
+    },
+    {
+      "id": "box_marble_hit_the_compound_box",
+      "after_step": 2,
+      "kind": "log",
+      "severity": "log",
+      "contains": "BoxMarble contact CompoundTarget"
+    },
+    {
+      "id": "box_marble_contact_came_from_the_box_collider",
+      "after_step": 2,
+      "kind": "log",
+      "severity": "log",
+      "contains": "BoxMarble collider source CompoundTarget box"
+    },
+    {
+      "id": "box_marble_stopped_at_the_compound_box",
+      "after_step": 2,
+      "kind": "transform_position",
+      "object": "BoxMarble",
+      "expected": [
+        30.5,
+        0.5,
+        -1
+      ],
+      "tolerance": 0.5
+    },
+    {
+      "id": "frame_count_sanity",
+      "after_step": 2,
+      "kind": "frame_count",
+      "expected": 41
+    }
+  ]
+}

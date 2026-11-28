@@ -1,0 +1,110 @@
+{
+  "name": "boost_pad",
+  "steps": [
+    {
+      "load_scene": {
+        "path": "Assets/Scenes/RollABall.unity"
+      }
+    },
+    {
+      "inject_key": {
+        "key": "D",
+        "pressed": true
+      }
+    },
+    {
+      "tick": {
+        "frames": 15,
+        "delta_seconds": 0.02
+      }
+    },
+    {
+      "inject_key": {
+        "key": "D",
+        "pressed": false
+      }
+    },
+    {
+      "tick": {
+        "frames": 25,
+        "delta_seconds": 0.02
+      }
+    },
+    {
+      "load_scene": {
+        "path": "Assets/Scenes/RollABall.unity"
+      }
+    },
+    {
+      "inject_key": {
+        "key": "D",
+        "pressed": true
+      }
+    },
+    {
+      "tick": {
+        "frames": 30,
+        "delta_seconds": 0.01
+      }
+    },
+    {
+      "inject_key": {
+        "key": "D",
+        "pressed": false
+      }
+    },
+    {
+      "tick": {
+        "frames": 50,
+        "delta_seconds": 0.01
+      }
+    }
+  ],
+  "checkpoints": [
+    {
+      "id": "boost_pad_triggered",
+      "after_step": 3,
+      "kind": "log",
+      "severity": "log",
+      "contains": "Boost pad triggered speed 16.0 m/s"
+    },
+    {
+      "id": "coarse_step_boost_containment_held",
+      "after_step": 5,
+      "kind": "log",
+      "severity": "log",
+      "contains": "PlayerBall boost containment held at coarse step"
+    },
+    {
+      "id": "coarse_step_boost_position",
+      "after_step": 5,
+      "kind": "transform_position",
+      "object": "PlayerBall",
+      "expected": [
+        2,
+        0.5,
+        5.5
+      ],
+      "tolerance": 1.0
+    },
+    {
+      "id": "fine_step_boost_containment_held",
+      "after_step": 10,
+      "kind": "log",
+      "severity": "log",
+      "contains": "PlayerBall boost containment held at fine step"
+    },
+    {
+      "id": "fine_step_boost_position",
+      "after_step": 10,
+      "kind": "transform_position",
+      "object": "PlayerBall",
+      "expected": [
+        2,
+        0.5,
+        5.5
+      ],
+      "tolerance": 1.0
+    }
+  ]
+}

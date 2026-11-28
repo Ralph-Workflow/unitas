@@ -207,6 +207,7 @@ pub struct UiDrawItem {
     pub text: Option<UiTextItem>,
     pub text_layout: TextLayoutConfig,
     pub text_clip_rect: Option<[f32; 4]>,
+    pub clip_rect: Option<[f32; 4]>,
 }
 
 impl unitas_render::ui_pass::UiElement for UiDrawItem {
@@ -220,6 +221,10 @@ impl unitas_render::ui_pass::UiElement for UiDrawItem {
 
     fn sprite(&self) -> Option<&SpriteRef> {
         self.sprite.as_ref()
+    }
+
+    fn clip_rect(&self) -> Option<[f32; 4]> {
+        self.clip_rect
     }
 
     fn text(&self) -> Option<unitas_render::ui_pass::UiText<'_>> {
@@ -380,6 +385,183 @@ pub fn resolve_canvas_rect(rect: &RectTransformComponent, parent: CanvasRect) ->
     }
 }
 
+pub const FALLBACK_SCREEN_DPI: f32 = 96.0;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum PhysicalUnit {
+    #[default]
+    Centimeters,
+    Millimeters,
+    Inches,
+    Points,
+    Picas,
+}
+
+impl PhysicalUnit {
+    pub const fn from_u32(code: u32) -> Option<Self> {
+        match code {
+            0 => Some(Self::Centimeters),
+            1 => Some(Self::Millimeters),
+            2 => Some(Self::Inches),
+            3 => Some(Self::Points),
+            4 => Some(Self::Picas),
+            _ => None,
+        }
+    }
+
+    pub const fn units_per_inch(self) -> f32 {
+        match self {
+            Self::Centimeters => 2.54,
+            Self::Millimeters => 25.4,
+            Self::Inches => 1.0,
+            Self::Points => 72.0,
+            Self::Picas => 6.0,
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct CanvasScalerOverride {
+    pub entity: EntityId,
+    pub ui_scale_mode: CanvasScaleMode,
+    pub scale_factor: f32,
+    pub reference_resolution: [f32; 2],
+    pub screen_match_mode: CanvasMatchMode,
+    pub match_width_or_height: f32,
+    pub physical_unit: PhysicalUnit,
+    pub fallback_dpi: f32,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct UiToggleComponent {
+    pub entity: EntityId,
+    pub is_on: bool,
+    pub interactable: bool,
+    pub enabled: bool,
+    pub graphic: Option<EntityId>,
+    pub group: Option<EntityId>,
+}
+
+impl Default for UiToggleComponent {
+    fn default() -> Self {
+        Self {
+            entity: EntityId::new(0),
+            is_on: false,
+            interactable: true,
+            enabled: true,
+            graphic: None,
+            group: None,
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ToggleValueChangedEvent {
+    pub entity: EntityId,
+    pub is_on: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum SliderDirection {
+    #[default]
+    LeftToRight,
+    RightToLeft,
+    BottomToTop,
+    TopToBottom,
+}
+
+impl SliderDirection {
+    pub const fn from_u32(code: u32) -> Option<Self> {
+        match code {
+            0 => Some(Self::LeftToRight),
+            1 => Some(Self::RightToLeft),
+            2 => Some(Self::BottomToTop),
+            3 => Some(Self::TopToBottom),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct UiSliderComponent {
+    pub entity: EntityId,
+    pub value: f32,
+    pub min_value: f32,
+    pub max_value: f32,
+    pub whole_numbers: bool,
+    pub interactable: bool,
+    pub enabled: bool,
+    pub direction: SliderDirection,
+    pub fill_rect: Option<EntityId>,
+    pub handle_rect: Option<EntityId>,
+}
+
+impl Default for UiSliderComponent {
+    fn default() -> Self {
+        Self {
+            entity: EntityId::new(0),
+            value: 0.0,
+            min_value: 0.0,
+            max_value: 1.0,
+            whole_numbers: false,
+            interactable: true,
+            enabled: true,
+            direction: SliderDirection::LeftToRight,
+            fill_rect: None,
+            handle_rect: None,
+        }
+    }
+}
+
+impl UiSliderComponent {
+    pub fn normalized_value(&self) -> f32 {
+        let span = self.max_value - self.min_value;
+        if span <= 0.0 {
+            return 0.0;
+        }
+        ((self.value - self.min_value) / span).clamp(0.0, 1.0)
+    }
+
+    pub fn set_normalized_value(&mut self, t: f32) {
+        let mut value = self.min_value + t.clamp(0.0, 1.0) * (self.max_value - self.min_value);
+        if self.whole_numbers {
+            value = value.round();
+        }
+        let low = self.min_value.min(self.max_value);
+        let high = self.min_value.max(self.max_value);
+        self.value = value.clamp(low, high);
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct SliderValueChangedEvent {
+    pub entity: EntityId,
+    pub value: f32,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct UiCanvasGroupComponent {
+    pub entity: EntityId,
+    pub alpha: f32,
+    pub interactable: bool,
+    pub blocks_raycasts: bool,
+    pub ignore_parent_groups: bool,
+    pub enabled: bool,
+}
+
+impl Default for UiCanvasGroupComponent {
+    fn default() -> Self {
+        Self {
+            entity: EntityId::new(0),
+            alpha: 1.0,
+            interactable: true,
+            blocks_raycasts: true,
+            ignore_parent_groups: false,
+            enabled: true,
+        }
+    }
+}
+
 pub fn canvas_scale_factor(canvas: &CanvasComponent, screen_size: [f32; 2]) -> f32 {
     let scaler = match canvas.scaler.as_ref() {
         Some(scaler) => scaler,
@@ -388,24 +570,62 @@ pub fn canvas_scale_factor(canvas: &CanvasComponent, screen_size: [f32; 2]) -> f
     if scaler.ui_scale_mode != CanvasScaleMode::ScaleWithScreenSize {
         return 1.0;
     }
-    let reference = scaler.reference_resolution;
+    screen_size_scale(
+        scaler.reference_resolution,
+        scaler.screen_match_mode,
+        scaler.match_width_or_height,
+        screen_size,
+    )
+}
+
+fn screen_size_scale(
+    reference: [f32; 2],
+    match_mode: CanvasMatchMode,
+    match_value: f32,
+    screen_size: [f32; 2],
+) -> f32 {
     if reference[0] <= 0.0 || reference[1] <= 0.0 {
         return 1.0;
     }
     let width_ratio = screen_size[0] / reference[0];
     let height_ratio = screen_size[1] / reference[1];
-    match scaler.screen_match_mode {
+    match match_mode {
         CanvasMatchMode::MatchWidthOrHeight => {
-            if scaler.match_width_or_height < 0.5 {
-                width_ratio
-            } else if scaler.match_width_or_height > 0.5 {
-                height_ratio
-            } else {
-                (width_ratio * height_ratio).sqrt()
-            }
+            let t = match_value.clamp(0.0, 1.0);
+            let log_w = width_ratio.max(f32::MIN_POSITIVE).log2();
+            let log_h = height_ratio.max(f32::MIN_POSITIVE).log2();
+            2f32.powf(log_w + (log_h - log_w) * t)
         }
         CanvasMatchMode::Shrink => width_ratio.min(height_ratio),
         CanvasMatchMode::Expand => width_ratio.max(height_ratio),
+    }
+}
+
+fn physical_size_scale(unit: PhysicalUnit, fallback_dpi: f32, screen_dpi: f32) -> f32 {
+    let dpi = if screen_dpi > 0.0 {
+        screen_dpi
+    } else {
+        fallback_dpi
+    };
+    dpi / unit.units_per_inch()
+}
+
+fn scaler_override_scale(
+    override_: &CanvasScalerOverride,
+    screen_size: [f32; 2],
+    screen_dpi: f32,
+) -> f32 {
+    match override_.ui_scale_mode {
+        CanvasScaleMode::ConstantPixelSize => override_.scale_factor,
+        CanvasScaleMode::ConstantPhysicalSize => {
+            physical_size_scale(override_.physical_unit, override_.fallback_dpi, screen_dpi)
+        }
+        CanvasScaleMode::ScaleWithScreenSize => screen_size_scale(
+            override_.reference_resolution,
+            override_.screen_match_mode,
+            override_.match_width_or_height,
+            screen_size,
+        ),
     }
 }
 
@@ -421,6 +641,18 @@ pub struct CanvasState {
     input_field_order: Vec<EntityId>,
     pending_value_changed: Vec<InputFieldValueChangedEvent>,
     pending_end_edit: Vec<InputFieldEndEditEvent>,
+    toggles: HashMap<EntityId, UiToggleComponent>,
+    toggle_order: Vec<EntityId>,
+    pending_toggle_changed: Vec<ToggleValueChangedEvent>,
+    pressed_toggle: Option<EntityId>,
+    sliders: HashMap<EntityId, UiSliderComponent>,
+    slider_order: Vec<EntityId>,
+    pending_slider_changed: Vec<SliderValueChangedEvent>,
+    pressed_slider: Option<EntityId>,
+    rect_masks: HashMap<EntityId, bool>,
+    canvas_groups: HashMap<EntityId, UiCanvasGroupComponent>,
+    scaler_overrides: RwLock<HashMap<EntityId, CanvasScalerOverride>>,
+    screen_dpi: f32,
     layout_group_overrides: RwLock<HashMap<EntityId, UiLayoutGroupComponent>>,
     fitter_overrides: RwLock<HashMap<EntityId, UiContentSizeFitterComponent>>,
 }
@@ -444,6 +676,18 @@ impl CanvasState {
             input_field_order: Vec::new(),
             pending_value_changed: Vec::new(),
             pending_end_edit: Vec::new(),
+            toggles: HashMap::new(),
+            toggle_order: Vec::new(),
+            pending_toggle_changed: Vec::new(),
+            pressed_toggle: None,
+            sliders: HashMap::new(),
+            slider_order: Vec::new(),
+            pending_slider_changed: Vec::new(),
+            pressed_slider: None,
+            rect_masks: HashMap::new(),
+            canvas_groups: HashMap::new(),
+            scaler_overrides: RwLock::new(HashMap::new()),
+            screen_dpi: 0.0,
             layout_group_overrides: RwLock::new(HashMap::new()),
             fitter_overrides: RwLock::new(HashMap::new()),
         }
@@ -617,6 +861,325 @@ impl CanvasState {
         std::mem::take(&mut self.pending_end_edit)
     }
 
+    pub fn set_screen_dpi(&mut self, dpi: f32) {
+        if dpi.is_finite() && dpi >= 0.0 {
+            self.screen_dpi = dpi;
+        }
+    }
+
+    pub fn set_canvas_scaler(&self, scaler: CanvasScalerOverride) -> bool {
+        let Ok(mut guard) = self.scaler_overrides.write() else {
+            return false;
+        };
+        guard.insert(scaler.entity, scaler);
+        true
+    }
+
+    fn active_scaler_scale(&self, canvas: &CanvasComponent, screen_size: [f32; 2]) -> f32 {
+        if let Ok(guard) = self.scaler_overrides.read()
+            && let Some(override_) = guard.get(&canvas.entity)
+        {
+            return scaler_override_scale(override_, screen_size, self.screen_dpi);
+        }
+        canvas_scale_factor(canvas, screen_size)
+    }
+
+    pub fn set_toggle(&mut self, toggle: UiToggleComponent) {
+        let entity = toggle.entity;
+        if !self.toggle_order.contains(&entity) {
+            self.toggle_order.push(entity);
+        }
+        self.toggles.insert(entity, toggle);
+    }
+
+    pub fn toggle(&self, entity: EntityId) -> Option<&UiToggleComponent> {
+        self.toggles.get(&entity)
+    }
+
+    pub fn set_toggle_value(&mut self, entity: EntityId, is_on: bool, notify: bool) -> bool {
+        let Some(toggle) = self.toggles.get_mut(&entity) else {
+            return false;
+        };
+        let changed = toggle.is_on != is_on;
+        toggle.is_on = is_on;
+        let group = toggle.group;
+        if is_on && let Some(group) = group {
+            let peers: Vec<EntityId> = self
+                .toggles
+                .iter()
+                .filter(|(id, other)| **id != entity && other.group == Some(group) && other.is_on)
+                .map(|(id, _)| *id)
+                .collect();
+            for peer in peers {
+                if let Some(peer_toggle) = self.toggles.get_mut(&peer) {
+                    peer_toggle.is_on = false;
+                }
+            }
+        }
+        if changed && notify {
+            self.pending_toggle_changed
+                .push(ToggleValueChangedEvent { entity, is_on });
+        }
+        true
+    }
+
+    pub fn take_toggle_value_changed(&mut self) -> Vec<ToggleValueChangedEvent> {
+        std::mem::take(&mut self.pending_toggle_changed)
+    }
+
+    pub fn hit_test_toggle(&self, position: (f32, f32), screen_size: [f32; 2]) -> Option<EntityId> {
+        self.hit_test_control(
+            &self.toggle_order,
+            position,
+            screen_size,
+            |canvas, entity| {
+                canvas.toggles.get(&entity).is_some_and(|toggle| {
+                    toggle.interactable
+                        && canvas.is_element_enabled(entity, toggle.enabled)
+                        && canvas.group_interactable(entity)
+                })
+            },
+        )
+    }
+
+    pub fn set_slider(&mut self, slider: UiSliderComponent) {
+        let entity = slider.entity;
+        if !self.slider_order.contains(&entity) {
+            self.slider_order.push(entity);
+        }
+        self.sliders.insert(entity, slider);
+    }
+
+    pub fn slider(&self, entity: EntityId) -> Option<&UiSliderComponent> {
+        self.sliders.get(&entity)
+    }
+
+    pub fn set_slider_value(&mut self, entity: EntityId, value: f32, notify: bool) -> bool {
+        if !value.is_finite() {
+            return false;
+        }
+        let Some(slider) = self.sliders.get_mut(&entity) else {
+            return false;
+        };
+        let low = slider.min_value.min(slider.max_value);
+        let high = slider.min_value.max(slider.max_value);
+        let mut clamped = value.clamp(low, high);
+        if slider.whole_numbers {
+            clamped = clamped.round();
+        }
+        let changed = (clamped - slider.value).abs() > f32::EPSILON;
+        slider.value = clamped;
+        if changed && notify {
+            self.pending_slider_changed.push(SliderValueChangedEvent {
+                entity,
+                value: clamped,
+            });
+        }
+        true
+    }
+
+    pub fn take_slider_value_changed(&mut self) -> Vec<SliderValueChangedEvent> {
+        std::mem::take(&mut self.pending_slider_changed)
+    }
+
+    pub fn hit_test_slider(&self, position: (f32, f32), screen_size: [f32; 2]) -> Option<EntityId> {
+        self.hit_test_control(
+            &self.slider_order,
+            position,
+            screen_size,
+            |canvas, entity| {
+                canvas.sliders.get(&entity).is_some_and(|slider| {
+                    slider.interactable
+                        && canvas.is_element_enabled(entity, slider.enabled)
+                        && canvas.group_interactable(entity)
+                })
+            },
+        )
+    }
+
+    fn hit_test_control(
+        &self,
+        order: &[EntityId],
+        position: (f32, f32),
+        screen_size: [f32; 2],
+        allowed: impl Fn(&Self, EntityId) -> bool,
+    ) -> Option<EntityId> {
+        let (px, py) = position;
+        for &entity in order.iter().rev() {
+            if !allowed(self, entity) || !self.group_blocks_raycasts(entity) {
+                continue;
+            }
+            let Some((rect, _)) = self.element_rect(entity, screen_size) else {
+                continue;
+            };
+            if px < rect[0] || py < rect[1] || px > rect[0] + rect[2] || py > rect[1] + rect[3] {
+                continue;
+            }
+            if self.mask_allows_point(entity, position, screen_size) {
+                return Some(entity);
+            }
+        }
+        None
+    }
+
+    pub fn press_pointer(&mut self, position: (f32, f32), screen_size: [f32; 2]) {
+        self.pressed_toggle = self.hit_test_toggle(position, screen_size);
+        self.pressed_slider = self.hit_test_slider(position, screen_size);
+        if let Some(slider) = self.pressed_slider {
+            self.drag_slider_to(slider, position, screen_size);
+        }
+    }
+
+    pub fn move_pointer(&mut self, position: (f32, f32), screen_size: [f32; 2]) {
+        if let Some(slider) = self.pressed_slider {
+            self.drag_slider_to(slider, position, screen_size);
+        }
+    }
+
+    pub fn release_pointer(&mut self, position: (f32, f32), screen_size: [f32; 2]) {
+        if let Some(slider) = self.pressed_slider.take() {
+            self.drag_slider_to(slider, position, screen_size);
+        }
+        if let Some(toggle) = self.pressed_toggle.take()
+            && self.hit_test_toggle(position, screen_size) == Some(toggle)
+        {
+            let is_on = !self.toggles.get(&toggle).is_some_and(|t| t.is_on);
+            let _ = self.set_toggle_value(toggle, is_on, true);
+        }
+    }
+
+    fn drag_slider_to(&mut self, entity: EntityId, position: (f32, f32), screen_size: [f32; 2]) {
+        let Some((rect, _)) = self.element_rect(entity, screen_size) else {
+            return;
+        };
+        let (px, py) = position;
+        let t = {
+            let Some(slider) = self.sliders.get(&entity) else {
+                return;
+            };
+            match slider.direction {
+                SliderDirection::LeftToRight => (px - rect[0]) / rect[2],
+                SliderDirection::RightToLeft => (rect[0] + rect[2] - px) / rect[2],
+                SliderDirection::BottomToTop => (rect[1] + rect[3] - py) / rect[3],
+                SliderDirection::TopToBottom => (py - rect[1]) / rect[3],
+            }
+        };
+        let Some(slider) = self.sliders.get_mut(&entity) else {
+            return;
+        };
+        let before = slider.value;
+        slider.set_normalized_value(t);
+        if (slider.value - before).abs() > f32::EPSILON {
+            let value = slider.value;
+            self.pending_slider_changed
+                .push(SliderValueChangedEvent { entity, value });
+        }
+    }
+
+    pub fn set_rect_mask(&mut self, entity: EntityId, enabled: bool) {
+        self.rect_masks.insert(entity, enabled);
+    }
+
+    fn mask_rect_from(
+        &self,
+        entity: EntityId,
+        resolved: &HashMap<EntityId, ([f32; 4], f32)>,
+    ) -> Option<[f32; 4]> {
+        let chain = self.chain_to_canvas(entity)?;
+        for node in chain.iter().rev().skip(1) {
+            if self.rect_masks.get(node).copied().unwrap_or(false)
+                && let Some((rect, _)) = resolved.get(node).copied()
+            {
+                return Some(rect);
+            }
+        }
+        None
+    }
+
+    fn mask_allows_point(
+        &self,
+        entity: EntityId,
+        position: (f32, f32),
+        screen_size: [f32; 2],
+    ) -> bool {
+        let Some(chain) = self.chain_to_canvas(entity) else {
+            return false;
+        };
+        for node in chain.iter().rev().skip(1) {
+            if self.rect_masks.get(node).copied().unwrap_or(false)
+                && let Some((rect, _)) = self.element_rect(*node, screen_size)
+            {
+                let (px, py) = position;
+                if px < rect[0] || py < rect[1] || px > rect[0] + rect[2] || py > rect[1] + rect[3]
+                {
+                    return false;
+                }
+            }
+        }
+        true
+    }
+
+    pub fn set_canvas_group(&mut self, group: UiCanvasGroupComponent) -> bool {
+        if group.entity.as_u64() == 0 {
+            return false;
+        }
+        self.canvas_groups.insert(group.entity, group);
+        true
+    }
+
+    fn applicable_groups(&self, entity: EntityId) -> Vec<&UiCanvasGroupComponent> {
+        let mut groups = Vec::new();
+        if let Some(chain) = self.chain_to_canvas(entity) {
+            for node in chain {
+                if let Some(group) = self.canvas_groups.get(&node).filter(|group| group.enabled) {
+                    if group.ignore_parent_groups {
+                        groups.clear();
+                    }
+                    groups.push(group);
+                }
+            }
+        }
+        groups
+    }
+
+    fn group_alpha(&self, entity: EntityId) -> f32 {
+        self.applicable_groups(entity)
+            .iter()
+            .fold(1.0, |alpha, group| alpha * group.alpha.clamp(0.0, 1.0))
+    }
+
+    fn group_interactable(&self, entity: EntityId) -> bool {
+        self.applicable_groups(entity)
+            .iter()
+            .all(|group| group.interactable)
+    }
+
+    fn group_blocks_raycasts(&self, entity: EntityId) -> bool {
+        self.applicable_groups(entity)
+            .iter()
+            .all(|group| group.blocks_raycasts)
+    }
+
+    pub fn element_receives_pointer(
+        &self,
+        entity: EntityId,
+        screen_size: [f32; 2],
+        point: (f32, f32),
+    ) -> bool {
+        if !self.group_blocks_raycasts(entity) {
+            return false;
+        }
+        let Some((rect, _)) = self.element_rect(entity, screen_size) else {
+            return false;
+        };
+        let (px, py) = point;
+        px >= rect[0]
+            && py >= rect[1]
+            && px <= rect[0] + rect[2]
+            && py <= rect[1] + rect[3]
+            && self.mask_allows_point(entity, point, screen_size)
+    }
+
     pub fn set_element_enabled(&mut self, entity: EntityId, enabled: bool) {
         self.element_enabled.insert(entity, enabled);
     }
@@ -700,10 +1263,17 @@ impl CanvasState {
             if self.input_fields.contains_key(&entity) {
                 continue;
             }
+            if !self.group_blocks_raycasts(entity) {
+                continue;
+            }
             let Some((rect, _)) = self.element_rect(entity, screen_size) else {
                 continue;
             };
-            if px >= rect[0] && py >= rect[1] && px <= rect[0] + rect[2] && py <= rect[1] + rect[3]
+            if px >= rect[0]
+                && py >= rect[1]
+                && px <= rect[0] + rect[2]
+                && py <= rect[1] + rect[3]
+                && self.mask_allows_point(entity, position, screen_size)
             {
                 return Some(entity);
             }
@@ -721,13 +1291,19 @@ impl CanvasState {
             let Some(field) = self.input_fields.get(&entity) else {
                 continue;
             };
-            if !self.is_input_field_focusable(field, screen_size) {
+            if !self.is_input_field_focusable(field, screen_size)
+                || !self.group_blocks_raycasts(entity)
+            {
                 continue;
             }
             let Some((rect, _)) = self.element_rect(entity, screen_size) else {
                 continue;
             };
-            if px >= rect[0] && py >= rect[1] && px <= rect[0] + rect[2] && py <= rect[1] + rect[3]
+            if px >= rect[0]
+                && py >= rect[1]
+                && px <= rect[0] + rect[2]
+                && py <= rect[1] + rect[3]
+                && self.mask_allows_point(entity, position, screen_size)
             {
                 return Some(entity);
             }
@@ -953,7 +1529,12 @@ impl CanvasState {
             if !self.is_hierarchy_visible(element.entity()) {
                 continue;
             }
-            self.push_element_draw_items(element, rect_px, scale, texts, &mut items);
+            let rect_px = self.slider_part_rect(element.entity(), rect_px);
+            let modifiers = DrawModifiers {
+                clip: self.mask_rect_from(element.entity(), &resolved_rects),
+                alpha: self.group_alpha(element.entity()),
+            };
+            self.push_element_draw_items(element, rect_px, scale, texts, modifiers, &mut items);
         }
         let focused_id = self.focused_button(screen_size);
         for &entity in &self.input_field_order {
@@ -967,16 +1548,65 @@ impl CanvasState {
             let Some((rect_px, scale)) = resolved_rects.get(&entity).copied() else {
                 continue;
             };
+            let modifiers = DrawModifiers {
+                clip: self.mask_rect_from(entity, &resolved_rects),
+                alpha: self.group_alpha(entity),
+            };
             self.push_input_field_draw_items(
                 field,
                 rect_px,
                 scale,
                 focused_id == Some(entity),
+                modifiers,
                 &mut items,
             );
         }
         self.push_focus_border_items(focused_id, &resolved_rects, &mut items);
         items
+    }
+
+    fn slider_part_rect(&self, entity: EntityId, rect: [f32; 4]) -> [f32; 4] {
+        for slider in self.sliders.values() {
+            if !slider.enabled {
+                continue;
+            }
+            let t = slider.normalized_value();
+            if slider.fill_rect == Some(entity) {
+                return match slider.direction {
+                    SliderDirection::LeftToRight => [rect[0], rect[1], rect[2] * t, rect[3]],
+                    SliderDirection::RightToLeft => {
+                        [rect[0] + rect[2] * (1.0 - t), rect[1], rect[2] * t, rect[3]]
+                    }
+                    SliderDirection::BottomToTop => {
+                        [rect[0], rect[1] + rect[3] * (1.0 - t), rect[2], rect[3] * t]
+                    }
+                    SliderDirection::TopToBottom => [rect[0], rect[1], rect[2], rect[3] * t],
+                };
+            }
+            if slider.handle_rect == Some(entity) {
+                return match slider.direction {
+                    SliderDirection::LeftToRight => {
+                        [rect[0] + rect[2] * t, rect[1], rect[2], rect[3]]
+                    }
+                    SliderDirection::RightToLeft => {
+                        [rect[0] + rect[2] * (1.0 - t), rect[1], rect[2], rect[3]]
+                    }
+                    SliderDirection::BottomToTop => {
+                        [rect[0], rect[1] + rect[3] * (1.0 - t), rect[2], rect[3]]
+                    }
+                    SliderDirection::TopToBottom => {
+                        [rect[0], rect[1] + rect[3] * t, rect[2], rect[3]]
+                    }
+                };
+            }
+        }
+        rect
+    }
+
+    fn toggle_graphic_hidden(&self, entity: EntityId) -> bool {
+        self.toggles
+            .values()
+            .any(|toggle| toggle.graphic == Some(entity) && toggle.enabled && !toggle.is_on)
     }
 
     fn push_element_draw_items(
@@ -985,14 +1615,22 @@ impl CanvasState {
         rect_px: [f32; 4],
         scale: f32,
         texts: &HashMap<EntityId, TextOverride>,
+        modifiers: DrawModifiers,
         items: &mut Vec<UiDrawItem>,
     ) {
         match element {
             UiElementComponent::Image(image) => {
-                self.push_image_draw_items(image, rect_px, scale, items);
+                self.push_image_draw_items(
+                    image,
+                    rect_px,
+                    scale,
+                    modifiers.clip,
+                    modifiers.alpha,
+                    items,
+                );
             }
             UiElementComponent::Text(text) => {
-                self.push_text_draw_items(text, rect_px, scale, texts, items);
+                self.push_text_draw_items(text, rect_px, scale, texts, modifiers, items);
             }
             UiElementComponent::Button(_) => {}
         }
@@ -1003,11 +1641,21 @@ impl CanvasState {
         image: &UiImageComponent,
         rect_px: [f32; 4],
         scale: f32,
+        clip: Option<[f32; 4]>,
+        alpha: f32,
         items: &mut Vec<UiDrawItem>,
     ) {
-        if !self.is_element_enabled(image.entity, image.enabled) {
+        if !self.is_element_enabled(image.entity, image.enabled)
+            || self.toggle_graphic_hidden(image.entity)
+        {
             return;
         }
+        let color = [
+            image.color[0],
+            image.color[1],
+            image.color[2],
+            image.color[3] * alpha,
+        ];
         let sprite_guid = image.sprite_guid.clone();
         let sprite_size = sprite_guid.as_deref().and_then(ui_sprite_size);
         let quads = match (image.draw_mode, sprite_size) {
@@ -1023,7 +1671,7 @@ impl CanvasState {
         for quad in quads {
             items.push(UiDrawItem {
                 rect_px: quad.rect,
-                color: image.color,
+                color,
                 sprite: sprite_guid.as_ref().map(|guid| SpriteRef {
                     texture_guid: guid.clone(),
                     uv_rect: quad.uv,
@@ -1031,6 +1679,7 @@ impl CanvasState {
                 text: None,
                 text_layout: TextLayoutConfig::default(),
                 text_clip_rect: None,
+                clip_rect: clip,
             });
         }
     }
@@ -1041,6 +1690,7 @@ impl CanvasState {
         rect_px: [f32; 4],
         scale: f32,
         texts: &HashMap<EntityId, TextOverride>,
+        modifiers: DrawModifiers,
         items: &mut Vec<UiDrawItem>,
     ) {
         if !self.is_element_enabled(text.entity, text.enabled) {
@@ -1048,11 +1698,13 @@ impl CanvasState {
         }
         let state = texts.get(&text.entity);
         let content = state.map_or(text.text.as_str(), |state| state.text.as_str());
-        let color = state.map_or(text.color, |state| state.color);
+        let mut color = state.map_or(text.color, |state| state.color);
+        color[3] *= modifiers.alpha;
         let font_size = state.map_or(text.font_size, |state| state.font_size);
         let text_layout = state.map_or_else(TextLayoutConfig::default, |s| s.layout);
-        let text_clip_rect =
+        let truncate_clip =
             (text_layout.vertical_overflow == VerticalWrapMode::Truncate).then_some(rect_px);
+        let text_clip_rect = intersect_clip(truncate_clip, modifiers.clip);
         items.push(UiDrawItem {
             rect_px,
             color,
@@ -1066,6 +1718,7 @@ impl CanvasState {
             }),
             text_layout,
             text_clip_rect,
+            clip_rect: modifiers.clip,
         });
     }
 
@@ -1090,6 +1743,7 @@ impl CanvasState {
                 text: None,
                 text_layout: TextLayoutConfig::default(),
                 text_clip_rect: None,
+                clip_rect: None,
             });
         }
     }
@@ -1100,8 +1754,11 @@ impl CanvasState {
         rect_px: [f32; 4],
         scale: f32,
         is_focused: bool,
+        modifiers: DrawModifiers,
         items: &mut Vec<UiDrawItem>,
     ) {
+        let clip = modifiers.clip;
+        let alpha = modifiers.alpha;
         let has_image =
             self.binding.elements.iter().any(
                 |el| matches!(el, UiElementComponent::Image(img) if img.entity == field.entity),
@@ -1109,11 +1766,17 @@ impl CanvasState {
         if !has_image {
             items.push(UiDrawItem {
                 rect_px,
-                color: field.background_color,
+                color: [
+                    field.background_color[0],
+                    field.background_color[1],
+                    field.background_color[2],
+                    field.background_color[3] * alpha,
+                ],
                 sprite: None,
                 text: None,
                 text_layout: TextLayoutConfig::default(),
                 text_clip_rect: None,
+                clip_rect: clip,
             });
         }
         let pad_x = (6.0 * scale).min(rect_px[2] * 0.25);
@@ -1125,11 +1788,12 @@ impl CanvasState {
             (rect_px[3] - 2.0 * pad_y).max(0.0),
         ];
         let font_px = (field.font_size * scale).max(1.0);
-        let (display_text, text_color) = if !field.text.is_empty() {
+        let (display_text, mut text_color) = if !field.text.is_empty() {
             (field.text.as_str(), field.color)
         } else {
             (field.placeholder.as_str(), field.placeholder_color)
         };
+        text_color[3] *= alpha;
         if !display_text.is_empty() {
             items.push(UiDrawItem {
                 rect_px: text_rect,
@@ -1144,10 +1808,11 @@ impl CanvasState {
                 }),
                 text_layout: TextLayoutConfig::default(),
                 text_clip_rect: Some(rect_px),
+                clip_rect: clip,
             });
         }
         if is_focused {
-            push_input_field_caret_item(field, rect_px, text_rect, font_px, scale, items);
+            push_input_field_caret_item(field, rect_px, text_rect, font_px, scale, clip, items);
         }
     }
 
@@ -1156,7 +1821,10 @@ impl CanvasState {
         field: &UiInputFieldComponent,
         screen_size: [f32; 2],
     ) -> bool {
-        if !field.interactable || !self.is_element_enabled(field.entity, field.enabled) {
+        if !field.interactable
+            || !self.is_element_enabled(field.entity, field.enabled)
+            || !self.group_interactable(field.entity)
+        {
             return false;
         }
         let Some((rect_px, _)) = self.element_rect(field.entity, screen_size) else {
@@ -1198,7 +1866,7 @@ impl CanvasState {
             .get(&button.entity)
             .copied()
             .unwrap_or(button.interactable);
-        if !interactable {
+        if !interactable || !self.group_interactable(button.entity) {
             return false;
         }
         let Some((rect_px, _)) = self.element_rect(button.entity, screen_size) else {
@@ -1314,7 +1982,7 @@ impl CanvasState {
             if canvas.render_mode != CanvasRenderMode::ScreenSpaceOverlay {
                 continue;
             }
-            let scale = canvas_scale_factor(canvas, screen_size);
+            let scale = self.active_scaler_scale(canvas, screen_size);
             if scale <= 0.0 {
                 continue;
             }
@@ -1550,6 +2218,7 @@ fn push_input_field_caret_item(
     text_rect: [f32; 4],
     font_px: f32,
     scale: f32,
+    clip: Option<[f32; 4]>,
     items: &mut Vec<UiDrawItem>,
 ) {
     let caret_idx = UiInputFieldComponent::clamp_caret(&field.text, field.caret_position);
@@ -1567,7 +2236,23 @@ fn push_input_field_caret_item(
         text: None,
         text_layout: TextLayoutConfig::default(),
         text_clip_rect: Some(rect_px),
+        clip_rect: clip,
     });
+}
+
+fn intersect_clip(a: Option<[f32; 4]>, b: Option<[f32; 4]>) -> Option<[f32; 4]> {
+    match (a, b) {
+        (Some(a), Some(b)) => {
+            let x = a[0].max(b[0]);
+            let y = a[1].max(b[1]);
+            let right = (a[0] + a[2]).min(b[0] + b[2]);
+            let bottom = (a[1] + a[3]).min(b[1] + b[3]);
+            (right > x && bottom > y).then_some([x, y, right - x, bottom - y])
+        }
+        (Some(a), None) => Some(a),
+        (None, Some(b)) => Some(b),
+        (None, None) => None,
+    }
 }
 
 fn step_focus(focusables: &[EntityId], current: Option<EntityId>, step: i32) -> EntityId {
@@ -1646,6 +2331,12 @@ struct SubtreeLayoutContext<'a> {
     canvas_size: [f32; 2],
     scale: f32,
     pref_sizes: &'a HashMap<EntityId, [f32; 2]>,
+}
+
+#[derive(Clone, Copy)]
+struct DrawModifiers {
+    clip: Option<[f32; 4]>,
+    alpha: f32,
 }
 
 fn measure_text_preferred(content: &str, font_size: f32, color: [f32; 4]) -> [f32; 2] {
@@ -1890,675 +2581,4 @@ fn layout_vertical_children(
         cursor_top_y -= h + group.spacing;
     }
     out
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::input::{
-        GAMEPAD_AXIS_LEFT_X, GAMEPAD_AXIS_LEFT_Y, GAMEPAD_BUTTON_DPAD_DOWN,
-        GAMEPAD_BUTTON_DPAD_RIGHT, GAMEPAD_BUTTON_DPAD_UP, GAMEPAD_BUTTON_SOUTH, InputState,
-        KEY_DOWN_ARROW, KEY_LEFT_ARROW, KEY_LEFT_SHIFT, KEY_RETURN, KEY_RIGHT_ARROW, KEY_SPACE,
-        KEY_TAB, KEY_UP_ARROW,
-    };
-    use unitas_asset::scene::{
-        CanvasScalerComponent, SpriteDrawMode, UiButtonComponent, UiImageComponent, UiPadding,
-        UiTextComponent,
-    };
-    use unitas_render::image::Rgba8;
-    use unitas_render::ui_pass::{FOCUS_INDICATOR_COLOR, UiTarget, composite_ui};
-
-    const SCREEN: [f32; 2] = [800.0, 600.0];
-    const CANVAS_ID: EntityId = EntityId::new(100);
-    const TITLE_PANEL_ID: EntityId = EntityId::new(200);
-    const PLAY_BUTTON_ID: EntityId = EntityId::new(210);
-    const QUIT_BUTTON_ID: EntityId = EntityId::new(220);
-    const DISABLED_BUTTON_ID: EntityId = EntityId::new(230);
-    const RESULTS_PANEL_ID: EntityId = EntityId::new(300);
-    const RETRY_BUTTON_ID: EntityId = EntityId::new(310);
-    const ARENA_SELECT_BUTTON_ID: EntityId = EntityId::new(320);
-
-    fn centered_rect(
-        entity: EntityId,
-        parent: Option<EntityId>,
-        pos: [f32; 2],
-        size: [f32; 2],
-    ) -> RectTransformComponent {
-        RectTransformComponent {
-            entity,
-            parent,
-            anchor_min: [0.5, 0.5],
-            anchor_max: [0.5, 0.5],
-            anchored_position: pos,
-            size_delta: size,
-            pivot: [0.5, 0.5],
-        }
-    }
-
-    fn simple_image_element(
-        entity: EntityId,
-        enabled: bool,
-        color: [f32; 4],
-    ) -> UiElementComponent {
-        UiElementComponent::Image(UiImageComponent {
-            entity,
-            enabled,
-            color,
-            sprite_guid: None,
-            draw_mode: SpriteDrawMode::Simple,
-            sprite_border: [0.0; 4],
-        })
-    }
-
-    fn button_element(entity: EntityId, interactable: bool) -> UiElementComponent {
-        UiElementComponent::Button(UiButtonComponent {
-            entity,
-            target_graphic: Some(entity),
-            interactable,
-        })
-    }
-
-    fn sample_rect_transforms() -> Vec<RectTransformComponent> {
-        vec![
-            centered_rect(CANVAS_ID, None, [0.0, 0.0], SCREEN),
-            centered_rect(TITLE_PANEL_ID, Some(CANVAS_ID), [0.0, 0.0], [420.0, 260.0]),
-            centered_rect(
-                PLAY_BUTTON_ID,
-                Some(TITLE_PANEL_ID),
-                [0.0, 10.0],
-                [200.0, 48.0],
-            ),
-            centered_rect(
-                QUIT_BUTTON_ID,
-                Some(TITLE_PANEL_ID),
-                [0.0, -50.0],
-                [200.0, 48.0],
-            ),
-            centered_rect(
-                DISABLED_BUTTON_ID,
-                Some(TITLE_PANEL_ID),
-                [0.0, -110.0],
-                [200.0, 48.0],
-            ),
-            centered_rect(
-                RESULTS_PANEL_ID,
-                Some(CANVAS_ID),
-                [0.0, 0.0],
-                [440.0, 320.0],
-            ),
-            centered_rect(
-                RETRY_BUTTON_ID,
-                Some(RESULTS_PANEL_ID),
-                [-100.0, -70.0],
-                [180.0, 44.0],
-            ),
-            centered_rect(
-                ARENA_SELECT_BUTTON_ID,
-                Some(RESULTS_PANEL_ID),
-                [100.0, -70.0],
-                [180.0, 44.0],
-            ),
-        ]
-    }
-
-    fn sample_canvas() -> CanvasState {
-        let binding = UiBinding {
-            canvases: vec![CanvasComponent {
-                entity: CANVAS_ID,
-                render_mode: CanvasRenderMode::ScreenSpaceOverlay,
-                sorting_order: 0,
-                scaler: Some(CanvasScalerComponent {
-                    ui_scale_mode: CanvasScaleMode::ScaleWithScreenSize,
-                    reference_resolution: SCREEN,
-                    screen_match_mode: CanvasMatchMode::MatchWidthOrHeight,
-                    match_width_or_height: 0.5,
-                }),
-            }],
-            rect_transforms: sample_rect_transforms(),
-            elements: vec![
-                simple_image_element(TITLE_PANEL_ID, true, [0.08, 0.1, 0.16, 0.88]),
-                simple_image_element(PLAY_BUTTON_ID, true, [0.2, 0.65, 0.32, 1.0]),
-                button_element(PLAY_BUTTON_ID, true),
-                UiElementComponent::Text(UiTextComponent {
-                    entity: PLAY_BUTTON_ID,
-                    enabled: true,
-                    text: "PLAY".to_string(),
-                    font_size: 22.0,
-                    color: [1.0, 1.0, 1.0, 1.0],
-                }),
-                simple_image_element(QUIT_BUTTON_ID, true, [0.55, 0.2, 0.22, 1.0]),
-                button_element(QUIT_BUTTON_ID, true),
-                simple_image_element(DISABLED_BUTTON_ID, true, [0.3, 0.3, 0.3, 1.0]),
-                button_element(DISABLED_BUTTON_ID, false),
-                simple_image_element(RESULTS_PANEL_ID, false, [0.08, 0.1, 0.16, 0.92]),
-                simple_image_element(RETRY_BUTTON_ID, true, [0.2, 0.65, 0.32, 1.0]),
-                button_element(RETRY_BUTTON_ID, true),
-                simple_image_element(ARENA_SELECT_BUTTON_ID, true, [0.22, 0.45, 0.72, 1.0]),
-                button_element(ARENA_SELECT_BUTTON_ID, true),
-            ],
-            layout_groups: Vec::new(),
-            content_size_fitters: Vec::new(),
-        };
-        CanvasState::new(binding)
-    }
-
-    #[test]
-    fn focusable_registry_filters_disabled_and_hidden_controls_and_auto_focuses_first() {
-        let mut canvas = sample_canvas();
-        assert_eq!(
-            canvas.focusable_buttons(SCREEN),
-            vec![PLAY_BUTTON_ID, QUIT_BUTTON_ID]
-        );
-        assert_eq!(canvas.focused_button(SCREEN), Some(PLAY_BUTTON_ID));
-
-        canvas.set_element_enabled(TITLE_PANEL_ID, false);
-        canvas.set_element_enabled(RESULTS_PANEL_ID, true);
-        assert_eq!(
-            canvas.focusable_buttons(SCREEN),
-            vec![RETRY_BUTTON_ID, ARENA_SELECT_BUTTON_ID]
-        );
-        assert_eq!(canvas.focused_button(SCREEN), Some(RETRY_BUTTON_ID));
-    }
-
-    fn assert_results_panel_navigation(canvas: &mut CanvasState, input: &mut InputState) {
-        canvas.set_element_enabled(TITLE_PANEL_ID, false);
-        canvas.set_element_enabled(RESULTS_PANEL_ID, true);
-        assert_eq!(canvas.focused_button(SCREEN), Some(RETRY_BUTTON_ID));
-
-        input.queue_key_event(KEY_RIGHT_ARROW, true);
-        input.begin_frame(1.0 / 60.0);
-        canvas.handle_focus(input, SCREEN);
-        assert_eq!(canvas.focused_button(SCREEN), Some(ARENA_SELECT_BUTTON_ID));
-        input.queue_key_event(KEY_RIGHT_ARROW, false);
-        input.begin_frame(1.0 / 60.0);
-
-        input.queue_key_event(KEY_LEFT_ARROW, true);
-        input.begin_frame(1.0 / 60.0);
-        canvas.handle_focus(input, SCREEN);
-        assert_eq!(canvas.focused_button(SCREEN), Some(RETRY_BUTTON_ID));
-        input.queue_key_event(KEY_LEFT_ARROW, false);
-        input.begin_frame(1.0 / 60.0);
-
-        input.set_gamepad_button(GAMEPAD_BUTTON_DPAD_RIGHT, true);
-        input.begin_frame(1.0 / 60.0);
-        canvas.handle_focus(input, SCREEN);
-        assert_eq!(canvas.focused_button(SCREEN), Some(ARENA_SELECT_BUTTON_ID));
-        input.set_gamepad_button(GAMEPAD_BUTTON_DPAD_RIGHT, false);
-        input.begin_frame(1.0 / 60.0);
-        canvas.handle_focus(input, SCREEN);
-
-        input.set_gamepad_axis(GAMEPAD_AXIS_LEFT_X, -0.85);
-        input.begin_frame(1.0 / 60.0);
-        canvas.handle_focus(input, SCREEN);
-        assert_eq!(canvas.focused_button(SCREEN), Some(RETRY_BUTTON_ID));
-        input.set_gamepad_axis(GAMEPAD_AXIS_LEFT_X, 0.0);
-        input.begin_frame(1.0 / 60.0);
-        canvas.handle_focus(input, SCREEN);
-
-        input.set_gamepad_button(GAMEPAD_BUTTON_DPAD_UP, true);
-        input.begin_frame(1.0 / 60.0);
-        canvas.handle_focus(input, SCREEN);
-        assert_eq!(canvas.focused_button(SCREEN), Some(ARENA_SELECT_BUTTON_ID));
-    }
-
-    #[test]
-    fn directional_and_tab_navigation_move_focus_deterministically_across_panels() {
-        let mut canvas = sample_canvas();
-        let mut input = InputState::with_default_axes();
-        input.connect_gamepad(1);
-
-        input.queue_key_event(KEY_DOWN_ARROW, true);
-        input.begin_frame(1.0 / 60.0);
-        assert!(canvas.handle_focus(&input, SCREEN).is_empty());
-        assert_eq!(canvas.focused_button(SCREEN), Some(QUIT_BUTTON_ID));
-        input.queue_key_event(KEY_DOWN_ARROW, false);
-        input.begin_frame(1.0 / 60.0);
-
-        input.queue_key_event(KEY_UP_ARROW, true);
-        input.begin_frame(1.0 / 60.0);
-        canvas.handle_focus(&input, SCREEN);
-        assert_eq!(canvas.focused_button(SCREEN), Some(PLAY_BUTTON_ID));
-        input.queue_key_event(KEY_UP_ARROW, false);
-        input.begin_frame(1.0 / 60.0);
-
-        input.set_gamepad_button(GAMEPAD_BUTTON_DPAD_DOWN, true);
-        input.begin_frame(1.0 / 60.0);
-        canvas.handle_focus(&input, SCREEN);
-        assert_eq!(canvas.focused_button(SCREEN), Some(QUIT_BUTTON_ID));
-        input.set_gamepad_button(GAMEPAD_BUTTON_DPAD_DOWN, false);
-        input.begin_frame(1.0 / 60.0);
-        canvas.handle_focus(&input, SCREEN);
-
-        input.set_gamepad_axis(GAMEPAD_AXIS_LEFT_Y, 0.9);
-        input.begin_frame(1.0 / 60.0);
-        canvas.handle_focus(&input, SCREEN);
-        assert_eq!(canvas.focused_button(SCREEN), Some(PLAY_BUTTON_ID));
-        input.set_gamepad_axis(GAMEPAD_AXIS_LEFT_Y, 0.0);
-        input.begin_frame(1.0 / 60.0);
-        canvas.handle_focus(&input, SCREEN);
-
-        input.queue_key_event(KEY_TAB, true);
-        input.begin_frame(1.0 / 60.0);
-        canvas.handle_focus(&input, SCREEN);
-        assert_eq!(canvas.focused_button(SCREEN), Some(QUIT_BUTTON_ID));
-        input.queue_key_event(KEY_TAB, false);
-        input.begin_frame(1.0 / 60.0);
-
-        input.queue_key_event(KEY_LEFT_SHIFT, true);
-        input.queue_key_event(KEY_TAB, true);
-        input.begin_frame(1.0 / 60.0);
-        canvas.handle_focus(&input, SCREEN);
-        assert_eq!(canvas.focused_button(SCREEN), Some(PLAY_BUTTON_ID));
-        input.queue_key_event(KEY_TAB, false);
-        input.queue_key_event(KEY_LEFT_SHIFT, false);
-        input.begin_frame(1.0 / 60.0);
-
-        assert_results_panel_navigation(&mut canvas, &mut input);
-    }
-
-    #[test]
-    fn draw_items_include_visible_focus_indicator_border_around_focused_button() {
-        let mut canvas = sample_canvas();
-        let items = canvas.draw_items(SCREEN);
-        let focus_items: Vec<&UiDrawItem> = items
-            .iter()
-            .filter(|item| item.color == FOCUS_INDICATOR_COLOR)
-            .collect();
-        assert_eq!(focus_items.len(), 4);
-        let (play_rect, _) = canvas
-            .element_rect(PLAY_BUTTON_ID, SCREEN)
-            .unwrap_or(([0.0; 4], 1.0));
-        assert_eq!(focus_items[0].rect_px[0], play_rect[0]);
-        assert_eq!(focus_items[0].rect_px[1], play_rect[1]);
-        assert_eq!(focus_items[0].rect_px[2], play_rect[2]);
-
-        let mut image = Rgba8::new(800, 600);
-        let mut target = UiTarget {
-            image: &mut image,
-            ids: None,
-        };
-        composite_ui(&mut target, &items, 1, None);
-        let border_x = play_rect[0] as usize + 1;
-        let border_y = play_rect[1] as usize;
-        let pixel_idx = (border_y * 800 + border_x) * 4;
-        assert_eq!(image.pixels[pixel_idx], 255);
-        assert_eq!(image.pixels[pixel_idx + 1], 230);
-        assert_eq!(image.pixels[pixel_idx + 2], 0);
-
-        canvas.set_focused_button(Some(QUIT_BUTTON_ID));
-        let moved_items = canvas.draw_items(SCREEN);
-        let moved_focus: Vec<&UiDrawItem> = moved_items
-            .iter()
-            .filter(|item| item.color == FOCUS_INDICATOR_COLOR)
-            .collect();
-        assert_eq!(moved_focus.len(), 4);
-        let (quit_rect, _) = canvas
-            .element_rect(QUIT_BUTTON_ID, SCREEN)
-            .unwrap_or(([0.0; 4], 1.0));
-        assert_eq!(moved_focus[0].rect_px[1], quit_rect[1]);
-    }
-
-    #[test]
-    fn submit_keys_and_gamepad_south_enqueue_click_identical_to_pointer_hit_test() {
-        let mut canvas = sample_canvas();
-        let mut input = InputState::with_default_axes();
-        input.connect_gamepad(1);
-
-        let (play_rect, _) = canvas
-            .element_rect(PLAY_BUTTON_ID, SCREEN)
-            .unwrap_or(([0.0; 4], 1.0));
-        let pointer_center = (
-            play_rect[0] + play_rect[2] * 0.5,
-            play_rect[1] + play_rect[3] * 0.5,
-        );
-        let pointer_hit = canvas.hit_test_button(pointer_center, SCREEN);
-        assert_eq!(pointer_hit, Some(PLAY_BUTTON_ID));
-
-        input.queue_key_event(KEY_RETURN, true);
-        input.begin_frame(1.0 / 60.0);
-        let clicks = canvas.handle_focus(&input, SCREEN);
-        assert_eq!(clicks, vec![PLAY_BUTTON_ID]);
-        assert_eq!(canvas.take_focused_clicks(), vec![PLAY_BUTTON_ID.as_u64()]);
-        input.queue_key_event(KEY_RETURN, false);
-        input.begin_frame(1.0 / 60.0);
-
-        input.queue_key_event(KEY_DOWN_ARROW, true);
-        input.begin_frame(1.0 / 60.0);
-        assert!(canvas.handle_focus(&input, SCREEN).is_empty());
-        assert_eq!(canvas.focused_button(SCREEN), Some(QUIT_BUTTON_ID));
-        input.queue_key_event(KEY_DOWN_ARROW, false);
-        input.begin_frame(1.0 / 60.0);
-
-        input.queue_key_event(KEY_SPACE, true);
-        input.begin_frame(1.0 / 60.0);
-        assert_eq!(canvas.handle_focus(&input, SCREEN), vec![QUIT_BUTTON_ID]);
-        assert_eq!(canvas.take_focused_clicks(), vec![QUIT_BUTTON_ID.as_u64()]);
-        input.queue_key_event(KEY_SPACE, false);
-        input.begin_frame(1.0 / 60.0);
-
-        input.set_gamepad_button(GAMEPAD_BUTTON_SOUTH, true);
-        input.begin_frame(1.0 / 60.0);
-        assert_eq!(canvas.handle_focus(&input, SCREEN), vec![QUIT_BUTTON_ID]);
-        assert_eq!(canvas.take_focused_clicks(), vec![QUIT_BUTTON_ID.as_u64()]);
-    }
-
-    #[test]
-    fn text_override_layout_plumbs_alignment_wrap_and_truncate_clip_into_ui_text() {
-        use unitas_render::ui_pass::{GlyphTextPainter, HorizontalAlign, UiElement, VerticalAlign};
-
-        let canvas = sample_canvas();
-        let default_items = canvas.draw_items(SCREEN);
-        let default_play = default_items
-            .iter()
-            .find(|item| item.text.is_some())
-            .and_then(|item| item.text());
-        assert!(default_play.is_some());
-        if let Some(ui_text) = default_play {
-            assert_eq!(ui_text.horizontal_align, HorizontalAlign::Left);
-            assert_eq!(ui_text.vertical_align, VerticalAlign::Top);
-            assert!(!ui_text.wrap);
-            assert_eq!(ui_text.max_width, None);
-            assert_eq!(ui_text.line_spacing, 1.0);
-            assert_eq!(ui_text.clip_rect, None);
-        }
-
-        let overrides = HashMap::from([(
-            PLAY_BUTTON_ID,
-            TextOverride {
-                text: "START GAME NOW".to_string(),
-                font_size: 20.0,
-                color: [1.0, 1.0, 1.0, 1.0],
-                layout: TextLayoutConfig {
-                    alignment: TextAnchor::MiddleCenter,
-                    horizontal_overflow: HorizontalWrapMode::Wrap,
-                    vertical_overflow: VerticalWrapMode::Truncate,
-                    line_spacing: 1.25,
-                },
-            },
-        )]);
-        let overridden_items = canvas.draw_items_with(SCREEN, &overrides);
-        let play_item = overridden_items.iter().find(|item| item.text.is_some());
-        assert!(play_item.is_some());
-        if let Some(item) = play_item
-            && let Some(ui_text) = item.text()
-        {
-            assert_eq!(ui_text.horizontal_align, HorizontalAlign::Center);
-            assert_eq!(ui_text.vertical_align, VerticalAlign::Middle);
-            assert!(ui_text.wrap);
-            assert_eq!(ui_text.max_width, Some(item.rect_px[2]));
-            assert_eq!(ui_text.line_spacing, 1.25);
-            assert_eq!(ui_text.clip_rect, Some(item.rect_px));
-        }
-
-        let mut painter = GlyphTextPainter::new();
-        let mut image = Rgba8::new(800, 600);
-        let mut target = UiTarget {
-            image: &mut image,
-            ids: None,
-        };
-        composite_ui(&mut target, &overridden_items, 1, Some(&mut painter));
-    }
-
-    fn layout_group_test_binding(
-        panel_id: EntityId,
-        row_id: EntityId,
-        icon_id: EntityId,
-        label_id: EntityId,
-        footer_id: EntityId,
-    ) -> UiBinding {
-        UiBinding {
-            canvases: vec![CanvasComponent {
-                entity: CANVAS_ID,
-                render_mode: CanvasRenderMode::ScreenSpaceOverlay,
-                sorting_order: 0,
-                scaler: None,
-            }],
-            rect_transforms: vec![
-                centered_rect(CANVAS_ID, None, [0.0, 0.0], SCREEN),
-                RectTransformComponent {
-                    entity: panel_id,
-                    parent: Some(CANVAS_ID),
-                    anchor_min: [0.0, 1.0],
-                    anchor_max: [0.0, 1.0],
-                    anchored_position: [50.0, -40.0],
-                    size_delta: [10.0, 10.0],
-                    pivot: [0.0, 1.0],
-                },
-                centered_rect(row_id, Some(panel_id), [0.0, 0.0], [10.0, 10.0]),
-                centered_rect(icon_id, Some(row_id), [0.0, 0.0], [32.0, 32.0]),
-                centered_rect(label_id, Some(row_id), [0.0, 0.0], [80.0, 20.0]),
-                centered_rect(footer_id, Some(panel_id), [0.0, 0.0], [100.0, 24.0]),
-            ],
-            elements: vec![
-                simple_image_element(panel_id, true, [0.1, 0.1, 0.1, 1.0]),
-                simple_image_element(icon_id, true, [1.0, 0.0, 0.0, 1.0]),
-                UiElementComponent::Text(UiTextComponent {
-                    entity: label_id,
-                    enabled: true,
-                    text: "PLAY GAME".to_string(),
-                    font_size: 20.0,
-                    color: [1.0, 1.0, 1.0, 1.0],
-                }),
-                simple_image_element(footer_id, true, [0.0, 0.5, 1.0, 1.0]),
-            ],
-            layout_groups: layout_group_test_groups(panel_id, row_id),
-            content_size_fitters: vec![UiContentSizeFitterComponent {
-                entity: panel_id,
-                horizontal_fit: ContentSizeFitMode::PreferredSize,
-                vertical_fit: ContentSizeFitMode::PreferredSize,
-                enabled: true,
-            }],
-        }
-    }
-
-    fn layout_group_test_groups(
-        panel_id: EntityId,
-        row_id: EntityId,
-    ) -> Vec<UiLayoutGroupComponent> {
-        vec![
-            UiLayoutGroupComponent {
-                entity: panel_id,
-                axis: LayoutGroupAxis::Vertical,
-                padding: UiPadding {
-                    left: 10,
-                    right: 14,
-                    top: 8,
-                    bottom: 12,
-                },
-                spacing: 6.0,
-                child_alignment: 1,
-                child_control_width: true,
-                child_control_height: true,
-                child_force_expand_width: true,
-                child_force_expand_height: false,
-                enabled: true,
-            },
-            UiLayoutGroupComponent {
-                entity: row_id,
-                axis: LayoutGroupAxis::Horizontal,
-                padding: UiPadding {
-                    left: 4,
-                    right: 4,
-                    top: 2,
-                    bottom: 2,
-                },
-                spacing: 8.0,
-                child_alignment: 3,
-                child_control_width: true,
-                child_control_height: false,
-                child_force_expand_width: false,
-                child_force_expand_height: false,
-                enabled: true,
-            },
-        ]
-    }
-
-    fn assert_layout_group_overrides(
-        canvas: &CanvasState,
-        panel_id: EntityId,
-        expected_panel_h: f32,
-    ) {
-        canvas.set_layout_group(UiLayoutGroupComponent {
-            entity: panel_id,
-            axis: LayoutGroupAxis::Vertical,
-            padding: UiPadding {
-                left: 10,
-                right: 14,
-                top: 8,
-                bottom: 12,
-            },
-            spacing: 20.0,
-            child_alignment: 1,
-            child_control_width: false,
-            child_control_height: true,
-            child_force_expand_width: false,
-            child_force_expand_height: false,
-            enabled: true,
-        });
-        let (updated_panel, _) = canvas
-            .element_rect(panel_id, SCREEN)
-            .unwrap_or(([0.0; 4], 1.0));
-        assert!((updated_panel[3] - (expected_panel_h + 14.0)).abs() < 0.01);
-
-        canvas.set_content_size_fitter(UiContentSizeFitterComponent {
-            entity: panel_id,
-            horizontal_fit: ContentSizeFitMode::Unconstrained,
-            vertical_fit: ContentSizeFitMode::Unconstrained,
-            enabled: true,
-        });
-        let (unconstrained_panel, _) = canvas
-            .element_rect(panel_id, SCREEN)
-            .unwrap_or(([0.0; 4], 1.0));
-        assert!((unconstrained_panel[2] - 10.0).abs() < 0.01);
-        assert!((unconstrained_panel[3] - 10.0).abs() < 0.01);
-    }
-
-    #[test]
-    fn vertical_and_horizontal_layout_groups_with_content_size_fitter_resolve_unity_child_rects() {
-        let panel_id = EntityId::new(200);
-        let row_id = EntityId::new(210);
-        let icon_id = EntityId::new(211);
-        let label_id = EntityId::new(212);
-        let footer_id = EntityId::new(220);
-
-        let binding = layout_group_test_binding(panel_id, row_id, icon_id, label_id, footer_id);
-        let canvas = CanvasState::new(binding);
-        let (label_rect, _) = canvas
-            .element_rect(label_id, SCREEN)
-            .unwrap_or(([0.0; 4], 1.0));
-        assert!(label_rect[2] > 50.0);
-        let expected_row_pref_w = 4.0 + 32.0 + 8.0 + label_rect[2] + 4.0;
-        let expected_row_pref_h = 2.0 + 32.0_f32.max(label_rect[3]) + 2.0;
-        let expected_panel_w = 10.0 + expected_row_pref_w.max(100.0) + 14.0;
-        let expected_panel_h = 8.0 + expected_row_pref_h + 6.0 + 24.0 + 12.0;
-
-        let (panel_rect, _) = canvas
-            .element_rect(panel_id, SCREEN)
-            .unwrap_or(([0.0; 4], 1.0));
-        assert!((panel_rect[0] - 50.0).abs() < 0.01);
-        assert!((panel_rect[1] - 40.0).abs() < 0.01);
-        assert!((panel_rect[2] - expected_panel_w).abs() < 0.01);
-        assert!((panel_rect[3] - expected_panel_h).abs() < 0.01);
-
-        let (row_rect, _) = canvas
-            .element_rect(row_id, SCREEN)
-            .unwrap_or(([0.0; 4], 1.0));
-        assert!((row_rect[0] - 60.0).abs() < 0.01);
-        assert!((row_rect[1] - 48.0).abs() < 0.01);
-        assert!((row_rect[2] - (expected_panel_w - 24.0)).abs() < 0.01);
-        assert!((row_rect[3] - expected_row_pref_h).abs() < 0.01);
-
-        let (icon_rect, _) = canvas
-            .element_rect(icon_id, SCREEN)
-            .unwrap_or(([0.0; 4], 1.0));
-        assert!((icon_rect[0] - 64.0).abs() < 0.01);
-        assert!((icon_rect[2] - 32.0).abs() < 0.01);
-        assert!((icon_rect[3] - 32.0).abs() < 0.01);
-        assert!((label_rect[0] - (64.0 + 32.0 + 8.0)).abs() < 0.01);
-
-        let (footer_rect, _) = canvas
-            .element_rect(footer_id, SCREEN)
-            .unwrap_or(([0.0; 4], 1.0));
-        assert!((footer_rect[0] - 60.0).abs() < 0.01);
-        assert!((footer_rect[1] - (48.0 + expected_row_pref_h + 6.0)).abs() < 0.01);
-        assert!((footer_rect[2] - (expected_panel_w - 24.0)).abs() < 0.01);
-        assert!((footer_rect[3] - 24.0).abs() < 0.01);
-
-        assert_layout_group_overrides(&canvas, panel_id, expected_panel_h);
-    }
-
-    fn assert_abi_layout_group_and_fitter() {
-        let handle = crate::unitas_runtime_new();
-        assert_ne!(handle, 0);
-        let packed_padding = 6u64 | (8u64 << 16) | (10u64 << 32) | (12u64 << 48);
-        let obj_id = crate::unitas_runtime_object_create(handle, 0, 0);
-        assert_ne!(obj_id, 0);
-        assert_eq!(
-            crate::unitas_runtime_ui_layout_group_set(
-                handle,
-                obj_id,
-                1,
-                packed_padding,
-                4.0,
-                1,
-                1 | 2 | 4 | 16,
-            ),
-            0
-        );
-        assert_eq!(
-            crate::unitas_runtime_ui_layout_group_set(handle, obj_id, 9, packed_padding, 4.0, 1, 0),
-            -2
-        );
-        assert_eq!(
-            crate::unitas_runtime_ui_content_size_fitter_set(handle, obj_id, 2, 1, 1),
-            0
-        );
-        assert_eq!(
-            crate::unitas_runtime_ui_content_size_fitter_set(handle, obj_id, 9, 1, 1),
-            -2
-        );
-        assert_eq!(crate::unitas_runtime_destroy(handle), 0);
-    }
-
-    #[test]
-    fn runtime_ui_and_abi_configure_layout_groups_and_content_size_fitter() {
-        let mut runtime = crate::Runtime::new().unwrap_or_else(|_| std::process::abort());
-        let canvas_id = runtime
-            .create_runtime_object("HudCanvas")
-            .unwrap_or(EntityId::new(1));
-        assert!(runtime.set_ui_layout_group(
-            canvas_id.as_u64(),
-            LayoutGroupAxis::Vertical,
-            UiPadding {
-                left: 6,
-                right: 8,
-                top: 10,
-                bottom: 12,
-            },
-            4.0,
-            1,
-            1 | 2 | 4 | 16,
-        ));
-        assert!(runtime.set_ui_content_size_fitter(
-            canvas_id.as_u64(),
-            ContentSizeFitMode::PreferredSize,
-            ContentSizeFitMode::MinSize,
-            true,
-        ));
-        assert!(!runtime.set_ui_layout_group(
-            0,
-            LayoutGroupAxis::Horizontal,
-            UiPadding::default(),
-            0.0,
-            0,
-            0,
-        ));
-        assert!(!runtime.set_ui_content_size_fitter(
-            0,
-            ContentSizeFitMode::Unconstrained,
-            ContentSizeFitMode::Unconstrained,
-            false,
-        ));
-        assert_abi_layout_group_and_fitter();
-    }
 }

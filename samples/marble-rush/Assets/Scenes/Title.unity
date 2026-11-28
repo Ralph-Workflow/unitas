@@ -27,7 +27,8 @@ Transform:
   m_LocalRotation: {x: 0.34202015, y: 0, z: 0, w: 0.9396926}
   m_LocalPosition: {x: 0, y: 9.5, z: -11.5}
   m_LocalScale: {x: 1, y: 1, z: 1}
-  m_Children: []
+  m_Children:
+  - {fileID: 1000000402}
   m_Father: {fileID: 0}
 --- !u!20 &1000000003
 Camera:
@@ -2569,3 +2570,55 @@ MonoBehaviour:
   m_Name:
   m_EditorClassIdentifier:
   attractMode: 1
+--- !u!1 &1000000401
+GameObject:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  serializedVersion: 6
+  m_Component:
+  - component: {fileID: 1000000402}
+  - component: {fileID: 1000000403}
+  m_Layer: 0
+  m_Name: MusicLoop
+  m_TagString: Untagged
+  m_Icon: {fileID: 0}
+  m_NavMeshLayer: 0
+  m_StaticEditorFlags: 0
+  m_IsActive: 1
+--- !u!4 &1000000402
+Transform:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1000000401}
+  serializedVersion: 2
+  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
+  m_LocalPosition: {x: 0, y: 0, z: 0}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_Children: []
+  m_Father: {fileID: 1000000002}
+--- !u!82 &1000000403
+AudioSource:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1000000401}
+  m_Enabled: 1
+  serializedVersion: 4
+  OutputAudioMixerGroup: {fileID: 0}
+  m_audioClip: {fileID: 8300000, guid: 94b7c7c2da177ced164cc015bb1214f6, type: 3}
+  m_PlayOnAwake: 1
+  m_Volume: 0.5
+  m_Pitch: 1
+  m_Loop: 1
+  Mute: 0
+  Spatialize: 0
+  m_Priority: 128
+  DopplerLevel: 1
+  m_MinDistance: 1
+  m_MaxDistance: 500
+  m_SpatialBlend: 0

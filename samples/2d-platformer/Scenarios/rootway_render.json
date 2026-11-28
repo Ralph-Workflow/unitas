@@ -1,0 +1,29 @@
+{
+  "name": "rootway_render",
+  "steps": [
+    {
+      "load_scene": {
+        "path": "samples/2d-platformer/Assets/Scenes/Rootway.unity"
+      }
+    },
+    {
+      "tick": {
+        "frames": 10,
+        "delta_seconds": 0.02
+      }
+    }
+  ],
+  "checkpoints": [
+    {
+      "id": "rootway-frame",
+      "after_step": 2,
+      "kind": "render_capture",
+      "camera": "Main Camera",
+      "width": 320,
+      "height": 180,
+      "expected_non_background_pixels": 1000,
+      "reference": "../References/rootway_render.bmp",
+      "tolerance": 0.0
+    }
+  ]
+}

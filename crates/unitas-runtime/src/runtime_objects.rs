@@ -33,6 +33,8 @@ impl Runtime {
                 entity_base,
                 entity_count: 0,
                 rigid_bodies: std::collections::BTreeSet::new(),
+                cameras: Vec::new(),
+                urp_overlay_cameras: Vec::new(),
             });
             self.active_scene = Some(0);
         }

@@ -6,8 +6,9 @@ use unitas_core::EntityId;
 
 use super::{DEFAULT_UI_REFERENCE_RESOLUTION, Runtime};
 use crate::canvas::{
-    InputFieldEndEditEvent, InputFieldValueChangedEvent, TextLayoutConfig, UiDrawItem,
-    UiInputFieldComponent,
+    CanvasScalerOverride, InputFieldEndEditEvent, InputFieldValueChangedEvent,
+    SliderValueChangedEvent, TextLayoutConfig, ToggleValueChangedEvent, UiCanvasGroupComponent,
+    UiDrawItem, UiInputFieldComponent, UiSliderComponent, UiToggleComponent,
 };
 
 impl Runtime {
@@ -193,6 +194,157 @@ impl Runtime {
         scene.ui.set_input_field(field, screen_size);
         true
     }
+    pub fn set_ui_toggle(&mut self, toggle: UiToggleComponent) -> bool {
+        if toggle.entity.as_u64() == 0 {
+            return false;
+        }
+        let screen_size = self.ui_screen_size();
+        let Some(idx) = self.resolve_ui_scene_index(toggle.entity) else {
+            return false;
+        };
+        let Some(scene) = self.scenes.get_mut(idx) else {
+            return false;
+        };
+        scene.ui.set_toggle(toggle, screen_size);
+        true
+    }
+    pub fn ui_toggle(&self, object_id: u64) -> Option<&UiToggleComponent> {
+        if object_id == 0 {
+            return None;
+        }
+        let entity = EntityId::new(object_id);
+        self.scenes.iter().find_map(|scene| scene.ui.toggle(entity))
+    }
+    pub fn set_ui_toggle_value(&mut self, object_id: u64, is_on: bool, notify: bool) -> bool {
+        if object_id == 0 {
+            return false;
+        }
+        let entity = EntityId::new(object_id);
+        self.scenes
+            .iter_mut()
+            .any(|scene| scene.ui.set_toggle_value(entity, is_on, notify))
+    }
+    pub fn take_ui_toggle_value_changed(&mut self) -> Vec<ToggleValueChangedEvent> {
+        let mut events = Vec::new();
+        for scene in &mut self.scenes {
+            events.extend(scene.ui.take_toggle_value_changed());
+        }
+        events
+    }
+    pub fn set_ui_slider(&mut self, slider: UiSliderComponent) -> bool {
+        if slider.entity.as_u64() == 0 {
+            return false;
+        }
+        let screen_size = self.ui_screen_size();
+        let Some(idx) = self.resolve_ui_scene_index(slider.entity) else {
+            return false;
+        };
+        let Some(scene) = self.scenes.get_mut(idx) else {
+            return false;
+        };
+        scene.ui.set_slider(slider, screen_size);
+        true
+    }
+    pub fn ui_slider(&self, object_id: u64) -> Option<&UiSliderComponent> {
+        if object_id == 0 {
+            return None;
+        }
+        let entity = EntityId::new(object_id);
+        self.scenes.iter().find_map(|scene| scene.ui.slider(entity))
+    }
+    pub fn set_ui_slider_value(&mut self, object_id: u64, value: f32, notify: bool) -> bool {
+        if object_id == 0 || !value.is_finite() {
+            return false;
+        }
+        let entity = EntityId::new(object_id);
+        self.scenes
+            .iter_mut()
+            .any(|scene| scene.ui.set_slider_value(entity, value, notify))
+    }
+    pub fn take_ui_slider_value_changed(&mut self) -> Vec<SliderValueChangedEvent> {
+        let mut events = Vec::new();
+        for scene in &mut self.scenes {
+            events.extend(scene.ui.take_slider_value_changed());
+        }
+        events
+    }
+    pub fn set_ui_canvas_scaler(&mut self, scaler: CanvasScalerOverride) -> bool {
+        let entity = scaler.entity;
+        let scene_idx = self
+            .scenes
+            .iter()
+            .position(|s| {
+                s.ui.canvas()
+                    .binding()
+                    .canvases
+                    .iter()
+                    .any(|c| c.entity == entity)
+            })
+            .or(self.active_scene);
+        let Some(idx) = scene_idx else {
+            return false;
+        };
+        let Some(scene) = self.scenes.get_mut(idx) else {
+            return false;
+        };
+        scene.ui.set_canvas_scaler(scaler)
+    }
+    pub fn set_ui_canvas_group(&mut self, group: UiCanvasGroupComponent) -> bool {
+        let entity = group.entity;
+        let scene_idx = self
+            .scenes
+            .iter()
+            .position(|s| {
+                s.graph.contains(entity)
+                    || s.ui
+                        .canvas()
+                        .binding()
+                        .rect_transforms
+                        .iter()
+                        .any(|r| r.entity == entity)
+            })
+            .or(self.active_scene);
+        let Some(idx) = scene_idx else {
+            return false;
+        };
+        let Some(scene) = self.scenes.get_mut(idx) else {
+            return false;
+        };
+        scene.ui.set_canvas_group(group)
+    }
+    pub fn set_ui_rect_mask(&mut self, object_id: u64, enabled: bool) -> bool {
+        if object_id == 0 {
+            return false;
+        }
+        let entity = EntityId::new(object_id);
+        let scene_idx = self
+            .scenes
+            .iter()
+            .position(|s| {
+                s.ui.canvas()
+                    .binding()
+                    .rect_transforms
+                    .iter()
+                    .any(|r| r.entity == entity)
+            })
+            .or(self.active_scene);
+        let Some(idx) = scene_idx else {
+            return false;
+        };
+        let Some(scene) = self.scenes.get_mut(idx) else {
+            return false;
+        };
+        scene.ui.set_rect_mask(entity, enabled);
+        true
+    }
+    pub fn set_ui_screen_dpi(&mut self, dpi: f32) {
+        if !dpi.is_finite() || dpi < 0.0 {
+            return;
+        }
+        for scene in &mut self.scenes {
+            scene.ui.set_screen_dpi(dpi);
+        }
+    }
 
     pub fn ui_input_field(&self, object_id: u64) -> Option<&UiInputFieldComponent> {
         if object_id == 0 {
@@ -325,6 +477,18 @@ impl Runtime {
                     }
                 }
             }
+            for scene in &mut self.scenes {
+                scene
+                    .ui
+                    .canvas_mut()
+                    .press_pointer(pointer.position, screen_size);
+            }
+        }
+        for scene in &mut self.scenes {
+            scene
+                .ui
+                .canvas_mut()
+                .move_pointer(pointer.position, screen_size);
         }
         if self.ui_pressed_button.is_some() && self.ui_pressed_button != hovered {
             self.ui_pressed_button = None;
@@ -336,6 +500,12 @@ impl Runtime {
                 self.pending_ui_clicks.push(pressed.as_u64());
             }
             self.ui_pressed_button = None;
+            for scene in &mut self.scenes {
+                scene
+                    .ui
+                    .canvas_mut()
+                    .release_pointer(pointer.position, screen_size);
+            }
         }
         let mut active_scene_idx = None;
         for (idx, scene) in self.scenes.iter().enumerate() {

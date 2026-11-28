@@ -202,6 +202,7 @@ pub fn composite_ui<T: UiElement>(
                 if let Some(painter) = painter.as_deref_mut() {
                     painter.paint_text(target, item.rect(), text);
                 }
+                write_ids(target, bounds, id);
             }
             None => {
                 let Some(draw_bounds) =
@@ -210,9 +211,9 @@ pub fn composite_ui<T: UiElement>(
                     continue;
                 };
                 draw_ui_sprite(target, item, bounds, draw_bounds);
+                write_ids(target, draw_bounds, id);
             }
         }
-        write_ids(target, bounds, id);
         coverages.push(UiCoverage {
             id,
             x: bounds.0,

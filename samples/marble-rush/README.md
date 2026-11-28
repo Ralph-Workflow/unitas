@@ -74,13 +74,13 @@ reported with its real state, never hidden.
 | S12 combo multiplier, S13 gold pickup window, S15 dash and cooldown | demonstrated | `Scenarios/combo_multiplier.json`, `Scenarios/gold_window.json`, `Scenarios/gold_collect.json`, `Scenarios/dash_cooldown.json` — all four pass |
 | S6 settings and persistence | demonstrated | `Scenarios/persist_write.json`, `Scenarios/persist_read.json` cover persistence of records, and the title scene's settings panel (`Assets/Scenes/Title.unity`, `Assets/Scripts/SettingsController.cs`) writes and applies the master, music and effects volume, fullscreen, resolution, vertical sync, quality, ghost, camera-shake and `reduced_motion` preferences — `Scenarios/settings_rows.json` flips the volume, fullscreen, resolution, vsync, quality, ghost, camera-shake and reduced-motion rows, asserts their immediate runtime application, and proves persistence across scene reloads (`--repeat 2`), alongside `Scenarios/reduced_motion.json` |
 | S7 input modes | partly demonstrated | `Scenarios/frame_independence.json` injects keyboard input (`W`, `A`) and sweeps 30/60/144/240 fps, and `Scenarios/gamepad_drive.scenario.json` injects the gamepad axes. `Scenarios/pointer_ui.scenario.json` drives the pointer (`inject_pointer` to the Play button at the 800x600 reference-resolution centre, then `inject_mouse_button`) and is in the `make verify-samples` scenario list: the native runtime detects the button hit and queues the clicked object id, the bridge binds the scene's uGUI buttons to their managed `UnityEngine.UI.Button` counterparts and pumps that queue every frame, so the click reaches `Button.onClick`, `HudController` logs `Title play clicked`, and the scenario's log checkpoint passes |
-| S8 visual checkpoints | partly demonstrated — see below | `Scenarios/s8_*.scenario.json`, `References/*.bmp` — all seven pass (`s8_title_checkpoint`, `s8_arena_countdown`, `s8_arena2_countdown`, `s8_arena3_countdown`, `s8_arena_x5_checkpoint`, `s8_results_gold_checkpoint`, `s8_quality_sweep`), their `render_capture` checkpoints included (`expected_non_background_pixels: 1000`, `tolerance: 0.005`), covering Arena 1, Arena 2 (`Assets/Scenes/Arena2.unity`), and Arena 3 (`Assets/Scenes/Arena3.unity`) at countdown plus quality levels Low/Medium/High. The two extra arenas' gameplay is also covered by `Scenarios/arenas_2_3.json` (11 of 11 checkpoints, in the lane); URP pipeline sweep remains open |
+| S8 visual checkpoints | partly demonstrated — see below | `Scenarios/s8_*.scenario.json`, `References/*.bmp` — all seven pass (`s8_title_checkpoint`, `s8_arena_countdown`, `s8_arena2_countdown`, `s8_arena3_countdown`, `s8_arena_x5_checkpoint`, `s8_results_gold_checkpoint`, `s8_quality_sweep`), their `render_capture` checkpoints included (`expected_non_background_pixels: 1000`, `tolerance: 0.005`), covering Arena 1, Arena 2 (`Assets/Scenes/Arena2.unity`), and Arena 3 (`Assets/Scenes/Arena3.unity`) at countdown plus quality levels Low/Medium/High. The two extra arenas' gameplay is also covered by `Scenarios/arenas_2_3.json` (11 of 11 checkpoints, in the lane). The URP 14.x Forward variant now exists as `samples/roll-a-ball-urp/` (URP asset + Universal Renderer data, URP Lit materials, quality levels pointing at the URP asset) and passes the s1 open-and-inspect scenario headless; the URP capture sweep against these references remains open |
 | S10 package | partly demonstrated | the lane packages macOS, Windows, and Linux players with a build report (`build_identifier`, `target`, `included_scenes`, `assets`, `total_size_bytes`, `major_contributors`, `compatibility_findings`, `licensing`) for each target under `target/samples-lane/packaged/{macos,windows,linux}/`, launches the macOS player on this host, and replays input in it (`packaged-player-proof` passes); Windows and Linux artifacts are cross-packaged with `package.not_launched` recorded on this macOS host |
 | S9 edit and restore | partly demonstrated — see below | `Scenarios/scene_edit_restore.json` edits the scene through the editor's own commands, creates and destroys a GameObject, proves the edit landed, undoes it and proves the scene file is byte identical to the original; `Scenarios/play_mode_edit_restore.json` proves that a play session's runtime edit is restored when the session ends; the person-facing editor half is not demonstrated |
 | S11 collision edge | demonstrated | `Scenarios/collision_edge.json` proves the collision edge, and `Scenarios/trigger_without_rigidbody.json` and `Scenarios/collision_payload.json` prove the trigger rule and the collision payload it rides on (see the S11 section below) |
 | S5 focus loss and recovery | demonstrated | the windowed player clears every held key, mouse button and axis on `WindowEvent::Focused(false)` and freezes the simulation (`time_scale` 0), and restores the time scale and clean input on focus return (`FocusPause` in `crates/unitas-runtime/src/input.rs`, wired in `crates/unitas-runtime/src/window.rs`); `Assets/Scenes/MarbleRush.unity` carries the `PausePanel` overlay (`PauseTitle`, `PauseStatus`, `ResumeButton`) driven by `Assets/Scripts/HudController.cs`, and `Scenarios/pause_resume.json` proves that pausing shows the overlay, freezes simulation (`Time.timeScale == 0`), silences gameplay audio while menu sounds continue, ignores non-Resume input while paused, and resumes play only after an explicit Resume click (`--repeat 2`) |
 | S12 combo timing sweep | demonstrated | `Scenarios/combo_timing_sweep.json` drives the marble around the pickup ring with the same travel per leg and sweeps only the gap between consecutive pickups: 1.400 s (below the 1.5 s combo window) raises the multiplier to x4, the window then expires 1.5167 s later (`Combo expired`), the next gap of 1.600 s (above the window) resets the multiplier to x1 and awards a single point, and a further 1.400 s gap re-arms it to x2; 17 of 17 checkpoints pass with `--repeat 2` |
-| S14 medals/records/ghost | demonstrated | `Scenarios/persist_state_write.json` awards the gold medal with the new best time and best score and unlocks Arena 2 (`Records saved medals arena1=gold bestTime 4.900 bestScore 50 arenas arena1,arena2 quality high bytes 160`) and writes the ghost file (`Ghost written version 2 steps 245 bytes 1996`); `Scenarios/persist_state_read.json` restores both on the next launch (`Records loaded medals arena1=gold ...`, `Ghost restored version 2 steps 245 bytes 1996`); `Scenarios/ghost_replay.scenario.json` finishes Arena 1 through replayed input in 796 frames (the `frames_under_30s` checkpoint), replays the recorded route on the ghost object within 1 cm at every fixed step (`Ghost replay within 0.01 m`, `Ghost attempt replay within 0.01 m`) and starts the next attempt against the reloaded scene (`next_attempt_origin`, `next_attempt_scene_reloaded`). All three run in the `make verify-samples` lane. The ghost's translucent material is not pinned by a render capture |
+| S14 medals/records/ghost | demonstrated | `Scenarios/persist_state_write.json` awards the gold medal with the new best time and best score and unlocks Arena 2 (`Records saved medals arena1=gold bestTime 4.900 bestScore 50 arenas arena1,arena2 quality high bytes 160`) and writes the ghost file (`Ghost written version 2 steps 245 bytes 1996`); `Scenarios/persist_state_read.json` restores both on the next launch (`Records loaded medals arena1=gold ...`, `Ghost restored version 2 steps 245 bytes 1996`); `Scenarios/ghost_replay.scenario.json` finishes Arena 1 through replayed input in 796 frames (the `frames_under_30s` checkpoint), replays the recorded route on the ghost object within 1 cm at every fixed step (`Ghost replay within 0.01 m`, `Ghost attempt replay within 0.01 m`) and starts the next attempt against the reloaded scene (`next_attempt_origin`, `next_attempt_scene_reloaded`). All three run in the `make verify-samples` lane. The ghost is not pinned by a render capture: the 2026-11-27 U5 measurement found `GhostBall` is a bare `GameObject` with no MeshFilter/MeshRenderer and no translucent ghost material exists in the sample assets (see `References/README.md`) |
 | S16 reduced motion | demonstrated | `Assets/Scripts/ReducedMotion.cs` owns the `reduced_motion` and `camera_shake` PlayerPrefs preferences and `PlayerController` stops both the speed trail (`Reduced motion active trail off`) and dash camera shake (`Camera shake suppressed dash reduced_motion`) when reduced motion is active, or when the camera-shake setting itself is switched off (`Camera shake suppressed dash camera_shake_off`), with identical run outcome (`Scenarios/camera_shake.json` and `Scenarios/reduced_motion.json`, both with `--repeat 2`) |
 
 ## Engine behavior the game depends on — scenario coverage
@@ -423,22 +423,52 @@ collider of its own.
   that `set_gameplay_paused(true)` silences the gameplay source while a menu
   source keeps playing.
 - **The collect chime is audible on the device, through the real path.** The
-  device lane captures the samples the device output accepted to
+  device lane captures the samples the windowed player's own device stream accepted to
   `target/device-lane/device_audio.wav` and asserts the chime energy in the
-  window after the injected pickup against the silence floor
+  window around the pickup frame the game's own log reports
   (`tools/verify_device.py`), so the capture proves the sample's own chime
-  clip reaching the device stream, not a synthetic tone.
-- What is **not** demonstrated: the capture comes from a separate headless
-  injection of the scene's `CollectChime` source, not from the windowed run,
-  so the windowed player's own audio is still not captured. The scene's own
-  `m_audioClip` reference **is** bound to the managed `AudioSource`: the
-  runtime resolves the serialized clip guid to the imported
-  `Assets/Audio/CollectChime.wav` and the managed source carries that
-  native clip id, proven by `Scenarios/scene_audio_clip_binding.json` and
-  `crates/unitas-runtime/tests/scene_audio_clip_binding.rs`. The managed
-  materialiser still identifies the native source by a positional entity-id
-  guess, so a miss would fall back to loading the clip by path.
-  Streaming music and 3D spatialization are out of scope for this phase.
+  clip reaching the device stream in the windowed run, not a synthetic tone
+  or a headless injection.
+- **The windowed player's own audio is captured.** The device lane captures
+  the samples the windowed player's own device stream accepted to
+  `target/device-lane/device_audio.wav`; the capture is silent until the
+  frame the game's own log reports the pickup and carries chime energy in the
+  window around that logged frame (`tools/verify_device.py`), so a synthetic
+  tone or headless injection can no longer satisfy it.
+- The scene's own `m_audioClip` reference **is** bound to the managed
+  `AudioSource`: the runtime resolves the serialized clip guid to the
+  imported `Assets/Audio/CollectChime.wav` and the managed source carries
+  that native clip id, proven by `Scenarios/scene_audio_clip_binding.json`
+  and `crates/unitas-runtime/tests/scene_audio_clip_binding.rs`. The managed
+  `AudioSource` no longer identifies its native source by a positional
+  entity-id guess: the runtime allocates a dedicated source entity
+  (`CreateSource(0)`), so the source identity and the GameObject identity no
+  longer collide.
+- **Music (gapless loop).** `Assets/Audio/MusicLoop.wav` is an original
+  two-second loop (synthesized pad + arpeggio, 44.1 kHz stereo). A
+  `MusicLoop` GameObject with an AudioSource (`PlayOnAwake`, `Loop`, 2D)
+  lives in the Title and Arena scenes and starts with the scene; because the
+  object name begins with "Music", the settings music-volume row scales it
+  (default full). Looping is sample-accurate: `crates/unitas-audio` ships a
+  boundary test that mixes the shipped clip through an AudioSource on the
+  Music group across the loop seam in arbitrary mixer-buffer sizes and
+  asserts per-frame equality with the clip, plus a device-capture test on
+  the stream the audio device accepts. The `music_loop` scenario binds the
+  clip in both scenes and exercises the music-volume row. Owed follow-on:
+  Unity `Streaming` load-type music via the `MusicStream` path (the
+  `unitas_runtime_audio_load_music` ABI exists but no managed caller wires
+  it yet).
+- **3D spatialization is demonstrated, through the real path.** The
+  `PositionalChime` `AudioSource` of `Assets/Scenes/PhysicsLab.unity` is
+  fully spatial (`m_SpatialBlend: 1`, min distance 1, max distance 60) and
+  plays the imported `Assets/Audio/CollectChime.wav` on awake, so the lab
+  scene now has an audible positional emitter.
+  `Scenarios/spatial_audio_physics_lab.json` proves the source is
+  materialised through the product path (the `[scene-audio] …
+  binding=scene` log), and
+  `crates/unitas-runtime/tests/scene_audio_clip_binding.rs` proves through
+  the headless mix ABI (`unitas_runtime_audio_mix`) that the mix pans toward
+  the ear on the source's side and attenuates with distance.
 
 ## Non-default lane
 
@@ -451,11 +481,13 @@ The lane also runs a **native scripted launch** (`unitas-player --sample
 process through the CoreCLR host and reports `script_host=coreclr` and
 `frames_stepped=120`. That path is green.
 
-**Current lane state (honest).** The lane runs 55 steps: the 40
+**Current lane state (honest).** The lane runs 58 steps: the 43
 scripting scenarios (including `frame_independence`, `pointer_ui`,
 `restart_recovery`, `combo_timing_sweep`, `pause_resume`, `settings_rows`,
 `camera_shake`, the arena scenario `arenas_2_3`,
 the seven `s8_*` visual checkpoints,
+the audio scenarios `music_loop` and `spatial_audio_physics_lab`,
+the platformer render checkpoint `rootway_render`,
 the four persistence scenarios `persist_write`, `persist_read`,
 `persist_state_write` and `persist_state_read`, the ghost-replay scenario
 `ghost_replay` and the four physics scenarios `collision_edge`,

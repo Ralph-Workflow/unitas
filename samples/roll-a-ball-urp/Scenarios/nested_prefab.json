@@ -1,0 +1,48 @@
+{
+  "name": "nested_prefab",
+  "steps": [
+    {
+      "load_scene": {
+        "path": "Assets/Scenes/Arena3.unity"
+      }
+    },
+    {
+      "tick": {
+        "frames": 3,
+        "delta_seconds": 0.016666666666666666
+      }
+    }
+  ],
+  "checkpoints": [
+    {
+      "id": "nested_cluster_instance_exists",
+      "after_step": 2,
+      "kind": "transform_position",
+      "object": "NestedPickupCluster",
+      "expected": [
+        -4.5,
+        0,
+        4.5
+      ],
+      "tolerance": 0.05
+    },
+    {
+      "id": "nested_child_override_applied",
+      "after_step": 2,
+      "kind": "transform_position",
+      "object": "NestedPickupStar",
+      "expected": [
+        -4.5,
+        0.75,
+        4.5
+      ],
+      "tolerance": 0.05
+    },
+    {
+      "id": "frame_count_sanity",
+      "after_step": 2,
+      "kind": "frame_count",
+      "expected": 4
+    }
+  ]
+}

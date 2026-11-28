@@ -1,0 +1,67 @@
+{
+  "name": "arena_sweeper",
+  "steps": [
+    {
+      "load_scene": {
+        "path": "Assets/Scenes/Arena3.unity"
+      }
+    },
+    {
+      "inject_key": {
+        "key": "S",
+        "pressed": true
+      }
+    },
+    {
+      "tick": {
+        "frames": 20,
+        "delta_seconds": 0.016666666666666666
+      }
+    },
+    {
+      "inject_key": {
+        "key": "S",
+        "pressed": false
+      }
+    },
+    {
+      "tick": {
+        "frames": 100,
+        "delta_seconds": 0.016666666666666666
+      }
+    }
+  ],
+  "checkpoints": [
+    {
+      "id": "marble_positioned_in_sweeper_lane",
+      "after_step": 3,
+      "kind": "transform_position",
+      "object": "PlayerBall",
+      "expected": [
+        0,
+        0.5,
+        -2.5
+      ],
+      "tolerance": 0.5
+    },
+    {
+      "id": "kinematic_sweeper_contact_logged",
+      "after_step": 5,
+      "kind": "log",
+      "severity": "log",
+      "contains": "PlayerBall moved by kinematic sweeper MovingBlock_1"
+    },
+    {
+      "id": "marble_displaced_by_kinematic_sweeper",
+      "after_step": 5,
+      "kind": "transform_position",
+      "object": "PlayerBall",
+      "expected": [
+        0.75,
+        0.5,
+        -2.5
+      ],
+      "tolerance": 0.6
+    }
+  ]
+}

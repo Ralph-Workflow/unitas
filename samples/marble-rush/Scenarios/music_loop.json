@@ -1,0 +1,38 @@
+{
+  "name": "music_loop",
+  "steps": [
+    { "load_scene": { "path": "Assets/Scenes/Title.unity" } },
+    { "tick": { "frames": 2, "delta_seconds": 0.016666666666666666 } },
+    { "inject_pointer": { "x": 270, "y": 240 } },
+    { "tick": { "frames": 2, "delta_seconds": 0.016666666666666666 } },
+    { "inject_mouse_button": { "button": 0, "pressed": true } },
+    { "tick": { "frames": 2, "delta_seconds": 0.016666666666666666 } },
+    { "inject_mouse_button": { "button": 0, "pressed": false } },
+    { "tick": { "frames": 2, "delta_seconds": 0.016666666666666666 } },
+    { "load_scene": { "path": "Assets/Scenes/MarbleRush.unity" } },
+    { "tick": { "frames": 5, "delta_seconds": 0.016666666666666666 } }
+  ],
+  "checkpoints": [
+    {
+      "id": "title_music_loop_binds_the_imported_clip",
+      "after_step": 2,
+      "kind": "log",
+      "severity": "log",
+      "contains": "[scene-audio] source=MusicLoop clip=MusicLoop binding=scene native_clip_id="
+    },
+    {
+      "id": "music_volume_row_applies_to_the_music_source",
+      "after_step": 8,
+      "kind": "log",
+      "severity": "log",
+      "contains": "Settings music_volume 0.5"
+    },
+    {
+      "id": "arena_music_loop_binds_the_imported_clip",
+      "after_step": 10,
+      "kind": "log",
+      "severity": "log",
+      "contains": "[scene-audio] source=MusicLoop clip=MusicLoop binding=scene native_clip_id="
+    }
+  ]
+}

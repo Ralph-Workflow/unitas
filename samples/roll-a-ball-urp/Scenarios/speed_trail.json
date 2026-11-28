@@ -1,0 +1,61 @@
+{
+  "name": "speed_trail",
+  "steps": [
+    { "load_scene": { "path": "Assets/Scenes/RollABall.unity" } },
+    { "tick": { "frames": 2, "delta_seconds": 0.016666666666666666 } },
+    { "inject_key": { "key": "W", "pressed": true } },
+    { "tick": { "frames": 20, "delta_seconds": 0.016666666666666666 } },
+    { "inject_mouse_button": { "button": 0, "pressed": true } },
+    { "tick": { "frames": 24, "delta_seconds": 0.016666666666666666 } },
+    { "inject_mouse_button": { "button": 0, "pressed": false } },
+    { "inject_key": { "key": "W", "pressed": false } },
+    { "tick": { "frames": 10, "delta_seconds": 0.016666666666666666 } },
+    { "inject_key": { "key": "R", "pressed": true } },
+    { "tick": { "frames": 2, "delta_seconds": 0.016666666666666666 } },
+    { "inject_key": { "key": "R", "pressed": false } },
+    { "tick": { "frames": 2, "delta_seconds": 0.016666666666666666 } },
+    { "inject_key": { "key": "Space", "pressed": true } },
+    { "tick": { "frames": 2, "delta_seconds": 0.016666666666666666 } },
+    { "inject_key": { "key": "Space", "pressed": false } },
+    { "tick": { "frames": 10, "delta_seconds": 0.016666666666666666 } }
+  ],
+  "checkpoints": [
+    {
+      "id": "trail_off_below_threshold",
+      "after_step": 4,
+      "kind": "log",
+      "severity": "log",
+      "contains": "Trail emitting False"
+    },
+    {
+      "id": "trail_emits_above_threshold",
+      "after_step": 6,
+      "kind": "log",
+      "severity": "log",
+      "contains": "Trail emitting True"
+    },
+    {
+      "id": "marble_advanced_with_boost_trail",
+      "after_step": 6,
+      "kind": "transform_position",
+      "object": "PlayerBall",
+      "expected": [0.0, 0.499931, 5.505125],
+      "tolerance": 0.05
+    },
+    {
+      "id": "reset_stops_trail_and_returns_marble_to_origin",
+      "after_step": 13,
+      "kind": "transform_position",
+      "object": "PlayerBall",
+      "expected": [0.0, 0.5, 0.0],
+      "tolerance": 0.01
+    },
+    {
+      "id": "dash_fired_from_origin",
+      "after_step": 17,
+      "kind": "log",
+      "severity": "log",
+      "contains": "Dash fired 1"
+    }
+  ]
+}
