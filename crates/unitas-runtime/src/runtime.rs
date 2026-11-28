@@ -387,20 +387,27 @@ impl Runtime {
         let (descs, collider_diagnostics) = body_descs(&assembled.graph, &assembled.physics);
         validate_bodies(&descs)?;
         self.prepare_scene_load(mode, &settings, &mut hook);
-        let loaded =
-            self.build_loaded_scene(path, assembled, scripts, &descs, collider_diagnostics)?;
+        let entity_base = self.next_entity_base();
+        let loaded = self.build_loaded_scene(
+            path,
+            entity_base,
+            assembled,
+            scripts,
+            &descs,
+            collider_diagnostics,
+        )?;
         self.finish_scene_load(loaded)
     }
 
     fn build_loaded_scene(
         &mut self,
         path: &Path,
+        entity_base: u64,
         assembled: AssembledScene,
         scripts: Vec<ScriptInstance>,
         descs: &[(EntityId, BodySpec)],
         collider_diagnostics: Vec<(EntityId, String)>,
     ) -> Result<LoadedScene, RuntimeError> {
-        let entity_base = self.next_entity_base();
         let mut graph = assembled.graph;
         graph.shift_entity_ids(entity_base);
         let mut ui = assembled.ui;

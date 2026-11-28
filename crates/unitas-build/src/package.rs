@@ -583,7 +583,6 @@ pub fn package_desktop_target(
         report,
         target,
         host,
-        launched,
         output_dir,
         &target_dir,
         &launch_artifact,
@@ -684,13 +683,12 @@ fn finalize_packaged_target_report(
     mut report: BuildReport,
     target: BuildTarget,
     host: BuildTarget,
-    launched: bool,
     output_dir: &Path,
     target_dir: &Path,
     launch_artifact: &Path,
     product_name: &str,
 ) -> BuildReport {
-    if !launched {
+    if target != host {
         let reason = format!(
             "the {target} package was staged on this {host} host but not launched: \
              this host cannot run {target} players"

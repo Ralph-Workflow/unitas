@@ -96,7 +96,7 @@ struct ParallelAnimatorOutput {
 }
 
 type ParallelAnimatorSlot = Arc<Mutex<Option<ParallelAnimatorOutput>>>;
-type AnimatorTask = (EntityId, Mutex<Option<Animator>>);
+type ParallelAnimatorTask = (EntityId, Mutex<Option<Animator>>);
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct EntityAnimatorEntry {
@@ -630,7 +630,7 @@ impl AnimationWorld {
         all_child_bindings
     }
 
-    fn collect_parallel_tasks(&mut self) -> (Vec<AnimatorTask>, Vec<ParallelAnimatorSlot>) {
+    fn collect_parallel_tasks(&mut self) -> (Vec<ParallelAnimatorTask>, Vec<ParallelAnimatorSlot>) {
         let animated: Vec<EntityId> = self.animated.iter().copied().collect();
         let mut tasks = Vec::with_capacity(animated.len());
         let mut slots: Vec<ParallelAnimatorSlot> = Vec::with_capacity(animated.len());
@@ -687,7 +687,7 @@ impl AnimationWorld {
         jobs: &JobSystem,
         frame_copy: AnimatorFrame,
         task_count: usize,
-        job_tasks: Arc<Vec<AnimatorTask>>,
+        job_tasks: Arc<Vec<ParallelAnimatorTask>>,
         job_slots: Arc<Vec<ParallelAnimatorSlot>>,
     ) {
         let workers = jobs.active_workers().max(1);
@@ -733,7 +733,7 @@ impl AnimationWorld {
 
     fn commit_parallel_animator_outputs(
         &mut self,
-        shared_tasks: &[AnimatorTask],
+        shared_tasks: &[ParallelAnimatorTask],
         shared_slots: &[ParallelAnimatorSlot],
         all_child_bindings: &mut Vec<(EntityId, Vec<SampledBinding>)>,
     ) {
