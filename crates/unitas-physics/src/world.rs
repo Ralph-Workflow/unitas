@@ -14,7 +14,7 @@ use crate::joint::{BrokenJointEvent3D, ConfigurableJointMotion, Joint3D, JointId
 use crate::matrix::CollisionMatrix;
 use crate::query::{
     cast_ray_against, cast_shape_against, normalize, overlaps_at, pose_of, probe_shape, CastShape,
-    QueryHit,
+    Dispatcher, QueryHit,
 };
 
 #[path = "world_joints.rs"]
@@ -2203,7 +2203,7 @@ impl World {
     }
 
     fn cast_against_body(
-        dispatcher: crate::query::Dispatcher<'_>,
+        dispatcher: Dispatcher<'_>,
         body: &Body,
         cast_shape: CastShape,
         ray: ([f64; 3], [f64; 3], f64),
