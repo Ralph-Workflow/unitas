@@ -4,7 +4,7 @@ use crate::two_d::collider::{
     compute_contact2d, dot2, length2, shape_vertices_world, sub2, transform_point2, Collider2D,
     ColliderId2D, RawContact2D, Shape2D,
 };
-use crate::two_d::event::ContactPoint2D;
+use crate::two_d::event::{ContactPoint2D, Endpoint2D};
 
 use super::{ordered_pair, PairState2D, World2D, DEFAULT_SOLVER_ITERATIONS_2D};
 
@@ -89,8 +89,8 @@ type OverlappingPairData = (
     f32,
     [f32; 2],
     f32,
-    crate::two_d::event::CallbackEndpoint2D,
-    crate::two_d::event::CallbackEndpoint2D,
+    Endpoint2D,
+    Endpoint2D,
     RawContact2D,
 );
 
@@ -302,8 +302,8 @@ impl World2D {
     fn record_resolved_pair(
         &mut self,
         pair_key: (ColliderId2D, ColliderId2D),
-        side_a: (&Collider2D, f32, crate::two_d::event::CallbackEndpoint2D),
-        side_b: (&Collider2D, f32, crate::two_d::event::CallbackEndpoint2D),
+        side_a: (&Collider2D, f32, Endpoint2D),
+        side_b: (&Collider2D, f32, Endpoint2D),
         raw_contact: &RawContact2D,
         rel_vel_b_minus_a: [f32; 2],
         active_pairs: &mut BTreeMap<(ColliderId2D, ColliderId2D), PairState2D>,

@@ -390,10 +390,7 @@ fn setup_default_material_bodies(
     Ok((body_l0, body_l1, body_l2))
 }
 
-fn assert_default_material_updates(
-    world: &mut World,
-    bodies: (EntityId, EntityId, EntityId),
-) {
+fn assert_default_material_updates(world: &mut World, bodies: (EntityId, EntityId, EntityId)) {
     let (body_l0, body_l1, body_l2) = bodies;
     assert_eq!(
         world.body_material(body_l0),

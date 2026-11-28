@@ -159,7 +159,10 @@ fn entity_handle(runtime: &Runtime, name: &str) -> Result<u64, Box<dyn Error>> {
     Err(String::from("entity not found in scene graph").into())
 }
 
-fn assert_valid_trail_settings(runtime: &Runtime, trail_entity: EntityId) -> Result<(), Box<dyn Error>> {
+fn assert_valid_trail_settings(
+    runtime: &Runtime,
+    trail_entity: EntityId,
+) -> Result<(), Box<dyn Error>> {
     let settings = runtime
         .trails()
         .trail(trail_entity)

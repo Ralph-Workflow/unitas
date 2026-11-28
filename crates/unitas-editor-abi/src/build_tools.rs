@@ -83,7 +83,14 @@ fn run_player_build(
     config: &BuildConfiguration,
     output_dir: &Path,
     target: BuildTarget,
-) -> Result<(unitas_build::BundleResult, unitas_build::BuildReport, u64), String> {
+) -> Result<
+    (
+        unitas_build::bundle::StagedBundle,
+        unitas_build::BuildReport,
+        u64,
+    ),
+    String,
+> {
     let started = Instant::now();
     let outcome = execute_build_for_host(config, output_dir, 0, BuildTarget::current_host());
     let elapsed_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);

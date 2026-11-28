@@ -1,6 +1,7 @@
 use std::path::Path;
 
 use unitas_asset::scene::SpriteDrawMode;
+use unitas_core::EntityId;
 use unitas_runtime::{
     Runtime, unitas_runtime_destroy, unitas_runtime_new, unitas_runtime_object_create,
     unitas_runtime_sprite_create, unitas_runtime_sprite_set_color,

@@ -176,9 +176,7 @@ fn light_2d_abi_roundtrip_and_invalid_argument_handling() -> Result<(), Box<dyn 
     Ok(())
 }
 
-fn load_light_2d_capture_runtime(
-    dir: &Path,
-) -> Result<Runtime, Box<dyn std::error::Error>> {
+fn load_light_2d_capture_runtime(dir: &Path) -> Result<Runtime, Box<dyn std::error::Error>> {
     let _ = std::fs::remove_dir_all(dir);
     std::fs::create_dir_all(dir)?;
     let texture = dir.join("sprite.tga");

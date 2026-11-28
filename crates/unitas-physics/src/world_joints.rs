@@ -146,7 +146,12 @@ impl World {
         self.apply_fixed_joint_poses(
             &fj,
             (idx_a, opt_idx_b, inv_a, inv_b),
-            (world_a, world_b, pos_delta, slerp_rotation(rot_a, rot_b, inv_a / inv_sum)),
+            (
+                world_a,
+                world_b,
+                pos_delta,
+                slerp_rotation(rot_a, rot_b, inv_a / inv_sum),
+            ),
             (vel_a, ang_a, vel_b, ang_b),
             touched,
         );
@@ -176,7 +181,11 @@ impl World {
             };
             self.apply_joint_body_pose(
                 idx_a,
-                (fj.anchor_a, add(world_a, scale3(pos_delta, w_a)), target_rot),
+                (
+                    fj.anchor_a,
+                    add(world_a, scale3(pos_delta, w_a)),
+                    target_rot,
+                ),
                 next_motion,
                 touched,
             );
@@ -189,7 +198,11 @@ impl World {
             };
             self.apply_joint_body_pose(
                 idx_b,
-                (fj.anchor_b, subtract(world_b, scale3(pos_delta, w_b)), target_rot),
+                (
+                    fj.anchor_b,
+                    subtract(world_b, scale3(pos_delta, w_b)),
+                    target_rot,
+                ),
                 next_motion,
                 touched,
             );
@@ -529,7 +542,15 @@ impl World {
         let (ref_rot, mov_rot, ref_vel, mov_vel, ref_ang, mov_ang, mov_inv) = if mov_is_b {
             (rot_a, rot_b, vel_a, vel_b, ang_a, ang_b, inv_b)
         } else {
-            (IDENTITY_ROTATION, rot_a, [0.0; 3], vel_a, [0.0; 3], ang_a, inv_a)
+            (
+                IDENTITY_ROTATION,
+                rot_a,
+                [0.0; 3],
+                vel_a,
+                [0.0; 3],
+                ang_a,
+                inv_a,
+            )
         };
         let world_a = add(pos_a, rotate_vector(rot_a, cfg.anchor_a));
         let world_b = opt_idx_b.map_or(cfg.anchor_b, |_| {

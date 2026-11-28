@@ -19,7 +19,10 @@ use crate::two_d::composite::{
     merge_composite_outlines, CompositeCollider2D, CompositeGenerationType2D,
     CompositeGeometryType2D, TileColliderType2D, TilemapCollider2D,
 };
-use crate::two_d::effector::{Effector2D, PlatformEffector2D, SurfaceEffector2D};
+use crate::two_d::effector::{
+    AreaEffector2D, BuoyancyEffector2D, Effector2D, PlatformEffector2D, PointEffector2D,
+    SurfaceEffector2D,
+};
 use crate::two_d::event::{route_pair_messages_2d, ContactPoint2D, Endpoint2D, RoutedMessage2D};
 
 #[path = "contact_solver.rs"]
@@ -1585,14 +1588,12 @@ impl World2D {
             if body.is_dynamic() && body.simulated {
                 body.add_force(total_force);
                 if buoyancy.linear_drag > 0.0 {
-                    let factor =
-                        (1.0 - buoyancy.linear_drag * submerged_fraction * dt).max(0.0);
+                    let factor = (1.0 - buoyancy.linear_drag * submerged_fraction * dt).max(0.0);
                     body.linear_velocity[0] *= factor;
                     body.linear_velocity[1] *= factor;
                 }
                 if buoyancy.angular_drag > 0.0 {
-                    let factor =
-                        (1.0 - buoyancy.angular_drag * submerged_fraction * dt).max(0.0);
+                    let factor = (1.0 - buoyancy.angular_drag * submerged_fraction * dt).max(0.0);
                     body.angular_velocity *= factor;
                 }
             }
@@ -1680,9 +1681,12 @@ impl World2D {
 
         let mut earliest_advance: Option<f32> = None;
         for own in &own_colliders {
-            if let Some(advance) =
-                self.earliest_ccd_advance_for_collider(own, (prev_pos, rot), (dir, travel), &other_colliders)
-            {
+            if let Some(advance) = self.earliest_ccd_advance_for_collider(
+                own,
+                (prev_pos, rot),
+                (dir, travel),
+                &other_colliders,
+            ) {
                 if earliest_advance.is_none_or(|best| advance < best) {
                     earliest_advance = Some(advance);
                 }
@@ -1982,7 +1986,7 @@ fn shape_sweep_radius(shape: &Shape2D) -> f32 {
     }
 }
 
-fn integrate_dynamic_body_2d(body: &mut RigidBody2D, gravity: [f32; 2], dt: f32) -> bool {
+fn integrate_dynamic_body_2d(body: &mut Rigidbody2D, gravity: [f32; 2], dt: f32) -> bool {
     if body.sleeping {
         body.accumulated_force = [0.0, 0.0];
         body.accumulated_torque = 0.0;
@@ -2023,7 +2027,7 @@ fn integrate_dynamic_body_2d(body: &mut RigidBody2D, gravity: [f32; 2], dt: f32)
     body.collision_detection_mode == CollisionDetectionMode2D::Continuous
 }
 
-fn integrate_kinematic_body_2d(body: &mut RigidBody2D, dt: f32) -> bool {
+fn integrate_kinematic_body_2d(body: &mut Rigidbody2D, dt: f32) -> bool {
     if let Some(target_pos) = body.move_target_position.take() {
         if dt > 1e-6 {
             let dx = target_pos[0] - body.position[0];
@@ -2053,9 +2057,7 @@ fn shape_vertical_bounds_and_area(
             let r = radius.max(0.0);
             (center[1] - r, center[1] + r, std::f32::consts::PI * r * r)
         }
-        Shape2D::Box { half_extents } => {
-            box_vertical_bounds_and_area(*half_extents, center, angle)
-        }
+        Shape2D::Box { half_extents } => box_vertical_bounds_and_area(*half_extents, center, angle),
         Shape2D::Edge { start, end } => {
             let a = transform_point2(*start, center, angle);
             let b = transform_point2(*end, center, angle);

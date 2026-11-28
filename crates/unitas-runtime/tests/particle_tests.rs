@@ -3,7 +3,9 @@ use unitas_asset::unity_yaml;
 use unitas_core::EntityId;
 use unitas_physics::particles::SubEmitterTrigger;
 use unitas_runtime::Runtime;
-use unitas_runtime::particles::{parse_particle_system_modules, serialize_particle_system_modules};
+use unitas_runtime::particles::{
+    ParticleSystemModulesBinding, parse_particle_system_modules, serialize_particle_system_modules,
+};
 
 const PARTICLE_SCENE: &str = "--- !u!198 &1000\nParticleSystem:\n  m_Duration: 5\n  m_Loop: 0\n  m_MaxParticles: 32\n  m_StartLifetime: 2\n  m_StartSpeed: 0\n  m_StartSize: 0.25\n  m_StartColor:\n    r: 1\n    g: 0.5\n    b: 0\n    a: 1\n  m_EmissionRate: 0\n  m_Bursts:\n  - m_Time: 0\n    m_Count: 5\n    m_Cycles: 1\n";
 
@@ -89,7 +91,7 @@ const MODULE_SCENE: &str = "--- !u!198 &1000\nParticleSystem:\n  m_Duration: 5\n
 
 fn build_particle_sub_emitter_runtime(
     binding: &ParticleSystemBinding,
-    modules: &unitas_asset::scene::ParticleSystemModulesBinding,
+    modules: &ParticleSystemModulesBinding,
 ) -> Result<Runtime, Box<dyn std::error::Error>> {
     let mut runtime = Runtime::new()?;
     let parent = EntityId::new(1000);

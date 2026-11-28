@@ -432,8 +432,7 @@ impl FfmpegApi {
         }
     }
 
-    fn load_libraries()
-    -> Result<(Library, Library, Library, Library), VideoDecodeError> {
+    fn load_libraries() -> Result<(Library, Library, Library, Library), VideoDecodeError> {
         let avutil = load_ffmpeg_library(&[
             "/opt/homebrew/lib/libavutil.dylib",
             "/opt/homebrew/lib/libavutil.60.dylib",

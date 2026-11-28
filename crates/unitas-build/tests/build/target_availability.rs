@@ -263,9 +263,7 @@ fn desktop_packaging_outcome_builds_supported_target_and_records_externally_unav
     Ok(())
 }
 
-fn assert_desktop_packaging_outcome(
-    outcome: &unitas_build::package::DesktopPackageOutcome,
-) -> TestResult {
+fn assert_desktop_packaging_outcome(outcome: &unitas_build::DesktopPackageOutcome) -> TestResult {
     if outcome.is_packaged() {
         assert_eq!(outcome.state, "packaged");
         assert!(outcome.app_path.as_ref().is_some_and(|p| p.is_dir()));

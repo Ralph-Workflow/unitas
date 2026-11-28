@@ -8,8 +8,8 @@ use unitas_asset::project_settings::{
     parse_physics_manager, parse_physics2d_settings, parse_quality_settings,
 };
 use unitas_asset::scene::{
-    AudioSourceComponent, CharacterControllerComponent, ParticleBinding, PhysicsBinding,
-    RenderBinding, ScriptBinding, TrailBinding, assemble_scene_file_bundle,
+    AssembledScene, AudioSourceComponent, CharacterControllerComponent, ParticleBinding,
+    PhysicsBinding, RenderBinding, ScriptBinding, TrailBinding, assemble_scene_file_bundle,
 };
 use unitas_asset::trail::TrailRendererBinding;
 use unitas_asset::{
@@ -31,7 +31,7 @@ use unitas_render::Renderer;
 use unitas_render::ui_pass::GlyphTextPainter;
 
 use self::runtime_physics::{
-    body_descs, collect_character_controllers, collect_material_diagnostics,
+    BodySpec, body_descs, collect_character_controllers, collect_material_diagnostics,
     collect_scene_rigidbodies, contact_phase_code, controller_from_component, normalized,
     ordered_pair, rotations_equivalent, shift_scene_bodies, validate_bodies,
 };
@@ -387,17 +387,17 @@ impl Runtime {
         let (descs, collider_diagnostics) = body_descs(&assembled.graph, &assembled.physics);
         validate_bodies(&descs)?;
         self.prepare_scene_load(mode, &settings, &mut hook);
-        let entity_base = self.next_entity_base();
-        let loaded = self.build_loaded_scene(path, assembled, scripts, &descs, collider_diagnostics)?;
+        let loaded =
+            self.build_loaded_scene(path, assembled, scripts, &descs, collider_diagnostics)?;
         self.finish_scene_load(loaded)
     }
 
     fn build_loaded_scene(
         &mut self,
         path: &Path,
-        assembled: SceneBundle,
+        assembled: AssembledScene,
         scripts: Vec<ScriptInstance>,
-        descs: &[(EntityId, BodyDesc, [f64; 3], Vec<BodyColliderDesc>)],
+        descs: &[(EntityId, BodySpec)],
         collider_diagnostics: Vec<(EntityId, String)>,
     ) -> Result<LoadedScene, RuntimeError> {
         let entity_base = self.next_entity_base();

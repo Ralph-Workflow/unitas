@@ -796,7 +796,7 @@ pub fn attempt_desktop_target(
 
 fn unavailable_target_diagnostic(
     target: BuildTarget,
-    unavailable: Option<&crate::toolchain::ToolchainUnavailability>,
+    unavailable: Option<&crate::toolchain::UnavailableToolchain>,
 ) -> BuildDiagnostic {
     match unavailable {
         Some(unavail) => BuildDiagnostic::new(

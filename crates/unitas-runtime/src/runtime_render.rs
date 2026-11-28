@@ -5,7 +5,10 @@ use std::sync::Arc;
 use unitas_animation::CurveBindingTarget;
 use unitas_animation::curve::AssetReference;
 use unitas_asset::meta::GuidIndex;
-use unitas_asset::scene::{LightComponent, MeshRendererComponent, RenderBinding, SpriteDrawMode};
+use unitas_asset::scene::{
+    CameraComponent, LightComponent, MeshRendererComponent, RenderBinding, SpriteDrawMode,
+    SpriteRendererComponent,
+};
 use unitas_asset::texture::import::TextureImportSettings;
 use unitas_core::{EntityId, IDENTITY_ROTATION, SceneGraph, Transform, rotate_vector};
 use unitas_render::image::{Image, Rgba8};
@@ -1991,7 +1994,9 @@ mod tests {
         Ok(())
     }
 
-    fn write_multilight_scene(dir: &Path) -> Result<std::path::PathBuf, Box<dyn std::error::Error>> {
+    fn write_multilight_scene(
+        dir: &Path,
+    ) -> Result<std::path::PathBuf, Box<dyn std::error::Error>> {
         let _ = std::fs::remove_dir_all(dir);
         std::fs::create_dir_all(dir)?;
         let scene_path = dir.join("MultiLightScene.unity");
@@ -2044,9 +2049,24 @@ mod tests {
         std::fs::create_dir_all(&assets_dir)?;
         std::fs::create_dir_all(dir.join("ProjectSettings"))?;
         for (name, guid, rgb, tex_type) in [
-            ("Base.tga", "11111111111111111111111111111111", [255, 0, 255], 0),
-            ("Normal.tga", "22222222222222222222222222222222", [0, 0, 255], 1),
-            ("Emissive.tga", "33333333333333333333333333333333", [255, 255, 0], 0),
+            (
+                "Base.tga",
+                "11111111111111111111111111111111",
+                [255, 0, 255],
+                0,
+            ),
+            (
+                "Normal.tga",
+                "22222222222222222222222222222222",
+                [0, 0, 255],
+                1,
+            ),
+            (
+                "Emissive.tga",
+                "33333333333333333333333333333333",
+                [255, 255, 0],
+                0,
+            ),
         ] {
             write_test_tga(&assets_dir.join(name), 4, 4, rgb)?;
             std::fs::write(

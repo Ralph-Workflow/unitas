@@ -26,7 +26,13 @@ fn phy_002_story_5_platform_effector_allows_upward_pass_through_without_events_a
     );
 
     assert_platform_upward_pass(&mut world, player_body, player_col, platform_col);
-    assert_platform_landing_from_above(&mut world, player_go, player_body, player_col, platform_col);
+    assert_platform_landing_from_above(
+        &mut world,
+        player_go,
+        player_body,
+        player_col,
+        platform_col,
+    );
 }
 
 fn assert_platform_upward_pass(

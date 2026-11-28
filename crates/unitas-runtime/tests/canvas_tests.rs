@@ -429,10 +429,7 @@ fn input_field_handles_char_entry_caret_movement_deletion_and_submit_cancel_even
     );
 }
 
-fn composite_ui_image(
-    items: &[unitas_render::ui_pass::UiDrawItem],
-    painter: &mut GlyphTextPainter,
-) -> Rgba8 {
+fn composite_ui_image(items: &[UiDrawItem], painter: &mut GlyphTextPainter) -> Rgba8 {
     let mut img = Rgba8::new(320, 120);
     let mut target = UiTarget {
         image: &mut img,

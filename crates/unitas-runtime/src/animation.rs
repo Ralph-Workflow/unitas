@@ -96,6 +96,7 @@ struct ParallelAnimatorOutput {
 }
 
 type ParallelAnimatorSlot = Arc<Mutex<Option<ParallelAnimatorOutput>>>;
+type AnimatorTask = (EntityId, Mutex<Option<Animator>>);
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct EntityAnimatorEntry {
@@ -629,12 +630,7 @@ impl AnimationWorld {
         all_child_bindings
     }
 
-    fn collect_parallel_tasks(
-        &mut self,
-    ) -> (
-        Vec<(EntityId, Mutex<Option<AnimatorInstance>>)>,
-        Vec<ParallelAnimatorSlot>,
-    ) {
+    fn collect_parallel_tasks(&mut self) -> (Vec<AnimatorTask>, Vec<ParallelAnimatorSlot>) {
         let animated: Vec<EntityId> = self.animated.iter().copied().collect();
         let mut tasks = Vec::with_capacity(animated.len());
         let mut slots: Vec<ParallelAnimatorSlot> = Vec::with_capacity(animated.len());
@@ -677,7 +673,11 @@ impl AnimationWorld {
             Arc::clone(&shared_tasks),
             Arc::clone(&shared_slots),
         );
-        self.commit_parallel_animator_outputs(&shared_tasks, &shared_slots, &mut all_child_bindings);
+        self.commit_parallel_animator_outputs(
+            &shared_tasks,
+            &shared_slots,
+            &mut all_child_bindings,
+        );
         self.tick_legacy(frame, &mut all_child_bindings);
         self.resolve_all_object_references();
         all_child_bindings
@@ -687,7 +687,7 @@ impl AnimationWorld {
         jobs: &JobSystem,
         frame_copy: AnimatorFrame,
         task_count: usize,
-        job_tasks: Arc<Vec<(EntityId, Mutex<Option<AnimatorInstance>>)>>,
+        job_tasks: Arc<Vec<AnimatorTask>>,
         job_slots: Arc<Vec<ParallelAnimatorSlot>>,
     ) {
         let workers = jobs.active_workers().max(1);
@@ -733,7 +733,7 @@ impl AnimationWorld {
 
     fn commit_parallel_animator_outputs(
         &mut self,
-        shared_tasks: &[(EntityId, Mutex<Option<AnimatorInstance>>)],
+        shared_tasks: &[AnimatorTask],
         shared_slots: &[ParallelAnimatorSlot],
         all_child_bindings: &mut Vec<(EntityId, Vec<SampledBinding>)>,
     ) {
@@ -2098,7 +2098,13 @@ impl AnimationWorld {
             let Some(hook_entry) = hooks.entries.get_mut(&entity) else {
                 continue;
             };
-            process_entity_hooks(entity, entry, hook_entry, &previous_transform, &mut child_bindings);
+            process_entity_hooks(
+                entity,
+                entry,
+                hook_entry,
+                &previous_transform,
+                &mut child_bindings,
+            );
         }
         child_bindings
     }
@@ -2238,8 +2244,8 @@ fn process_entity_hooks(
         }
         hook_entry.last_ik_pose = Some(pose);
     }
-    let ik_override_translation = (entry.transform.translation != sampled_translation)
-        .then_some(entry.transform.translation);
+    let ik_override_translation =
+        (entry.transform.translation != sampled_translation).then_some(entry.transform.translation);
     let ik_override_rotation =
         (entry.transform.rotation != sampled_rotation).then_some(entry.transform.rotation);
     entry.callbacks.push(StateMachineCallback {
@@ -2374,11 +2380,8 @@ fn set_bone_world_rotation(
     bone_path: &str,
     solved_world_rotation: [f32; 4],
 ) {
-    let parent_world = compute_skeleton_world_transform(
-        root_transform,
-        locals,
-        parent_skeleton_path(bone_path),
-    );
+    let parent_world =
+        compute_skeleton_world_transform(root_transform, locals, parent_skeleton_path(bone_path));
     let new_local = normalize_rotation(unitas_core::multiply_rotation(
         conjugate_rotation(parent_world.rotation),
         solved_world_rotation,
@@ -2710,9 +2713,7 @@ mod tests {
         for (meta_name, guid) in [("a.tga.meta", guid_a), ("b.tga.meta", guid_b)] {
             std::fs::write(
                 dir.join(meta_name),
-                format!(
-                    "fileFormatVersion: 2\nguid: {guid}\nTextureImporter:\n  sRGBTexture: 0\n"
-                ),
+                format!("fileFormatVersion: 2\nguid: {guid}\nTextureImporter:\n  sRGBTexture: 0\n"),
             )?;
         }
 

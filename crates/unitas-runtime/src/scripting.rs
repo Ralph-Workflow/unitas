@@ -218,24 +218,16 @@ impl ProjectScriptIndex {
                 relative_path: relative_path.clone(),
                 script_name: script_name.clone(),
             };
-            self.scripts_by_rel_path
-                .insert(relative_path, guid.clone());
+            self.scripts_by_rel_path.insert(relative_path, guid.clone());
             self.scripts_by_name
                 .entry(script_name)
                 .or_default()
                 .push(guid.clone());
             self.scripts_by_guid.insert(guid, record);
         } else if is_plugin_file(&asset_path) {
-            let plugin = parse_plugin_meta_text(
-                &text,
-                &guid,
-                guid_hi,
-                guid_lo,
-                &asset_path,
-                &relative_path,
-            );
-            self.plugins_by_rel_path
-                .insert(relative_path, guid.clone());
+            let plugin =
+                parse_plugin_meta_text(&text, &guid, guid_hi, guid_lo, &asset_path, &relative_path);
+            self.plugins_by_rel_path.insert(relative_path, guid.clone());
             self.plugins_by_guid.insert(guid, plugin);
         }
         Ok(())

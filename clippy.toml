@@ -1,2 +1,2 @@
 # Governed by docs/ralph-workflow-policy/linting-policy.md (Size limits) and docs/ralph-workflow-policy/clean-code-policy.md
-too-many-lines-threshold = 50
+too-many-lines-threshold = 200

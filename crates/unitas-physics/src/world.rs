@@ -355,7 +355,12 @@ struct Body {
 }
 
 impl Body {
-    fn from_desc(entity: EntityId, handles: BackendHandles, desc: BodyDesc, role: BodyRole) -> Self {
+    fn from_desc(
+        entity: EntityId,
+        handles: BackendHandles,
+        desc: BodyDesc,
+        role: BodyRole,
+    ) -> Self {
         let bounding_radius = match &desc.collider_shape {
             ColliderShape::Primitive(shape) => shape.bounding_radius(),
             ColliderShape::Mesh { .. } => f64::INFINITY,
@@ -849,11 +854,7 @@ impl World {
         }
     }
 
-    fn prepare_kinematic_body_for_step(
-        backend: &mut Backend,
-        body: &mut Body,
-        delta_seconds: f64,
-    ) {
+    fn prepare_kinematic_body_for_step(backend: &mut Backend, body: &mut Body, delta_seconds: f64) {
         if body.pending_move_position.is_some() || body.pending_move_rotation.is_some() {
             if delta_seconds > 0.0 {
                 let current = backend.position(body.handles);
@@ -878,11 +879,7 @@ impl World {
             backend.set_rotation(body.handles, body.previous_rotation, false);
             body.sweep_velocity =
                 velocity_between(body.position, body.previous_position, delta_seconds);
-            backend.set_next_kinematic_pose(
-                body.handles,
-                Some(body.position),
-                Some(body.rotation),
-            );
+            backend.set_next_kinematic_pose(body.handles, Some(body.position), Some(body.rotation));
         }
     }
 
@@ -2206,7 +2203,7 @@ impl World {
     }
 
     fn cast_against_body(
-        dispatcher: &dyn rapier3d::parry::query::QueryDispatcher,
+        dispatcher: crate::query::Dispatcher<'_>,
         body: &Body,
         cast_shape: CastShape,
         ray: ([f64; 3], [f64; 3], f64),
