@@ -23,6 +23,45 @@ namespace Unitas.Bridge.Tests
             TestDestroyedObjectRendersDestroyed();
             TestCompiledCoroutineConditionalBreakpointAndDestroyedObject();
             TestDebugAgentLibraryBreakpointNotificationLocalsAndContinue();
+            TestConcurrentStopsPublishOneFrameAtATime();
+        }
+
+        private static void TestConcurrentStopsPublishOneFrameAtATime()
+        {
+            SequencePointTable table = new SequencePointTable();
+            table.Add(511, "/headless/FirstStop.cs", 10, "FirstStop.Tick", new[] { "frameIndex" });
+            table.Add(512, "/headless/SecondStop.cs", 20, "SecondStop.Tick", new[] { "frameIndex" });
+            DebugAgent.RegisterSequencePoints(table);
+
+            using BlockingCollection<DebugFrame> notifications = new BlockingCollection<DebugFrame>();
+            using DebugSession session = DebugAgent.BeginHeadlessSession(frame => notifications.Add(frame));
+
+            Check.That(
+                "concurrent stops: first breakpoint binds",
+                DebugAgent.TrySetBreakpoint("/headless/FirstStop.cs", 10, null, out string firstBindError) && string.IsNullOrEmpty(firstBindError));
+            Check.That(
+                "concurrent stops: second breakpoint binds",
+                DebugAgent.TrySetBreakpoint("/headless/SecondStop.cs", 20, null, out string secondBindError) && string.IsNullOrEmpty(secondBindError));
+
+            Task firstWorker = Task.Run(() => DebugAgent.Hit(511, new object?[] { 1 }));
+            bool firstNotified = notifications.TryTake(out DebugFrame? firstFrame, TimeSpan.FromSeconds(30));
+            Check.That("concurrent stops: first stop is published", firstNotified && firstFrame != null);
+            Check.Equal("concurrent stops: first stop names the first method", "FirstStop.Tick", firstFrame?.Method ?? string.Empty);
+
+            Task secondWorker = Task.Run(() => DebugAgent.Hit(512, new object?[] { 2 }));
+            Check.That(
+                "concurrent stops: second stop waits for the active stop to resume",
+                !notifications.TryTake(out DebugFrame? prematureSecondFrame, TimeSpan.FromSeconds(2)));
+
+            DebugAgent.Continue();
+            Check.That("concurrent stops: first worker completes after continue", firstWorker.Wait(TimeSpan.FromSeconds(60)));
+
+            bool secondNotified = notifications.TryTake(out DebugFrame? secondFrame, TimeSpan.FromSeconds(30));
+            Check.That("concurrent stops: second stop is published after the first resumes", secondNotified && secondFrame != null);
+            Check.Equal("concurrent stops: second stop names the second method", "SecondStop.Tick", secondFrame?.Method ?? string.Empty);
+
+            DebugAgent.Continue();
+            Check.That("concurrent stops: second worker completes after continue", secondWorker.Wait(TimeSpan.FromSeconds(60)));
         }
 
         private static void TestUnknownRequestReturnsErrorResponse()

@@ -1,7 +1,6 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
-using System.Reflection;
 using System.Text.Json.Nodes;
 using Unitas.Editor.Mcp;
 
@@ -364,9 +363,7 @@ namespace Unitas.Editor.Tests
 
         private static void AddOperation(ChangeSet set, JsonObject operation)
         {
-            typeof(ChangeSet)
-                .GetMethod("AddOperation", BindingFlags.Instance | BindingFlags.NonPublic)!
-                .Invoke(set, new object[] { operation });
+            set.AddOperation(operation);
         }
 
         private static string CreateProject(string label)

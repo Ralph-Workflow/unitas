@@ -173,6 +173,20 @@ namespace Unitas.Editor.Mcp
                     Scope.ReadProject),
                 arguments => HandleRevert(host, store, arguments));
 
+            RegisterPolicyTools(host, store);
+
+            host.RegisterResource(
+                new ResourceDefinition(
+                    PendingOrigin,
+                    "Pending Change Sets",
+                    "Change sets currently held for person review under the project review policy",
+                    "application/json",
+                    Scope.ReadProject),
+                () => ResourceContent.Untrusted(PendingOrigin, PendingPayload(store)));
+        }
+
+        private static void RegisterPolicyTools(McpHost host, ChangeSetStore store)
+        {
             host.RegisterTool(
                 new ToolDefinition(
                     "changes.policy.get",
@@ -210,15 +224,6 @@ namespace Unitas.Editor.Mcp
                     },
                     Scope.ReadProject),
                 arguments => HandlePolicySet(host, store, arguments));
-
-            host.RegisterResource(
-                new ResourceDefinition(
-                    PendingOrigin,
-                    "Pending Change Sets",
-                    "Change sets currently held for person review under the project review policy",
-                    "application/json",
-                    Scope.ReadProject),
-                () => ResourceContent.Untrusted(PendingOrigin, PendingPayload(store)));
         }
 
         // A mutating tool calls this instead of executing: the mutation is held

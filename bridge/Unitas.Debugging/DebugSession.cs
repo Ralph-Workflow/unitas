@@ -17,6 +17,7 @@ namespace Unitas.Debugging
         private readonly Action<DebugFrame>? _stoppedCallback;
         private readonly SemaphoreSlim _resume = new SemaphoreSlim(0, 1);
         private readonly object _stateGate = new object();
+        private readonly object _stopGate = new object();
         private bool _pauseRequested;
         private DebugStepMode _stepMode;
         private int _stepOriginDepth;
@@ -128,11 +129,14 @@ namespace Unitas.Debugging
 
         internal void Stop(DebugFrame frame, string reason)
         {
-            CurrentFrame = frame;
-            _server?.NotifyStopped(frame, reason);
-            _stoppedCallback?.Invoke(frame);
-            _resume.Wait(TimeSpan.FromSeconds(30));
-            CurrentFrame = null;
+            lock (_stopGate)
+            {
+                CurrentFrame = frame;
+                _server?.NotifyStopped(frame, reason);
+                _stoppedCallback?.Invoke(frame);
+                _resume.Wait(TimeSpan.FromSeconds(30));
+                CurrentFrame = null;
+            }
         }
 
         internal void Resume()

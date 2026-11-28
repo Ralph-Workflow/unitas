@@ -12,6 +12,14 @@
   </ItemGroup>
 
   <ItemGroup>
+    <InternalsVisibleTo Include="Unitas.Editor.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="Unitas.Editor.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="../../bridge/Unitas.Bridge/Unitas.Bridge.csproj" />
     <ProjectReference Include="../../bridge/Unitas.Debugging/Unitas.Debugging.csproj" />
     <ProjectReference Include="../../bridge/Unitas.Scripting/Unitas.Scripting.csproj" />
