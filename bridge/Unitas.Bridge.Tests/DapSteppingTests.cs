@@ -16,6 +16,10 @@ namespace Unitas.Bridge.Tests
 {
     public static class DapSteppingTests
     {
+        // The shard runs on a shared host; under load-average spikes a 5 s wait flakes,
+        // so every wait that asserts an event arrives uses one generous timeout.
+        private static readonly TimeSpan ContendedHostTimeout = TimeSpan.FromSeconds(60);
+
         public static void Run()
         {
             TestLaunchAndUnboundBreakpoints();
@@ -103,29 +107,29 @@ namespace Unitas.Bridge.Tests
                     DebugAgent.Hit(206, new object?[] { 6 }, 0);
                 });
 
-                JsonObject firstStop = client.Receive(TimeSpan.FromSeconds(5));
+                JsonObject firstStop = client.Receive(ContendedHostTimeout);
                 Check.Equal("dap stepping: initial breakpoint stop reason", "breakpoint", ReadString(firstStop["body"]?["reason"]));
 
                 Check.That("dap stepping: stepIn request succeeds", ReadBool(client.Request("stepIn")["success"]));
-                JsonObject stepInStop = client.Receive(TimeSpan.FromSeconds(5));
+                JsonObject stepInStop = client.Receive(ContendedHostTimeout);
                 Check.Equal("dap stepping: stepIn emits step reason", "step", ReadString(stepInStop["body"]?["reason"]));
                 JsonArray stepInFrames = (JsonArray)client.Request("stackTrace")["body"]!["stackFrames"]!;
                 Check.Equal("dap stepping: stepIn lands on helper line 20", 20, ReadInt(stepInFrames[0]?["line"]));
 
                 Check.That("dap stepping: stepOut request succeeds", ReadBool(client.Request("stepOut")["success"]));
-                JsonObject stepOutStop = client.Receive(TimeSpan.FromSeconds(5));
+                JsonObject stepOutStop = client.Receive(ContendedHostTimeout);
                 Check.Equal("dap stepping: stepOut emits step reason", "step", ReadString(stepOutStop["body"]?["reason"]));
                 JsonArray stepOutFrames = (JsonArray)client.Request("stackTrace")["body"]!["stackFrames"]!;
                 Check.Equal("dap stepping: stepOut skips sibling line 21 and lands on caller line 11", 11, ReadInt(stepOutFrames[0]?["line"]));
 
                 Check.That("dap stepping: next request succeeds", ReadBool(client.Request("next")["success"]));
-                JsonObject nextStop = client.Receive(TimeSpan.FromSeconds(5));
+                JsonObject nextStop = client.Receive(ContendedHostTimeout);
                 Check.Equal("dap stepping: next emits step reason", "step", ReadString(nextStop["body"]?["reason"]));
                 JsonArray nextFrames = (JsonArray)client.Request("stackTrace")["body"]!["stackFrames"]!;
                 Check.Equal("dap stepping: next steps over deeper frame 30 and lands on line 12", 12, ReadInt(nextFrames[0]?["line"]));
 
                 Check.That("dap stepping: continue after stepping succeeds", ReadBool(client.Request("continue")["success"]));
-                Check.That("dap stepping: worker finishes after stepping", worker.Wait(TimeSpan.FromSeconds(5)));
+                Check.That("dap stepping: worker finishes after stepping", worker.Wait(ContendedHostTimeout));
             }
             finally
             {
@@ -148,12 +152,12 @@ namespace Unitas.Bridge.Tests
                 Check.That("dap stepping: pause request succeeds", ReadBool(client.Request("pause")["success"]));
 
                 Task worker = Task.Run(() => DebugAgent.Hit(301, new object?[] { 42 }));
-                JsonObject stopped = client.Receive(TimeSpan.FromSeconds(5));
+                JsonObject stopped = client.Receive(ContendedHostTimeout);
                 Check.Equal("dap stepping: pause emits stopped event", "stopped", ReadString(stopped["event"]));
                 Check.Equal("dap stepping: pause reason is pause", "pause", ReadString(stopped["body"]?["reason"]));
 
                 client.Request("continue");
-                Check.That("dap stepping: paused worker resumes on continue", worker.Wait(TimeSpan.FromSeconds(5)));
+                Check.That("dap stepping: paused worker resumes on continue", worker.Wait(ContendedHostTimeout));
             }
             finally
             {
@@ -183,7 +187,7 @@ namespace Unitas.Bridge.Tests
                 UnityEngine.Object.DestroyImmediate(target);
 
                 Task worker = Task.Run(() => DebugAgent.Hit(401, new object?[] { 12, "ready", target }));
-                JsonObject stopped = client.Receive(TimeSpan.FromSeconds(5));
+                JsonObject stopped = client.Receive(ContendedHostTimeout);
                 Check.Equal("dap stepping: evaluate test stops at breakpoint", "stopped", ReadString(stopped["event"]));
 
                 JsonObject evalCount = client.Request("evaluate", new JsonObject { ["expression"] = "count" });
@@ -205,7 +209,7 @@ namespace Unitas.Bridge.Tests
                     ReadString(evalMutation["message"]).Contains("Side-effecting", StringComparison.Ordinal));
 
                 client.Request("continue");
-                Check.That("dap stepping: evaluate worker resumes", worker.Wait(TimeSpan.FromSeconds(5)));
+                Check.That("dap stepping: evaluate worker resumes", worker.Wait(ContendedHostTimeout));
             }
             finally
             {
@@ -299,7 +303,7 @@ namespace Unitas.Bridge.Tests
                     }
                 });
 
-                JsonObject thrownStopped = client.Receive(TimeSpan.FromSeconds(5));
+                JsonObject thrownStopped = ReceiveExceptionStop(client, "bad state in step");
                 Check.Equal("dap exception breakpoints: first-chance throw emits stopped event", "stopped", ReadString(thrownStopped["event"]));
                 Check.Equal("dap exception breakpoints: stop reason is exception", "exception", ReadString(thrownStopped["body"]?["reason"]));
                 Check.That(
@@ -327,7 +331,7 @@ namespace Unitas.Bridge.Tests
                     ReadString(evalException["body"]?["result"]).Contains("bad state in step", StringComparison.Ordinal));
 
                 Check.That("dap exception breakpoints: continue after caught exception succeeds", ReadBool(client.Request("continue")["success"]));
-                Check.That("dap exception breakpoints: thrown worker completes", thrownWorker.Wait(TimeSpan.FromSeconds(5)));
+                Check.That("dap exception breakpoints: thrown worker completes", thrownWorker.Wait(ContendedHostTimeout));
 
                 JsonObject setUncaughtResponse = client.Request("setExceptionBreakpoints", new JsonObject
                 {
@@ -369,7 +373,7 @@ namespace Unitas.Bridge.Tests
                     }
                 });
 
-                JsonObject unhandledStopped = client.Receive(TimeSpan.FromSeconds(5));
+                JsonObject unhandledStopped = ReceiveExceptionStop(client, "unhandled script argument");
                 Check.Equal("dap exception breakpoints: unhandled exception emits stopped event", "stopped", ReadString(unhandledStopped["event"]));
                 Check.Equal("dap exception breakpoints: unhandled stop reason is exception", "exception", ReadString(unhandledStopped["body"]?["reason"]));
                 Check.That(
@@ -380,12 +384,28 @@ namespace Unitas.Bridge.Tests
                 Check.Equal("dap exception breakpoints: unhandled exceptionInfo breakMode is unhandled", "unhandled", ReadString(unhandledInfo["body"]?["breakMode"]));
 
                 client.Request("continue");
-                Check.That("dap exception breakpoints: unhandled worker completes after continue", unhandledWorker.Wait(TimeSpan.FromSeconds(5)));
+                Check.That("dap exception breakpoints: unhandled worker completes after continue", unhandledWorker.Wait(ContendedHostTimeout));
             }
             finally
             {
                 session.Dispose();
             }
+        }
+
+        // The "all" filter stops on every first-chance exception in the host process,
+        // and under load the runtime raises unrelated ones (for example canceled waits),
+        // so consume stopped events until the expected exception's stop arrives instead
+        // of assuming it is the first.
+        private static JsonObject ReceiveExceptionStop(DapClient client, string expectedText)
+        {
+            DateTime deadline = DateTime.UtcNow + ContendedHostTimeout;
+            JsonObject stopped = client.Receive(ContendedHostTimeout);
+            while (DateTime.UtcNow < deadline
+                && !ReadString(stopped["body"]?["text"]).Contains(expectedText, StringComparison.Ordinal))
+            {
+                stopped = client.Receive(TimeSpan.FromSeconds(5));
+            }
+            return stopped;
         }
 
         private static string ReadString(JsonNode? node)
@@ -556,7 +576,7 @@ namespace Unitas.Bridge.Tests
             {
                 while (true)
                 {
-                    JsonObject message = Receive(TimeSpan.FromSeconds(5));
+                    JsonObject message = Receive(ContendedHostTimeout);
                     if (ReadString(message["type"]) == "response" && ReadInt(message["request_seq"]) == seq)
                     {
                         return message;

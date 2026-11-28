@@ -8,7 +8,7 @@ namespace Unitas.Editor.Tests
 {
     public static class ShellPlayTests
     {
-        private const string SampleSceneRelative = "samples/roll-a-ball/Assets/Scenes/RollABall.unity";
+        private const string SampleSceneRelative = "samples/marble-rush/Assets/Scenes/MarbleRush.unity";
 
         public static void Run()
         {
@@ -293,7 +293,7 @@ namespace Unitas.Editor.Tests
                 "unitas-shell-play-test-" + label + "-" + Guid.NewGuid().ToString("N"));
             string scenes = Path.Combine(root, "Assets", "Scenes");
             Directory.CreateDirectory(scenes);
-            File.Copy(ResolveSampleScenePath(), Path.Combine(scenes, "RollABall.unity"));
+            File.Copy(ResolveSampleScenePath(), Path.Combine(scenes, "MarbleRush.unity"));
             return root;
         }
 
