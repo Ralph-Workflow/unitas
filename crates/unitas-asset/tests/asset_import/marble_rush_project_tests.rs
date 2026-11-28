@@ -52,6 +52,12 @@ fn copy_tree(source: &Path, destination: &Path) -> std::io::Result<()> {
         .collect();
     entries.sort();
     for entry in entries {
+        // Library is generated, gitignored state that concurrent gate lanes
+        // (player/editor test runs) rewrite in place; copying it races their
+        // deletions and the reopened project regenerates it anyway.
+        if entry.file_name().is_some_and(|name| name == "Library") {
+            continue;
+        }
         let target = destination.join(entry.file_name().unwrap_or_default());
         if entry.is_dir() {
             copy_tree(&entry, &target)?;

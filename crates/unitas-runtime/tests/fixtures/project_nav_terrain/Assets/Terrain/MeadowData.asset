@@ -1,0 +1,18 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!156 &15600000
+TerrainData:
+  m_Name: MeadowData
+  m_Heightmap:
+    m_Resolution: 3
+    m_Size: {x: 30, y: 40, z: 30}
+    m_Heights:
+    - 0.0
+    - 0.25
+    - 0.5
+    - 0.25
+    - 0.5
+    - 0.75
+    - 0.5
+    - 0.75
+    - 1.0

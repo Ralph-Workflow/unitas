@@ -53,15 +53,13 @@ impl Runtime {
                 }
             }
             data.set_heights(&updates);
-            let world_origin = graph
-                .world_transform(entity)
-                .map_or([0.0; 3], |t| {
-                    [
-                        f64::from(t.translation[0]),
-                        f64::from(t.translation[1]),
-                        f64::from(t.translation[2]),
-                    ]
-                });
+            let world_origin = graph.world_transform(entity).map_or([0.0; 3], |t| {
+                [
+                    f64::from(t.translation[0]),
+                    f64::from(t.translation[1]),
+                    f64::from(t.translation[2]),
+                ]
+            });
             let center_position = [
                 world_origin[0] + size[0] * 0.5,
                 world_origin[1],

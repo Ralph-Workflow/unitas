@@ -71,10 +71,14 @@ pub(crate) mod ui_components;
 mod runtime_animation;
 #[path = "runtime_input.rs"]
 mod runtime_input;
+#[path = "runtime_navigation.rs"]
+mod runtime_navigation;
 #[path = "runtime_physics.rs"]
 mod runtime_physics;
 #[path = "runtime_render.rs"]
 mod runtime_render;
+#[path = "runtime_terrain.rs"]
+mod runtime_terrain;
 #[path = "runtime_tilemap.rs"]
 mod runtime_tilemap;
 #[path = "runtime_ui.rs"]
@@ -547,6 +551,8 @@ impl Runtime {
         );
         let rigidbodies = collect_scene_rigidbodies(&assembled.physics, entity_base);
         self.register_scene_bodies(&bodies, descs, &rigidbodies)?;
+        self.register_scene_navigation(&assembled.navigation, entity_base, &graph);
+        self.register_scene_terrains_from_path(path, entity_base, &graph, &mut diagnostics);
         attach_scene_physics_2d(
             &mut self.physics,
             &graph,

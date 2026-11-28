@@ -150,18 +150,6 @@ impl Runtime {
         registered
     }
 
-    pub(crate) fn write_back_navigation_transforms(&mut self) {
-        let entities = self.navigation.agent_entities();
-        for entity in entities {
-            if let Some(agent) = self.navigation.agent(entity) {
-                if agent.update_position {
-                    let pos = agent.position();
-                    self.write_back_entity_transform(entity, pos);
-                }
-            }
-        }
-    }
-
     pub fn ensure_navmesh_agent(&mut self, entity: EntityId) {
         let pos = self.entity_transform(entity).map_or([0.0; 3], |tf| {
             [

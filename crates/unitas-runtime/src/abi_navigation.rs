@@ -231,8 +231,9 @@ pub extern "C" fn unitas_runtime_navmesh_agent_get_stopped(handle: u64, entity: 
         let Some(agent) = state.runtime.navigation.agent(EntityId::new(entity)) else {
             return -3;
         };
+        let is_stopped = agent.is_stopped;
         state.clear_error();
-        i32::from(agent.is_stopped)
+        i32::from(is_stopped)
     }) {
         Ok(code) => code,
         Err(code) => code,
@@ -587,8 +588,9 @@ pub extern "C" fn unitas_runtime_navmesh_agent_get_path_status(handle: u64, enti
         let Some(agent) = state.runtime.navigation.agent(EntityId::new(entity)) else {
             return -3;
         };
+        let path_status = agent.path_status();
         state.clear_error();
-        match agent.path_status() {
+        match path_status {
             Some(PathQueryStatus::Complete) | None => 0,
             Some(PathQueryStatus::Partial) => 1,
             Some(PathQueryStatus::Invalid) => 2,
@@ -628,8 +630,9 @@ pub extern "C" fn unitas_runtime_navmesh_agent_has_path(handle: u64, entity: u64
         let Some(agent) = state.runtime.navigation.agent(EntityId::new(entity)) else {
             return -3;
         };
+        let has_path = agent.has_path();
         state.clear_error();
-        i32::from(agent.has_path())
+        i32::from(has_path)
     }) {
         Ok(code) => code,
         Err(code) => code,
@@ -894,8 +897,9 @@ pub extern "C" fn unitas_runtime_navmesh_obstacle_get_carving(handle: u64, entit
         let Some(entry) = state.runtime.navigation.entity_obstacle(EntityId::new(entity)) else {
             return -3;
         };
+        let carving = entry.carving;
         state.clear_error();
-        i32::from(entry.carving)
+        i32::from(carving)
     }) {
         Ok(code) => code,
         Err(code) => code,

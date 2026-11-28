@@ -21,6 +21,8 @@ mod abi_input;
 mod abi_jobs;
 #[path = "abi_joints.rs"]
 pub mod abi_joints;
+#[path = "abi_navigation.rs"]
+mod abi_navigation;
 #[path = "abi_particles.rs"]
 mod abi_particles;
 #[path = "abi_physics2d.rs"]
@@ -35,6 +37,8 @@ mod abi_queries;
 mod abi_render;
 #[path = "abi_simulation.rs"]
 mod abi_simulation;
+#[path = "abi_terrain.rs"]
+mod abi_terrain;
 #[path = "abi_trails.rs"]
 mod abi_trails;
 #[path = "abi_ui.rs"]
@@ -46,6 +50,7 @@ pub use abi_effectors2d::*;
 pub use abi_input::*;
 pub use abi_jobs::*;
 pub use abi_joints::*;
+pub use abi_navigation::*;
 pub use abi_particles::*;
 pub use abi_physics2d::*;
 pub use abi_physics3d::*;
@@ -53,6 +58,7 @@ pub use abi_player_loop::*;
 pub use abi_queries::*;
 pub use abi_render::*;
 pub use abi_simulation::*;
+pub use abi_terrain::*;
 pub use abi_trails::*;
 pub use abi_ui::*;
 
