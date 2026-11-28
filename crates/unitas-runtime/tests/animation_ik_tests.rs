@@ -1041,8 +1041,12 @@ fn ani_002_abi_root_motion_and_ik_getters_setters() -> Result<(), Box<dyn Error>
         0
     );
     let rot_b = abi_read(handle, 16)?;
-    assert!((abi_f32(&rot_b, 4) - std::f32::consts::FRAC_1_SQRT_2).abs() < 1e-4);
-    assert!((abi_f32(&rot_b, 12) - std::f32::consts::FRAC_1_SQRT_2).abs() < 1e-4);
+    assert!(
+        (abi_f32(&rot_b, 4) - std::f32::consts::FRAC_1_SQRT_2).abs() < 1e-4
+    );
+    assert!(
+        (abi_f32(&rot_b, 12) - std::f32::consts::FRAC_1_SQRT_2).abs() < 1e-4
+    );
     let out4 = unitas_runtime_path_buffer(handle, 4);
     assert_eq!(
         unitas_runtime_animator_get_ik_rotation_weight(handle, entity, 3, out4),
