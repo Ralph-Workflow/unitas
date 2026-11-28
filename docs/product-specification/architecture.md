@@ -156,18 +156,33 @@ core's native world.
 * **Identity:** each object has a stable native identity. A managed
   `UnityEngine.Object` is a thin handle that holds that identity and nothing
   else. Managed code keeps no copy of scene or engine state.
-* **Storage:** components of the same type are stored together so subsystems
-  iterate them in bulk. Looking an object up by identity is constant-time and
-  needs no global lock.
-* **Hierarchy and transforms:** each transform caches its world matrix. A
-  change to a local transform marks that transform and its descendants dirty.
-  World matrices are recomputed once per frame, before the systems that read
-  them run, and are never recomputed per query.
+* **Storage:** components of the same type are stored together in dense
+  arrays so subsystems iterate them in bulk. A native identity is a
+  generational handle: an index into a slot table plus a generation, so
+  looking an object up is one indexed read that needs no lock and no hash, and
+  a stale handle is detected rather than misread. Adding and removing
+  components keeps the arrays dense, and its cost does not grow with the size
+  of the world.
+* **Hierarchy and transforms:** each root object's hierarchy is stored as one
+  contiguous block in depth-first order, holding local transforms, cached
+  world matrices, and dirty bits. A change to a local transform marks that
+  transform and its descendants dirty. World matrices of dirty transforms are
+  recomputed once per frame, before the systems that read them run, as jobs
+  that run in parallel across hierarchies; they are never recomputed per
+  query. A read of a dirty transform's world value between those points
+  updates only that transform's dirty ancestors.
+* **Math:** vector, matrix, quaternion, and bounds math uses SIMD types from a
+  mature math library on every target that has SIMD, including WebAssembly
+  SIMD in browsers.
 * **Change tracking:** the world records what changed in each frame: objects
-  created and destroyed, components added and removed, and values written. A
-  subsystem keeps its own derived state, such as render proxies, physics
-  bodies, audio voices, and navigation agents, and updates it from those
-  changes. It never rebuilds derived state from the whole world each frame.
+  created and destroyed, components added and removed, and values written.
+  Each component array keeps a change version per element and a list of the
+  elements changed since each consumer last read it, so a consumer finds its
+  changes in time proportional to their number, without scanning and without
+  allocating. A subsystem keeps its own derived state, such as render proxies,
+  physics bodies, audio voices, and navigation agents, and updates it from
+  those changes. It never rebuilds derived state from the whole world each
+  frame.
 * **Lifetime:** destruction is deferred to defined points of the frame, as
   Unity defines. A handle to a destroyed object compares equal to null and
   raises Unity's exception when used. It never reaches freed memory.
@@ -185,6 +200,12 @@ core's native world.
   script to find out.
 * Headless sessions and captured frame rates drive the same loop with a
   controlled clock. There is no second loop for tests or tools.
+* **Frame pipelining:** while the main thread simulates frame N+1, render
+  threads record and submit frame N and the GPU executes frame N-1 or N. The
+  number of frames queued ahead of the display follows
+  `QualitySettings.maxQueuedFrames` and the target's presentation mode, so
+  input-to-display latency is bounded and stated. The main thread waits on
+  the GPU only where an API is synchronous by contract.
 
 ## Concurrency
 
@@ -216,6 +237,14 @@ core's native world.
 * Steady-state play allocates no persistent native memory and no managed
   memory per frame inside the engine. Growth comes from content the game loads
   or creates.
+* General-purpose native allocation goes through a scalable allocator with
+  per-thread caches, so jobs on many cores allocate without contending.
+* The managed heap uses the hosted .NET runtime's generational, concurrent
+  garbage collector. Collections of short-lived objects do not scan the whole
+  heap, and full collections run in the background where the target has
+  threads. Engine APIs that Unity documents as non-allocating allocate
+  nothing, and main-thread pause times are measured against the release's
+  declared budgets.
 * GPU resources are reference-counted by the content that uses them, are
   uploaded asynchronously, and are released when the last user goes away.
 * Native code that needs unchecked memory access, such as foreign-function
@@ -229,7 +258,15 @@ core's native world.
   description of each native API. They are never written by hand per member.
 * A binding call resolves its handle directly to the native object. It takes
   no global lock, allocates nothing on either side, and passes blittable data
-  by value or by span.
+  by value or by span. Calls go through direct unmanaged function pointers,
+  not marshalling stubs. An accessor that cannot block, allocate, or call back
+  into managed code, such as reading a transform's position, crosses without
+  a garbage-collector transition, so its cost is that of a native function
+  call.
+* Script callbacks are dispatched in batches: for each PlayerLoop phase, native
+  code passes the list of behaviours to call in one transition, and a managed
+  dispatcher calls each one directly, with no reflection and no per-call
+  transition.
 * An API that touches many objects, such as transform access arrays, physics
   query results, mesh data, or native containers, has a bulk form that crosses
   the boundary once per batch rather than once per element.
@@ -268,7 +305,26 @@ core's native world.
 ## Presentation
 
 * A render graph on `wgpu` draws everything: games, the editor, UI, text,
-  previews, and captures.
+  previews, and captures. The render graph, not `wgpu`, is the rendering
+  abstraction. Where a backend's native API offers a capability that `wgpu`
+  does not expose, such as asynchronous compute and copy queues, ray tracing,
+  mesh shaders, bindless resource tables, or pipeline libraries, the render
+  graph's backend for that API uses it through `wgpu`'s native-API interop,
+  inside the same graph. This is the one implementation of that capability on
+  that backend, not a second renderer.
+* **GPU-driven drawing:** render proxies live in a persistent GPU scene buffer
+  updated only where change tracking reports changes. On devices with compute,
+  culling against the frustum and a hierarchical depth buffer runs on the GPU,
+  and visible objects are drawn through indirect multi-draw calls grouped by
+  pipeline. CPU cost per frame therefore follows the number of distinct
+  pipelines and changed objects, not the number of visible objects. Devices
+  without compute use the same proxies with CPU culling jobs and instancing.
+* **Parallel recording:** passes and draw lists are recorded on several render
+  threads at once, into separate command encoders that submit in graph order.
+* **Pipelines:** each device's compiled pipelines are kept in a persistent
+  cache keyed by device and driver, warm-up creates them before first use, and
+  no frame waits on compiling a pipeline that warm-up or a previous run
+  created.
 * Shaders are translated at import by a real shader compiler toolchain into
   the forms each graphics API needs. Pipelines are compiled ahead of first use
   and cached.
@@ -328,6 +384,15 @@ core's native world.
   It draws objects that share a mesh and material as instances, and batches
   compatible draws, so draw-call counts track distinct materials and meshes
   rather than object counts.
+* **Optimized engine builds.** Release engine binaries are built with
+  link-time optimization, a single code-generation unit per crate, and
+  profile-guided optimization trained on the benchmark projects. Release
+  players abort on an unrecoverable engine fault rather than unwinding.
+  Development players keep the checks and symbols that diagnostics need.
+* **Comparable to Unity.** Frame time on the benchmark projects is measured
+  against Unity 2022.3's own player on the same target and hardware, observed
+  as a black box, and the declared budgets bound unitas's overhead relative to
+  it.
 * **Measure everything.** Every subsystem carries profiler markers that cost
   nothing when profiling is off. Engine performance is the frame time of the
   packaged player, measured against the budgets that the

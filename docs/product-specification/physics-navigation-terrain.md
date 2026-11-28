@@ -50,8 +50,11 @@ into the PlayerLoop, and keeps no second copy of scene state.
 * **Parallelism.** Solver work runs as jobs on the engine job system; no solver owns threads.
   Contact modification callbacks run on those jobs during the solve; collision and trigger
   messages, `Physics.ContactEvent`, and joint breaks are gathered during the step and
-  dispatched on the main thread after it. Enhanced determinism selects a configuration whose
-  results depend only on inputs and target, never on job scheduling.
+  dispatched on the main thread after it. By default the solver runs with SIMD and in
+  parallel across simulation islands, at the speed the release's budgets require. The
+  project's enhanced-determinism setting, off by default as in Unity, selects a
+  configuration whose results depend only on inputs and target, never on job scheduling,
+  and it costs speed only in projects that enable it.
 * **Queries.** Queries read a consistent snapshot: the last step's result plus the changes the
   auto-sync-transforms rule has flushed. Batch queries run as jobs against that snapshot; no
   query observes a half-applied step. Character controllers and wheels use the same queries.

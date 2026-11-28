@@ -103,8 +103,11 @@ Rendering and animation follow the [Engine architecture](architecture.md).
   declared reads and writes, drops unread ones, records independent ones in
   parallel, and is what rendering diagnostics show.
 * **Culling and batching.** Frustum, layer, LOD, occlusion, and per-eye
-  culling run as jobs and produce `CullingResults`. Sorting fixes only the
-  order the sorting rules make visible. Per-object and per-material constants
+  culling run as jobs and produce `CullingResults`. On devices with compute,
+  visibility of persistent render proxies is also resolved on the GPU against
+  a hierarchical depth buffer, and opaque draws are issued as indirect
+  multi-draws per pipeline, as the [Engine architecture](architecture.md#presentation)
+  defines. Sorting fixes only the order the sorting rules make visible. Per-object and per-material constants
   live in persistent GPU buffers rewritten only where something changed, and
   compatible draws are instanced or indirect where the device allows; none of
   this alters the image.
