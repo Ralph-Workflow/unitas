@@ -1162,6 +1162,29 @@ impl Runtime {
         true
     }
 
+    pub fn set_runtime_sprite_pixels(
+        &mut self,
+        entity: EntityId,
+        width: u32,
+        height: u32,
+        rgba: Vec<u8>,
+    ) -> bool {
+        if entity.as_u64() == 0 || rgba.len() < (width as usize) * (height as usize) * 4 {
+            return false;
+        }
+        let image = Image::from_rgba8(Rgba8 {
+            width,
+            height,
+            pixels: rgba,
+        });
+        let size = [
+            image.width as f32 / SPRITE_PIXELS_PER_UNIT,
+            image.height as f32 / SPRITE_PIXELS_PER_UNIT,
+        ];
+        self.upsert_runtime_sprite_entry(entity, Some(Arc::new(image)), size, [0.0; 4]);
+        true
+    }
+
     fn upsert_runtime_sprite_entry(
         &mut self,
         entity: EntityId,

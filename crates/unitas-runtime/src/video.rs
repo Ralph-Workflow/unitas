@@ -2,6 +2,7 @@ use std::collections::BTreeMap;
 #[cfg(not(target_arch = "wasm32"))]
 use std::ffi::{CString, c_char, c_double, c_int, c_uint, c_void};
 use std::fmt;
+#[cfg(not(target_arch = "wasm32"))]
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -193,14 +194,6 @@ struct VideoPlayerInternal {
     send_frame_ready_events: bool,
     pending_events: VideoEvents,
     last_error: Option<String>,
-    temp_dir: PathBuf,
-    temp_generation: u64,
-}
-
-impl Drop for VideoPlayerInternal {
-    fn drop(&mut self) {
-        let _ = fs::remove_dir_all(&self.temp_dir);
-    }
 }
 
 fn video_players_map() -> &'static Mutex<BTreeMap<u64, Arc<Mutex<VideoPlayerInternal>>>> {
@@ -920,9 +913,6 @@ fn load_symbol<T: Copy>(library: &Library, symbol: &[u8]) -> Result<T, VideoDeco
 impl Runtime {
     pub fn create_video_player(&mut self, entity: EntityId) -> u64 {
         let player_id = VIDEO_PLAYER_ID_SEQ.fetch_add(1, Ordering::Relaxed);
-        let temp_dir = std::env::temp_dir()
-            .join("unitas_runtime_video_frames")
-            .join(format!("{}_{player_id}", std::process::id()));
         let internal = VideoPlayerInternal {
             owner_entity: entity,
             target_entity: entity,
@@ -940,8 +930,6 @@ impl Runtime {
             send_frame_ready_events: false,
             pending_events: VideoEvents::default(),
             last_error: None,
-            temp_dir,
-            temp_generation: 0,
         };
         if let Ok(mut map) = video_players_map().lock() {
             map.insert(player_id, Arc::new(Mutex::new(internal)));
@@ -1341,7 +1329,7 @@ impl Runtime {
         let Some(player_arc) = get_player_arc(player_id) else {
             return;
         };
-        let frame_to_write = {
+        let frame_to_present = {
             let Ok(mut player) = player_arc.lock() else {
                 return;
             };
@@ -1363,29 +1351,12 @@ impl Runtime {
             let width = decoded.width;
             let height = decoded.height;
             player.presented_frame = player.current_frame;
-            player.temp_generation = player.temp_generation.saturating_add(1);
-            let frame_path = player
-                .temp_dir
-                .join(format!("frame_{}.tga", player.temp_generation));
-            Some((
-                player.target_entity,
-                player.temp_dir.clone(),
-                frame_path,
-                width,
-                height,
-                rgba,
-            ))
+            Some((player.target_entity, width, height, rgba))
         };
-        let Some((target_entity, temp_dir, frame_path, width, height, rgba)) = frame_to_write
-        else {
+        let Some((target_entity, width, height, rgba)) = frame_to_present else {
             return;
         };
-        if fs::create_dir_all(&temp_dir).is_ok()
-            && write_rgba_as_tga(&frame_path, width, height, &rgba).is_ok()
-        {
-            let _ = self.create_runtime_sprite(target_entity, Some(&frame_path));
-            let _ = fs::remove_file(&frame_path);
-        }
+        let _ = self.set_runtime_sprite_pixels(target_entity, width, height, rgba);
     }
 }
 
@@ -1396,9 +1367,6 @@ fn get_player_arc(player_id: u64) -> Option<Arc<Mutex<VideoPlayerInternal>>> {
 
 pub(crate) fn create_video_player_by_id(entity: EntityId) -> u64 {
     let player_id = VIDEO_PLAYER_ID_SEQ.fetch_add(1, Ordering::Relaxed);
-    let temp_dir = std::env::temp_dir()
-        .join("unitas_runtime_video_frames")
-        .join(format!("{}_{player_id}", std::process::id()));
     let internal = VideoPlayerInternal {
         owner_entity: entity,
         target_entity: entity,
@@ -1416,8 +1384,6 @@ pub(crate) fn create_video_player_by_id(entity: EntityId) -> u64 {
         send_frame_ready_events: false,
         pending_events: VideoEvents::default(),
         last_error: None,
-        temp_dir,
-        temp_generation: 0,
     };
     if let Ok(mut map) = video_players_map().lock() {
         map.insert(player_id, Arc::new(Mutex::new(internal)));
@@ -1881,32 +1847,49 @@ fn snapshot_from_player(player: &VideoPlayerInternal) -> VideoPlayerSnapshot {
     }
 }
 
-fn write_rgba_as_tga(path: &Path, width: u32, height: u32, rgba: &[u8]) -> std::io::Result<()> {
-    let w = u16::try_from(width).unwrap_or(u16::MAX);
-    let h = u16::try_from(height).unwrap_or(u16::MAX);
-    let pixel_count = (w as usize) * (h as usize);
-    let mut out = vec![0u8; 18 + pixel_count * 4];
-    out[2] = 2;
-    out[12..14].copy_from_slice(&w.to_le_bytes());
-    out[14..16].copy_from_slice(&h.to_le_bytes());
-    out[16] = 32;
-    out[17] = 0x28;
-    for i in 0..pixel_count {
-        let src = i * 4;
-        let dst = 18 + i * 4;
-        if src + 3 < rgba.len() {
-            out[dst] = rgba[src + 2];
-            out[dst + 1] = rgba[src + 1];
-            out[dst + 2] = rgba[src];
-            out[dst + 3] = rgba[src + 3];
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn presented_video_frame_updates_sprite_texture_without_temp_file()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let mut runtime = Runtime::new()?;
+        let _ = std::fs::remove_dir_all(std::env::temp_dir().join("unitas_runtime_video_frames"));
+        let entity = EntityId::new(7);
+        let player_id = runtime.create_video_player(entity);
+        let rgba: Vec<u8> = vec![10, 20, 30, 255, 40, 50, 60, 255];
+        {
+            let player_arc = get_player_arc(player_id).ok_or("player missing")?;
+            let mut player = player_arc
+                .lock()
+                .map_err(|_| std::io::Error::from(std::io::ErrorKind::Other))?;
+            player.decoded = Some(Arc::new(DecodedVideoClip {
+                width: 2,
+                height: 1,
+                fps_num: 30,
+                fps_den: 1,
+                duration_micros: 66_666,
+                frames_rgba: vec![rgba.clone()],
+            }));
         }
+        assert!(runtime.play_video_player(player_id));
+        let sprite = runtime
+            .render
+            .sprites
+            .iter()
+            .find(|sprite| sprite.entity == entity)
+            .ok_or("sprite not created")?;
+        let texture = sprite.texture.as_ref().ok_or("sprite has no texture")?;
+        assert_eq!(texture.width, 2);
+        assert_eq!(texture.height, 1);
+        assert_eq!(texture.pixels, vec![[10, 20, 30], [40, 50, 60]]);
+        assert_eq!(sprite.size, [0.02, 0.01]);
+        assert!(
+            !std::env::temp_dir()
+                .join("unitas_runtime_video_frames")
+                .exists()
+        );
+        Ok(())
     }
-    let meta_path = PathBuf::from(format!("{}.meta", path.display()));
-    let _ = fs::write(
-        &meta_path,
-        "fileFormatVersion: 2\nguid: 00000000000000000000000000000000\nTextureImporter:\n  sRGBTexture: 0\n",
-    );
-    let res = fs::write(path, out);
-    let _ = fs::remove_file(&meta_path);
-    res
 }

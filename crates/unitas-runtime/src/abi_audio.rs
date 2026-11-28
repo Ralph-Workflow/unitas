@@ -457,6 +457,125 @@ pub extern "C" fn unitas_runtime_audio_clear_filters(handle: u64, entity: u64) -
 }
 
 ffi_export! {
+pub extern "C" fn unitas_runtime_audio_set_reverb(
+    handle: u64,
+    room_size: f32,
+    damping: f32,
+    wet_level: f32,
+) -> i32 {
+    if !room_size.is_finite() || !damping.is_finite() || !wet_level.is_finite() {
+        return -2;
+    }
+    match with_runtime_state(handle, |state| {
+        if state
+            .runtime
+            .audio_mut()
+            .set_reverb(room_size, damping, wet_level)
+        {
+            state.clear_error();
+            0
+        } else {
+            -1
+        }
+    }) {
+        Ok(code) => code,
+        Err(code) => code,
+    }
+}
+}
+
+ffi_export! {
+pub extern "C" fn unitas_runtime_audio_clear_reverb(handle: u64) -> i32 {
+    match with_runtime_state(handle, |state| {
+        state.runtime.audio_mut().clear_reverb();
+        state.clear_error();
+        0
+    }) {
+        Ok(code) => code,
+        Err(code) => code,
+    }
+}
+}
+
+ffi_export! {
+pub extern "C" fn unitas_runtime_audio_reverb_room_size(handle: u64) -> f32 {
+    with_runtime_state(handle, |state| {
+        state.clear_error();
+        state
+            .runtime
+            .audio()
+            .reverb()
+            .map_or(-1.0, |(room_size, _, _)| room_size)
+    })
+    .unwrap_or(-1.0)
+}
+}
+
+ffi_export! {
+pub extern "C" fn unitas_runtime_audio_reverb_damping(handle: u64) -> f32 {
+    with_runtime_state(handle, |state| {
+        state.clear_error();
+        state
+            .runtime
+            .audio()
+            .reverb()
+            .map_or(-1.0, |(_, damping, _)| damping)
+    })
+    .unwrap_or(-1.0)
+}
+}
+
+ffi_export! {
+pub extern "C" fn unitas_runtime_audio_reverb_wet_level(handle: u64) -> f32 {
+    with_runtime_state(handle, |state| {
+        state.clear_error();
+        state
+            .runtime
+            .audio()
+            .reverb()
+            .map_or(-1.0, |(_, _, wet_level)| wet_level)
+    })
+    .unwrap_or(-1.0)
+}
+}
+
+ffi_export! {
+pub extern "C" fn unitas_runtime_audio_set_reverb_mix(
+    handle: u64,
+    entity: u64,
+    mix: f32,
+) -> i32 {
+    if entity == 0 || !mix.is_finite() {
+        return -2;
+    }
+    match with_runtime_state(handle, |state| {
+        state
+            .runtime
+            .audio_mut()
+            .set_reverb_mix(EntityId::new(entity), mix);
+        state.clear_error();
+        0
+    }) {
+        Ok(code) => code,
+        Err(code) => code,
+    }
+}
+}
+
+ffi_export! {
+pub extern "C" fn unitas_runtime_audio_reverb_mix(handle: u64, entity: u64) -> f32 {
+    if entity == 0 {
+        return -1.0;
+    }
+    with_runtime_state(handle, |state| {
+        state.clear_error();
+        state.runtime.audio().reverb_mix(EntityId::new(entity))
+    })
+    .unwrap_or(-1.0)
+}
+}
+
+ffi_export! {
 pub extern "C" fn unitas_runtime_audio_set_priority(
     handle: u64,
     entity: u64,
@@ -1096,5 +1215,46 @@ fn apply_scene_filters(state: &mut RuntimeState, entity: EntityId) {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{unitas_runtime_destroy, unitas_runtime_new};
+
+    #[test]
+    fn reverb_abi_round_trips_global_parameters_and_per_source_mix() {
+        let handle = unitas_runtime_new();
+        assert_ne!(handle, 0);
+        assert_eq!(unitas_runtime_audio_reverb_room_size(handle), -1.0);
+        assert_eq!(unitas_runtime_audio_reverb_damping(handle), -1.0);
+        assert_eq!(unitas_runtime_audio_reverb_wet_level(handle), -1.0);
+
+        assert_eq!(
+            unitas_runtime_audio_set_reverb(handle, f32::NAN, 0.5, 1.0),
+            -2
+        );
+        assert_eq!(unitas_runtime_audio_set_reverb(handle, 0.8, 0.3, 0.6), 0);
+        assert_eq!(unitas_runtime_audio_reverb_room_size(handle), 0.8);
+        assert_eq!(unitas_runtime_audio_reverb_damping(handle), 0.3);
+        assert_eq!(unitas_runtime_audio_reverb_wet_level(handle), 0.6);
+
+        let entity = unitas_runtime_audio_create(handle, 0);
+        assert!(entity > 0);
+        assert_eq!(unitas_runtime_audio_reverb_mix(handle, 0), -1.0);
+        assert_eq!(unitas_runtime_audio_reverb_mix(handle, entity), 1.0);
+        assert_eq!(unitas_runtime_audio_set_reverb_mix(handle, 0, 0.5), -2);
+        assert_eq!(
+            unitas_runtime_audio_set_reverb_mix(handle, entity, f32::NAN),
+            -2
+        );
+        assert_eq!(unitas_runtime_audio_set_reverb_mix(handle, entity, 0.25), 0);
+        assert_eq!(unitas_runtime_audio_reverb_mix(handle, entity), 0.25);
+
+        assert_eq!(unitas_runtime_audio_clear_reverb(handle), 0);
+        assert_eq!(unitas_runtime_audio_reverb_room_size(handle), -1.0);
+        assert_eq!(unitas_runtime_audio_destroy(handle, entity), 0);
+        assert_eq!(unitas_runtime_destroy(handle), 0);
     }
 }

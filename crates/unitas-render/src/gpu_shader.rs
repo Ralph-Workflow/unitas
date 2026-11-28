@@ -80,6 +80,7 @@ fn vs_main(
     @location(1) normal: vec3<f32>,
     @location(2) uv: vec2<f32>,
     @location(3) tangent: vec3<f32>,
+    @location(4) vcolor: vec4<f32>,
 ) -> VertexOut {
     var out: VertexOut;
     let world = inst.model * vec4<f32>(position, 1.0);
@@ -88,10 +89,10 @@ fn vs_main(
     let len = length(transformed);
     out.normal = select(vec3<f32>(0.0, 0.0, 0.0), transformed / len, len > 1e-8);
     out.tangent = (inst.model * vec4<f32>(tangent, 0.0)).xyz;
-    out.color = inst.color.rgb;
+    out.color = inst.color.rgb * vcolor.rgb;
     out.uv = uv;
     out.world_pos = world.xyz;
-    out.alpha = inst.color.a;
+    out.alpha = inst.color.a * vcolor.a;
     return out;
 }
 
@@ -349,7 +350,7 @@ fn fs_tonemap(vertex: PostVertex) -> @location(0) vec4<f32> {
     return vec4<f32>(aces_fit(color.r), aces_fit(color.g), aces_fit(color.b), 1.0);
 }
 ";
-pub(super) const ATTRIBUTES: [wgpu::VertexAttribute; 4] = [
+pub(super) const ATTRIBUTES: [wgpu::VertexAttribute; 5] = [
     wgpu::VertexAttribute {
         format: wgpu::VertexFormat::Float32x3,
         offset: 0,
@@ -369,6 +370,11 @@ pub(super) const ATTRIBUTES: [wgpu::VertexAttribute; 4] = [
         format: wgpu::VertexFormat::Float32x3,
         offset: 32,
         shader_location: 3,
+    },
+    wgpu::VertexAttribute {
+        format: wgpu::VertexFormat::Float32x4,
+        offset: 44,
+        shader_location: 4,
     },
 ];
 

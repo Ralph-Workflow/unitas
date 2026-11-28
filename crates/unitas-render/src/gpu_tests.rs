@@ -1011,3 +1011,86 @@ fn point_spot_and_ambient_lights_accumulate_and_empty_matches_single_directional
     renderer.set_scene_lighting(&[], [0.0, 0.0, 0.0]);
     Ok(())
 }
+
+#[test]
+fn same_texture_sprites_batch_into_one_draw_and_texture_change_breaks_the_run(
+) -> Result<(), Box<dyn std::error::Error>> {
+    use std::sync::Arc;
+    let renderer = match renderer_or_skip() {
+        Some(renderer) => renderer,
+        None => return Ok(()),
+    };
+    let texture = Arc::new(Image::new(2, 2));
+    let other = Arc::new(Image::new(2, 2));
+    let make = |texture: &Arc<Image>, order: i32| Sprite {
+        texture: Arc::clone(texture),
+        model: model(Vec3::new(f32::from(order as i16), 0.0, 0.0), 1.0),
+        color: [1.0, 1.0, 1.0, 1.0],
+        sorting_layer: 0,
+        sorting_order: order,
+    };
+    let batched = vec![make(&texture, 0), make(&texture, 1), make(&texture, 2)];
+    let runs = renderer.prepare_sprite_runs(&batched)?;
+    assert_eq!(
+        runs.len(),
+        1,
+        "expected one batched draw for the texture run"
+    );
+    assert_eq!(
+        runs[0].mesh.index_count, 18,
+        "expected three expanded quads"
+    );
+
+    let split = vec![make(&texture, 0), make(&other, 1), make(&texture, 2)];
+    let runs = renderer.prepare_sprite_runs(&split)?;
+    assert_eq!(runs.len(), 3, "expected a texture change to break the run");
+    assert!(runs.iter().all(|run| run.mesh.index_count == 6));
+    Ok(())
+}
+
+#[test]
+fn batched_sprites_render_expected_pixels() -> Result<(), Box<dyn std::error::Error>> {
+    use std::sync::Arc;
+    let renderer = match renderer_or_skip() {
+        Some(renderer) => renderer,
+        None => return Ok(()),
+    };
+    let mut texture = Image::new(2, 2);
+    for pixel in &mut texture.pixels {
+        *pixel = [255, 255, 255];
+    }
+    let texture = Arc::new(texture);
+    let make = |x: f32, z: f32, color: [f32; 4]| Sprite {
+        texture: Arc::clone(&texture),
+        model: model(Vec3::new(x, 0.0, z), 1.0),
+        color,
+        sorting_layer: 0,
+        sorting_order: 0,
+    };
+    let sprites = vec![
+        make(-0.75, -0.3, [1.0, 1.0, 1.0, 1.0]),
+        make(0.0, 0.0, [1.0, 0.0, 0.0, 1.0]),
+        make(0.75, -0.3, [1.0, 1.0, 1.0, 1.0]),
+    ];
+    renderer.set_sprites(sprites);
+    let image = renderer.render_offscreen(
+        &[],
+        &Camera::orthographic(2.0, 1.0, 0.1, 100.0),
+        view(),
+        &DirectionalLight {
+            direction: Vec3::new(0.0, 0.0, -1.0),
+            color: [1.0, 1.0, 1.0],
+            intensity: 0.0,
+        },
+        [0.0, 0.0, 0.0],
+        (64, 64),
+    )?;
+    renderer.set_sprites(Vec::new());
+    assert_eq!(image.get_pixel(16, 32), [255, 255, 255]);
+    assert_eq!(image.get_pixel(26, 32), [255, 0, 0]);
+    assert_eq!(image.get_pixel(32, 32), [255, 0, 0]);
+    assert_eq!(image.get_pixel(38, 32), [255, 255, 255]);
+    assert_eq!(image.get_pixel(48, 32), [255, 255, 255]);
+    assert_eq!(image.get_pixel(0, 0), [0, 0, 0]);
+    Ok(())
+}

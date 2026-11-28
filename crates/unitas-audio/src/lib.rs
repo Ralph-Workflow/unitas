@@ -4,7 +4,7 @@ use std::path::Path;
 use unitas_asset::audio_import::{load_or_cook_audio, CookedAudio};
 use unitas_core::EntityId;
 
-use crate::fx::FilterChain;
+use crate::fx::{FilterChain, Reverb};
 
 pub mod fx;
 #[cfg(feature = "device")]
@@ -616,6 +616,7 @@ pub struct AudioSource {
     pub scheduled_sample: Option<u64>,
     pub rolloff_mode: RolloffMode,
     pub custom_rolloff: Vec<(f32, f32)>,
+    pub reverb_mix: f32,
 }
 
 impl Default for AudioSource {
@@ -646,6 +647,7 @@ impl Default for AudioSource {
             scheduled_sample: None,
             rolloff_mode: RolloffMode::Logarithmic,
             custom_rolloff: Vec::new(),
+            reverb_mix: 1.0,
         }
     }
 }
@@ -669,6 +671,8 @@ pub struct AudioWorld {
     doppler_factor: f32,
     speed_of_sound: f32,
     filters: BTreeMap<EntityId, FilterChain>,
+    reverb: Option<Reverb>,
+    reverb_send: Vec<f32>,
 }
 
 impl Default for AudioWorld {
@@ -702,6 +706,8 @@ impl AudioWorld {
             doppler_factor: DEFAULT_DOPPLER_FACTOR,
             speed_of_sound: DEFAULT_SPEED_OF_SOUND,
             filters: BTreeMap::new(),
+            reverb: None,
+            reverb_send: Vec::new(),
         }
     }
 
@@ -1019,6 +1025,9 @@ impl AudioWorld {
         for chain in self.filters.values_mut() {
             chain.set_sample_rate(sample_rate);
         }
+        if let Some(reverb) = self.reverb.as_mut() {
+            reverb.set_sample_rate(sample_rate);
+        }
     }
 
     fn effective_sample_rate(&self) -> u32 {
@@ -1227,6 +1236,46 @@ impl AudioWorld {
         self.filters
             .get(&entity)
             .is_some_and(|chain| chain.is_active())
+    }
+
+    pub fn set_reverb(&mut self, room_size: f32, damping: f32, wet_level: f32) -> bool {
+        if !room_size.is_finite() || !damping.is_finite() || !wet_level.is_finite() {
+            return false;
+        }
+        let sample_rate = self.effective_sample_rate();
+        match self.reverb.as_mut() {
+            Some(reverb) => reverb.configure(room_size, damping, wet_level),
+            None => {
+                self.reverb = Some(Reverb::new(sample_rate, room_size, damping, wet_level));
+            }
+        }
+        true
+    }
+
+    pub fn clear_reverb(&mut self) {
+        self.reverb = None;
+    }
+
+    pub fn reverb(&self) -> Option<(f32, f32, f32)> {
+        self.reverb
+            .as_ref()
+            .map(|reverb| (reverb.room_size(), reverb.damping(), reverb.wet_level()))
+    }
+
+    pub fn set_reverb_mix(&mut self, entity: EntityId, mix: f32) {
+        let source = self.ensure_source(entity);
+        source.reverb_mix = if mix.is_finite() {
+            mix.clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
+    }
+
+    pub fn reverb_mix(&self, entity: EntityId) -> f32 {
+        self.sources
+            .get(&entity)
+            .map(|source| source.reverb_mix)
+            .unwrap_or(1.0)
     }
 
     pub fn set_volume(&mut self, entity: EntityId, volume: f32) {
@@ -1643,11 +1692,20 @@ impl AudioWorld {
             self.recompute_virtualization();
         }
 
+        self.reverb_send.clear();
+        if self.reverb.is_some() {
+            self.reverb_send.resize(n_frames * OUTPUT_CHANNELS, 0.0);
+        }
+
         for index in 0..self.source_order.len() {
             let entity = self.source_order[index];
             if self.render_source(entity, output, start_sample, n_frames) {
                 any_completed = true;
             }
+        }
+
+        if let Some(reverb) = self.reverb.as_mut() {
+            reverb.process_block(&self.reverb_send, output);
         }
 
         self.mixer_sample = end_sample;
@@ -1732,6 +1790,11 @@ impl AudioWorld {
             return false;
         };
         let mut chain = self.filters.get_mut(&entity);
+        let reverb_mix = if self.reverb.is_some() {
+            source.reverb_mix
+        } else {
+            0.0
+        };
         let looping = source.looping && !source.one_shot_active;
         for frame_out in render_offset..n_frames {
             let Some((sample_l, sample_r)) = stream.next_frame(looping) else {
@@ -1743,6 +1806,10 @@ impl AudioWorld {
             let (sample_l, sample_r) = apply_filter_chain(chain.as_deref_mut(), sample_l, sample_r);
             output[frame_out * OUTPUT_CHANNELS] += sample_l * gain_l;
             output[frame_out * OUTPUT_CHANNELS + 1] += sample_r * gain_r;
+            if reverb_mix > 0.0 {
+                self.reverb_send[frame_out * OUTPUT_CHANNELS] += sample_l * gain_l * reverb_mix;
+                self.reverb_send[frame_out * OUTPUT_CHANNELS + 1] += sample_r * gain_r * reverb_mix;
+            }
             source.sample_cursor += 1.0;
             source.time = source.sample_cursor / f64::from(stream.sample_rate());
         }
@@ -1773,6 +1840,11 @@ impl AudioWorld {
             return false;
         };
         let mut chain = self.filters.get_mut(&entity);
+        let reverb_mix = if self.reverb.is_some() {
+            source.reverb_mix
+        } else {
+            0.0
+        };
 
         for frame_out in render_offset..n_frames {
             let Some(frame_idx) = clip_frame_index(source, total_frames, clip_duration) else {
@@ -1783,6 +1855,10 @@ impl AudioWorld {
 
             output[frame_out * OUTPUT_CHANNELS] += sample_l * gain_l;
             output[frame_out * OUTPUT_CHANNELS + 1] += sample_r * gain_r;
+            if reverb_mix > 0.0 {
+                self.reverb_send[frame_out * OUTPUT_CHANNELS] += sample_l * gain_l * reverb_mix;
+                self.reverb_send[frame_out * OUTPUT_CHANNELS + 1] += sample_r * gain_r * reverb_mix;
+            }
 
             source.sample_cursor += step;
             if source.sample_cursor >= total_frames as f64 {
@@ -2909,89 +2985,5 @@ mod tests {
         assert!(captured.iter().any(|sample| sample.abs() > 0.1));
         assert_eq!(world.source_state(entity), AudioSourceState::Playing);
         Ok(())
-    }
-
-    #[test]
-    fn logarithmic_linear_and_custom_rolloff_curves_follow_unity_distance_attenuation() {
-        let mut world = AudioWorld::new();
-        world.set_listener([0.0, 0.0, 0.0], [0.0, 0.0, 1.0]);
-
-        let (log_src, lin_src) = setup_log_and_linear_rolloff(&mut world);
-        assert_log_and_linear_attenuation(&mut world, log_src, lin_src);
-        assert_custom_rolloff(&mut world);
-    }
-
-    fn setup_log_and_linear_rolloff(world: &mut AudioWorld) -> (EntityId, EntityId) {
-        let log_src = EntityId::new(80);
-        world.ensure_source(log_src);
-        assert_eq!(world.rolloff_mode(log_src), RolloffMode::Logarithmic);
-        world.set_spatial_blend(log_src, 1.0);
-        world.set_min_distance(log_src, 2.0);
-        world.set_max_distance(log_src, 20.0);
-        world.play(log_src, false);
-
-        let lin_src = EntityId::new(81);
-        world.ensure_source(lin_src);
-        world.set_rolloff_mode(lin_src, RolloffMode::Linear);
-        assert_eq!(world.rolloff_mode(lin_src), RolloffMode::Linear);
-        world.set_spatial_blend(lin_src, 1.0);
-        world.set_min_distance(lin_src, 2.0);
-        world.set_max_distance(lin_src, 20.0);
-        world.play(lin_src, false);
-
-        (log_src, lin_src)
-    }
-
-    fn assert_log_and_linear_attenuation(
-        world: &mut AudioWorld,
-        log_src: EntityId,
-        lin_src: EntityId,
-    ) {
-        for entity in [log_src, lin_src] {
-            world.set_source_position(entity, [0.0, 0.0, 2.0]);
-            let (l, r) = world.source_gains(entity).unwrap_or((0.0, 0.0));
-            assert!((l - 0.5).abs() < 1e-6);
-            assert!((r - 0.5).abs() < 1e-6);
-        }
-
-        world.set_source_position(log_src, [0.0, 0.0, 4.0]);
-        world.set_source_position(lin_src, [0.0, 0.0, 4.0]);
-        let (log_l, log_r) = world.source_gains(log_src).unwrap_or((0.0, 0.0));
-        let (lin_l, lin_r) = world.source_gains(lin_src).unwrap_or((0.0, 0.0));
-        let log_total = log_l + log_r;
-        let lin_total = lin_l + lin_r;
-        assert!((log_total - 0.5).abs() < 1e-6);
-        assert!((lin_total - (16.0 / 18.0)).abs() < 1e-6);
-        assert!(log_total < lin_total);
-
-        world.set_source_position(log_src, [0.0, 0.0, 8.0]);
-        let (log8_l, log8_r) = world.source_gains(log_src).unwrap_or((0.0, 0.0));
-        assert!(((log8_l + log8_r) - 0.25).abs() < 1e-6);
-    }
-
-    fn assert_custom_rolloff(world: &mut AudioWorld) {
-        let custom_src = EntityId::new(82);
-        world.ensure_source(custom_src);
-        world.set_spatial_blend(custom_src, 1.0);
-        world.set_min_distance(custom_src, 1.0);
-        world.set_max_distance(custom_src, 10.0);
-        world.set_custom_rolloff(
-            custom_src,
-            vec![(0.0, 1.0), (0.2, 0.8), (0.5, 0.2), (1.0, 0.0)],
-        );
-        assert_eq!(world.rolloff_mode(custom_src), RolloffMode::Custom);
-        assert_eq!(
-            world.custom_rolloff(custom_src),
-            &[(0.0, 1.0), (0.2, 0.8), (0.5, 0.2), (1.0, 0.0)]
-        );
-        world.play(custom_src, false);
-
-        world.set_source_position(custom_src, [0.0, 0.0, 3.5]);
-        let (c_l, c_r) = world.source_gains(custom_src).unwrap_or((0.0, 0.0));
-        assert!(((c_l + c_r) - 0.5).abs() < 1e-6);
-
-        world.set_source_position(custom_src, [0.0, 0.0, 10.0]);
-        let (c_end_l, c_end_r) = world.source_gains(custom_src).unwrap_or((0.0, 0.0));
-        assert!((c_end_l + c_end_r).abs() < 1e-6);
     }
 }

@@ -202,6 +202,228 @@ fn decibels_to_gain(decibels: f32, fallback: f32) -> f32 {
     10.0f32.powf(clamped / 20.0)
 }
 
+const NUM_COMBS: usize = 4;
+const NUM_ALLPASSES: usize = 2;
+const COMB_TUNINGS: [usize; NUM_COMBS] = [1116, 1188, 1277, 1386];
+const ALLPASS_TUNINGS: [usize; NUM_ALLPASSES] = [556, 441];
+const STEREO_SPREAD: usize = 23;
+const ALLPASS_FEEDBACK: f32 = 0.5;
+const MAX_ROOM_SIZE: f32 = 1.0;
+const MAX_DAMPING: f32 = 1.0;
+const MAX_WET_LEVEL: f32 = 1.0;
+const DEFAULT_ROOM_SIZE: f32 = 0.5;
+const DEFAULT_DAMPING: f32 = 0.5;
+const DEFAULT_WET_LEVEL: f32 = 1.0;
+const ROOM_FEEDBACK_SCALE: f32 = 0.28;
+const ROOM_FEEDBACK_BASE: f32 = 0.7;
+const DAMPING_SCALE: f32 = 0.5;
+const WET_NORMALIZATION: f32 = 1.0 / NUM_COMBS as f32;
+const REFERENCE_SAMPLE_RATE: u32 = 44100;
+
+#[derive(Clone, Debug, PartialEq)]
+struct CombFilter {
+    line: Vec<f32>,
+    write_index: usize,
+    store: f32,
+    feedback: f32,
+    damping: f32,
+}
+
+impl CombFilter {
+    fn new(delay_frames: usize, feedback: f32, damping: f32) -> Self {
+        Self {
+            line: vec![0.0; delay_frames.max(1)],
+            write_index: 0,
+            store: 0.0,
+            feedback,
+            damping,
+        }
+    }
+
+    fn configure(&mut self, feedback: f32, damping: f32) {
+        self.feedback = feedback;
+        self.damping = damping;
+    }
+
+    fn process(&mut self, input: f32) -> f32 {
+        let index = self.write_index;
+        let output = self.line[index];
+        self.store = output * (1.0 - self.damping) + self.store * self.damping;
+        self.line[index] = input + self.store * self.feedback;
+        self.write_index = (index + 1) % self.line.len();
+        output
+    }
+
+    fn reset(&mut self) {
+        self.line.iter_mut().for_each(|sample| *sample = 0.0);
+        self.store = 0.0;
+        self.write_index = 0;
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+struct AllpassFilter {
+    line: Vec<f32>,
+    write_index: usize,
+}
+
+impl AllpassFilter {
+    fn new(delay_frames: usize) -> Self {
+        Self {
+            line: vec![0.0; delay_frames.max(1)],
+            write_index: 0,
+        }
+    }
+
+    fn process(&mut self, input: f32) -> f32 {
+        let index = self.write_index;
+        let buffered = self.line[index];
+        let output = buffered - input;
+        self.line[index] = input + buffered * ALLPASS_FEEDBACK;
+        self.write_index = (index + 1) % self.line.len();
+        output
+    }
+
+    fn reset(&mut self) {
+        self.line.iter_mut().for_each(|sample| *sample = 0.0);
+        self.write_index = 0;
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct Reverb {
+    sample_rate: u32,
+    room_size: f32,
+    damping: f32,
+    wet_level: f32,
+    wet_gain: f32,
+    combs: [Vec<CombFilter>; CHANNELS],
+    allpasses: [Vec<AllpassFilter>; CHANNELS],
+}
+
+impl Reverb {
+    pub fn new(sample_rate: u32, room_size: f32, damping: f32, wet_level: f32) -> Self {
+        let mut reverb = Self {
+            sample_rate: sample_rate.max(1),
+            room_size: DEFAULT_ROOM_SIZE,
+            damping: DEFAULT_DAMPING,
+            wet_level: DEFAULT_WET_LEVEL,
+            wet_gain: 0.0,
+            combs: [Vec::new(), Vec::new()],
+            allpasses: [Vec::new(), Vec::new()],
+        };
+        reverb.configure(room_size, damping, wet_level);
+        reverb.allocate();
+        reverb
+    }
+
+    pub fn room_size(&self) -> f32 {
+        self.room_size
+    }
+
+    pub fn damping(&self) -> f32 {
+        self.damping
+    }
+
+    pub fn wet_level(&self) -> f32 {
+        self.wet_level
+    }
+
+    pub fn configure(&mut self, room_size: f32, damping: f32, wet_level: f32) {
+        self.room_size = room_size.clamp(0.0, MAX_ROOM_SIZE);
+        self.damping = damping.clamp(0.0, MAX_DAMPING);
+        self.wet_level = wet_level.clamp(0.0, MAX_WET_LEVEL);
+        self.wet_gain = self.wet_level * WET_NORMALIZATION;
+        let feedback = self.room_size * ROOM_FEEDBACK_SCALE + ROOM_FEEDBACK_BASE;
+        let damping = self.damping * DAMPING_SCALE;
+        for channel in &mut self.combs {
+            for comb in channel.iter_mut() {
+                comb.configure(feedback, damping);
+            }
+        }
+    }
+
+    pub fn set_sample_rate(&mut self, sample_rate: u32) {
+        let rate = sample_rate.max(1);
+        if rate == self.sample_rate {
+            return;
+        }
+        self.sample_rate = rate;
+        self.allocate();
+    }
+
+    pub fn reset(&mut self) {
+        for channel in &mut self.combs {
+            for comb in channel.iter_mut() {
+                comb.reset();
+            }
+        }
+        for channel in &mut self.allpasses {
+            for allpass in channel.iter_mut() {
+                allpass.reset();
+            }
+        }
+    }
+
+    pub fn process(&mut self, left: f32, right: f32) -> (f32, f32) {
+        let wet_left = self.process_channel(0, left) * self.wet_gain;
+        let wet_right = self.process_channel(1, right) * self.wet_gain;
+        (wet_left, wet_right)
+    }
+
+    pub fn process_block(&mut self, send: &[f32], output: &mut [f32]) {
+        if self.wet_gain <= 0.0 {
+            return;
+        }
+        let frames = send.len().min(output.len()) / CHANNELS;
+        for frame in 0..frames {
+            let (wet_left, wet_right) =
+                self.process(send[frame * CHANNELS], send[frame * CHANNELS + 1]);
+            output[frame * CHANNELS] += wet_left;
+            output[frame * CHANNELS + 1] += wet_right;
+        }
+    }
+
+    fn process_channel(&mut self, channel: usize, input: f32) -> f32 {
+        let mut value = 0.0;
+        for comb in &mut self.combs[channel] {
+            value += comb.process(input);
+        }
+        for allpass in &mut self.allpasses[channel] {
+            value = allpass.process(value);
+        }
+        value
+    }
+
+    fn allocate(&mut self) {
+        let feedback = self.room_size * ROOM_FEEDBACK_SCALE + ROOM_FEEDBACK_BASE;
+        let damping = self.damping * DAMPING_SCALE;
+        for channel in 0..CHANNELS {
+            self.combs[channel] = COMB_TUNINGS
+                .iter()
+                .map(|tuning| {
+                    CombFilter::new(
+                        scaled_delay(*tuning, channel, self.sample_rate),
+                        feedback,
+                        damping,
+                    )
+                })
+                .collect();
+            self.allpasses[channel] = ALLPASS_TUNINGS
+                .iter()
+                .map(|tuning| AllpassFilter::new(scaled_delay(*tuning, channel, self.sample_rate)))
+                .collect();
+        }
+    }
+}
+
+fn scaled_delay(tuning: usize, channel: usize, sample_rate: u32) -> usize {
+    let spread = if channel == 0 { 0 } else { STEREO_SPREAD };
+    let frames = tuning + spread;
+    ((frames as f32 * sample_rate.max(1) as f32 / REFERENCE_SAMPLE_RATE as f32).round() as usize)
+        .max(1)
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct FilterChain {
     sample_rate: u32,

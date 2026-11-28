@@ -1,3 +1,4 @@
+use std::ops::Range;
 use std::sync::Arc;
 
 use crate::image::Image;
@@ -36,6 +37,20 @@ pub fn sprite_quad() -> (Mesh, MeshAttributes) {
 
 pub fn sort_sprites(sprites: &mut [Sprite]) {
     sprites.sort_by_key(Sprite::sort_key);
+}
+
+pub fn texture_runs(sprites: &[Sprite]) -> Vec<Range<usize>> {
+    let mut runs = Vec::new();
+    let mut start = 0;
+    while start < sprites.len() {
+        let mut end = start + 1;
+        while end < sprites.len() && Arc::ptr_eq(&sprites[end].texture, &sprites[start].texture) {
+            end += 1;
+        }
+        runs.push(start..end);
+        start = end;
+    }
+    runs
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -171,6 +186,24 @@ pub fn crop_texture(image: &Image, rect: [u32; 4]) -> Image {
 mod tests {
     use super::*;
     use crate::math::Vec3;
+
+    #[test]
+    fn texture_runs_group_consecutive_sprites_sharing_one_texture() {
+        let red = Arc::new(Image::new(1, 1));
+        let blue = Arc::new(Image::new(1, 1));
+        let make = |texture: &Arc<Image>| Sprite {
+            texture: Arc::clone(texture),
+            model: Mat4::identity(),
+            color: [1.0, 1.0, 1.0, 1.0],
+            sorting_layer: 0,
+            sorting_order: 0,
+        };
+        let batched = vec![make(&red), make(&red), make(&red)];
+        assert_eq!(texture_runs(&batched), vec![0..3]);
+        let split = vec![make(&red), make(&red), make(&blue), make(&red)];
+        assert_eq!(texture_runs(&split), vec![0..2, 2..3, 3..4]);
+        assert!(texture_runs(&[]).is_empty());
+    }
 
     #[test]
     fn sort_sprites_orders_by_layer_then_order_and_preserves_tie_order() {

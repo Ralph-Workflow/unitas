@@ -4,6 +4,7 @@ use std::sync::{Mutex, MutexGuard};
 
 use crate::camera::Camera;
 use crate::capture::CaptureInstance;
+use crate::cull::{visible, Aabb, Frustum};
 use crate::glyphs::{
     FontLibrary, GlyphAtlas, GlyphResources, HorizontalAlign, Rect, SwashCache, TextFrame,
     TextPipeline, TexturedQuad, VerticalAlign,
@@ -18,7 +19,7 @@ use crate::model::{
 };
 use crate::render_graph::{PostChain, RenderGraph, RenderPassKind};
 use crate::shadow::{light_view_projection, shadow_map_size, ShadowSettings};
-use crate::sprite::{sprite_quad, Sprite};
+use crate::sprite::{sprite_quad, texture_runs, Sprite};
 
 use gpu_pipelines::{
     build_shadow_pipeline, create_capture_pipelines, create_default_material_bind,
@@ -41,8 +42,8 @@ pub mod post;
 pub use crate::model::{GpuLight, GpuLightKind, MAX_GPU_LIGHTS};
 pub use gpu_surface::{present_mode_for_v_sync_count, SurfaceFrame};
 
-const VERTEX_FLOATS: usize = 11;
-const VERTEX_STRIDE: u64 = 44;
+const VERTEX_FLOATS: usize = 15;
+const VERTEX_STRIDE: u64 = 60;
 const UNIFORM_SLOT: u64 = 256;
 const GLOBAL_SLOT: u64 = 1024;
 const GLOBAL_FLOATS: usize = 180;
@@ -1232,6 +1233,7 @@ impl Renderer {
                 .and_then(|attrs| attrs.tangents.get(index).copied())
                 .unwrap_or(Vec3::ZERO);
             vertex_data.extend_from_slice(&[tangent.x, tangent.y, tangent.z]);
+            vertex_data.extend_from_slice(&[1.0, 1.0, 1.0, 1.0]);
         }
         let vertex_bytes = bytemuck::try_cast_slice::<f32, u8>(&vertex_data)
             .map_err(|_| RenderError::BufferCast("vertex"))?;
@@ -1255,6 +1257,7 @@ impl Renderer {
             vertices: vertex_buffer,
             indices: index_buffer,
             index_count: mesh.indices.len() as u32,
+            bounds: Aabb::from_positions(&mesh.positions),
         })
     }
 
@@ -1408,11 +1411,7 @@ impl Renderer {
         })
     }
 
-    fn prepare_meshes(
-        &self,
-        items: &[DrawItem<'_>],
-        sprites: &[Sprite],
-    ) -> Result<(Vec<PreparedDraw>, Vec<PreparedSprite>), RenderError> {
+    fn prepare_meshes(&self, items: &[DrawItem<'_>]) -> Result<Vec<PreparedDraw>, RenderError> {
         let mut prepared = Vec::with_capacity(items.len());
         for item in items {
             let mesh = self.cached_mesh(item.instance.mesh, item.attributes)?;
@@ -1422,16 +1421,67 @@ impl Renderer {
             prepared.push(PreparedDraw {
                 mesh,
                 material_bind,
+                visible: true,
             });
         }
-        let mut prepared_sprites = Vec::with_capacity(sprites.len());
-        let (quad, quad_attributes) = &self.sprite_quad;
-        for sprite in sprites {
-            let mesh = self.cached_mesh(quad, Some(quad_attributes))?;
-            let bind = self.cached_sprite_bind_group(&sprite.texture);
-            prepared_sprites.push(PreparedSprite { mesh, bind });
+        Ok(prepared)
+    }
+
+    fn prepare_sprite_runs(&self, sprites: &[Sprite]) -> Result<Vec<PreparedSprite>, RenderError> {
+        let mut runs = Vec::with_capacity(sprites.len());
+        for range in texture_runs(sprites) {
+            let mesh = self.upload_sprite_run(&sprites[range.clone()])?;
+            let bind = self.cached_sprite_bind_group(&sprites[range.start].texture);
+            runs.push(PreparedSprite { mesh, bind });
         }
-        Ok((prepared, prepared_sprites))
+        Ok(runs)
+    }
+
+    fn upload_sprite_run(&self, run: &[Sprite]) -> Result<MeshBuffers, RenderError> {
+        let (quad, quad_attributes) = &self.sprite_quad;
+        let mut vertex_data: Vec<f32> = Vec::with_capacity(run.len() * 4 * VERTEX_FLOATS);
+        let mut indices: Vec<u32> = Vec::with_capacity(run.len() * 6);
+        for (quad_index, sprite) in run.iter().enumerate() {
+            let base = (quad_index * 4) as u32;
+            indices.extend_from_slice(&[base, base + 1, base + 2, base, base + 2, base + 3]);
+            for corner in 0..4 {
+                let world = sprite.model.transform_point(quad.positions[corner]);
+                vertex_data.extend_from_slice(&[world.x, world.y, world.z]);
+                vertex_data.extend_from_slice(&[0.0, 0.0, 0.0]);
+                let uv = quad_attributes
+                    .uvs
+                    .get(corner)
+                    .copied()
+                    .unwrap_or([0.0, 0.0]);
+                vertex_data.extend_from_slice(&uv);
+                vertex_data.extend_from_slice(&[0.0, 0.0, 0.0]);
+                vertex_data.extend_from_slice(&sprite.color);
+            }
+        }
+        let vertex_bytes = bytemuck::try_cast_slice::<f32, u8>(&vertex_data)
+            .map_err(|_| RenderError::BufferCast("vertex"))?;
+        let vertex_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("sprite-run-vertices"),
+            size: vertex_bytes.len() as u64,
+            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        self.queue.write_buffer(&vertex_buffer, 0, vertex_bytes);
+        let index_bytes = bytemuck::try_cast_slice::<u32, u8>(&indices)
+            .map_err(|_| RenderError::BufferCast("index"))?;
+        let index_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("sprite-run-indices"),
+            size: index_bytes.len() as u64,
+            usage: wgpu::BufferUsages::INDEX | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        self.queue.write_buffer(&index_buffer, 0, index_bytes);
+        Ok(MeshBuffers {
+            vertices: vertex_buffer,
+            indices: index_buffer,
+            index_count: indices.len() as u32,
+            bounds: None,
+        })
     }
 
     fn pack_globals(
@@ -1487,7 +1537,16 @@ impl Renderer {
         light: &DirectionalLight,
     ) -> Result<(Vec<PreparedDraw>, Vec<PreparedSprite>), RenderError> {
         let view_proj = camera.projection_matrix() * view;
-        let (prepared, prepared_sprites) = self.prepare_meshes(items, sprites)?;
+        let mut prepared = self.prepare_meshes(items)?;
+        let prepared_sprites = self.prepare_sprite_runs(sprites)?;
+        let frustum = Frustum::from_view_projection(&view_proj);
+        for (item, draw) in items.iter().zip(prepared.iter_mut()) {
+            draw.visible = visible(
+                draw.mesh.as_ref().and_then(|mesh| mesh.bounds.as_ref()),
+                &item.instance.model,
+                &frustum,
+            );
+        }
         let total = items.len() + sprites.len();
         let mut state = lock(&self.uniforms);
         if state.capacity < total {
@@ -1513,11 +1572,10 @@ impl Renderer {
             ]);
             instance_data[start + 20] = item.object_id as f32;
         }
-        for (index, sprite) in sprites.iter().enumerate() {
-            let start = (items.len() + index) * SLOT_FLOATS;
-            instance_data[start..start + 16].copy_from_slice(sprite.model.as_array());
-            instance_data[start + 16..start + 20].copy_from_slice(&sprite.color);
-            instance_data[start + 20] = 0.0;
+        if !sprites.is_empty() {
+            let start = items.len() * SLOT_FLOATS;
+            instance_data[start..start + 16].copy_from_slice(Mat4::identity().as_array());
+            instance_data[start + 16..start + 20].copy_from_slice(&[1.0, 1.0, 1.0, 1.0]);
         }
         if !instance_data.is_empty() {
             self.queue.write_buffer(
@@ -1588,6 +1646,9 @@ impl Renderer {
                 Some(mesh) => mesh,
                 None => continue,
             };
+            if !prepared[index].visible {
+                continue;
+            }
             pass.set_bind_group(
                 1,
                 &state.instance_bind_group,
@@ -1657,17 +1718,13 @@ impl Renderer {
         pass.set_pipeline(pipeline);
         pass.set_bind_group(0, &state.global_bind_group, &[]);
         pass.set_bind_group(3, &shadow.bind_group, &[]);
-        for (index, sprite) in prepared.iter().enumerate() {
-            let mesh = match &sprite.mesh {
-                Some(mesh) => mesh,
-                None => continue,
-            };
-            let slot = GLOBAL_SLOT + UNIFORM_SLOT * (instance_base + index) as u64;
-            pass.set_bind_group(1, &state.instance_bind_group, &[slot as u32]);
+        let slot = (GLOBAL_SLOT + UNIFORM_SLOT * instance_base as u64) as u32;
+        pass.set_bind_group(1, &state.instance_bind_group, &[slot]);
+        for sprite in prepared {
             pass.set_bind_group(2, &sprite.bind, &[]);
-            pass.set_vertex_buffer(0, mesh.vertices.slice(..));
-            pass.set_index_buffer(mesh.indices.slice(..), wgpu::IndexFormat::Uint32);
-            pass.draw_indexed(0..mesh.index_count, 0, 0..1);
+            pass.set_vertex_buffer(0, sprite.mesh.vertices.slice(..));
+            pass.set_index_buffer(sprite.mesh.indices.slice(..), wgpu::IndexFormat::Uint32);
+            pass.draw_indexed(0..sprite.mesh.index_count, 0, 0..1);
         }
     }
 
@@ -1699,6 +1756,7 @@ struct MeshBuffers {
     vertices: wgpu::Buffer,
     indices: wgpu::Buffer,
     index_count: u32,
+    bounds: Option<Aabb>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -1732,10 +1790,11 @@ struct MaterialKey {
 struct PreparedDraw {
     mesh: Option<MeshBuffers>,
     material_bind: Option<wgpu::BindGroup>,
+    visible: bool,
 }
 
 struct PreparedSprite {
-    mesh: Option<MeshBuffers>,
+    mesh: MeshBuffers,
     bind: wgpu::BindGroup,
 }
 
@@ -2061,3 +2120,52 @@ fn rgba_from_readback(data: &[u8], width: u32, height: u32, bytes_per_row: u64) 
 #[cfg(test)]
 #[path = "gpu_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+mod cull_tests {
+    use super::*;
+    use crate::camera::look_at;
+    use crate::mesh::cube;
+
+    #[test]
+    fn prepare_draw_items_culls_offscreen_instances() -> Result<(), RenderError> {
+        let Ok(renderer) = Renderer::new() else {
+            eprintln!("skipping GPU test, no GPU device available");
+            return Ok(());
+        };
+        let camera = Camera::perspective(60.0, 1.0, 0.1, 100.0);
+        let view = look_at(
+            Vec3::new(0.0, 0.0, 5.0),
+            Vec3::new(0.0, 0.0, 0.0),
+            Vec3::new(0.0, 1.0, 0.0),
+        );
+        let light = DirectionalLight {
+            direction: Vec3::new(0.0, 0.0, -1.0),
+            color: [1.0, 1.0, 1.0],
+            intensity: 1.0,
+        };
+        let mesh = cube(0.5);
+        let instances = [
+            GpuInstance {
+                mesh: &mesh,
+                model: Mat4::identity(),
+                color: [1.0, 1.0, 1.0],
+                lit: false,
+            },
+            GpuInstance {
+                mesh: &mesh,
+                model: Mat4::from_cols_array([
+                    1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0e6,
+                    1.0,
+                ]),
+                color: [1.0, 1.0, 1.0],
+                lit: false,
+            },
+        ];
+        let items = plain_draw_items(&instances);
+        let (prepared, _) = renderer.prepare_draw_items(&items, &[], &camera, view, &light)?;
+        assert!(prepared[0].visible);
+        assert!(!prepared[1].visible);
+        Ok(())
+    }
+}

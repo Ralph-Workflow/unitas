@@ -197,7 +197,7 @@ namespace Unitas.Editor.Tests
                 // No public tool can stage a riskier item after a content edit
                 // inside one set (AssetTools' two-item import always puts the
                 // riskiest shape first), so the fixture appends operations the
-                // way AssetTools does, through the public store API.
+                // way AssetTools does: through the store's public AddOperation.
                 store.AddOperation(held!, new JsonObject
                 {
                     ["tool"] = "scene.set_property",
