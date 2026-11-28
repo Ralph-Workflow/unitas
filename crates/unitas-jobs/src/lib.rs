@@ -524,6 +524,10 @@ fn finish(inner: &Inner, id: u64, record: &Arc<Record>) {
             std::mem::take(&mut state.dependencies),
         )
     };
+    // Publish the completion bit before waking dependents: a dependent can
+    // run on another worker and retire this record before this thread
+    // reaches the mark, leaving is_complete to miss the retired record.
+    mark_completed(inner, id);
     for dependent in dependents {
         if let Some(dependent_record) = lookup(inner, dependent) {
             release(inner, dependent, &dependent_record);
@@ -532,7 +536,6 @@ fn finish(inner: &Inner, id: u64, record: &Arc<Record>) {
     for dependency in dependencies {
         release_dependency(inner, dependency);
     }
-    mark_completed(inner, id);
     retire_unreferenced(inner, id, record);
     if let Some(group_id) = group {
         finish_group(inner, group_id);
@@ -584,12 +587,12 @@ fn finish_group(inner: &Inner, group_id: u64) {
         state.completed = true;
         state.dependents.drain(..).collect::<Vec<_>>()
     };
+    mark_completed(inner, group_id);
     for dependent in dependents {
         if let Some(dependent_record) = lookup(inner, dependent) {
             release(inner, dependent, &dependent_record);
         }
     }
-    mark_completed(inner, group_id);
     retire_unreferenced(inner, group_id, &record);
     settle(&record);
     notify(inner);

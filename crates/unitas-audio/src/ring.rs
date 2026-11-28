@@ -3,7 +3,12 @@ use std::time::{Duration, Instant};
 
 use crate::OUTPUT_CHANNELS;
 
-const PUSH_WAIT_DEADLINE: Duration = Duration::from_millis(50);
+// Bound the producer's wait for a stalled consumer. Normal playback drains the
+// ring every few milliseconds, so this only binds when the output callback is
+// seriously descheduled; it must outlive scheduler delays on shared CI hosts
+// (observed >50 ms at load 35+) or the ring drops frames a live consumer would
+// have taken.
+const PUSH_WAIT_DEADLINE: Duration = Duration::from_millis(250);
 const PUSH_YIELD_INTERVAL: u32 = 64;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -220,7 +225,7 @@ mod tests {
         let consumer = std::sync::Arc::clone(&ring);
         let handle = std::thread::spawn(move || {
             // Wait until the producer has filled the ring (so `push` must
-            // block) instead of sleeping a fixed time: the 50 ms push
+            // block) instead of sleeping a fixed time: the bounded push
             // deadline can expire before a fixed-sleep consumer is scheduled
             // on a loaded machine.
             let deadline = std::time::Instant::now() + Duration::from_secs(5);

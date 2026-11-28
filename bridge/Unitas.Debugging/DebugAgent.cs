@@ -28,6 +28,8 @@ namespace Unitas.Debugging
         private static bool _firstChanceSubscribed;
         [ThreadStatic]
         private static int _inExceptionHook;
+        [ThreadStatic]
+        private static int _threadCallDepth;
         private static int _callDepth;
         private static int _selfStartState;
         private static int _selfStartedPort;
@@ -79,6 +81,7 @@ namespace Unitas.Debugging
 
         public static void EnterFrame()
         {
+            _threadCallDepth++;
             lock (Gate)
             {
                 _callDepth++;
@@ -87,6 +90,10 @@ namespace Unitas.Debugging
 
         public static void LeaveFrame()
         {
+            if (_threadCallDepth > 0)
+            {
+                _threadCallDepth--;
+            }
             lock (Gate)
             {
                 if (_callDepth > 0)
@@ -193,7 +200,7 @@ namespace Unitas.Debugging
             {
                 session = _session;
                 depth = _callDepth;
-                if (session == null || (requireCallDepth && depth <= 0))
+                if (session == null || (requireCallDepth && _threadCallDepth <= 0))
                 {
                     return;
                 }
