@@ -2,9 +2,13 @@
 
 ## Purpose
 
-This catalog gives every promised product family a stable identifier and an
-owning detailed specification. Identifiers support navigation and acceptance
-reporting; they are not implementation milestones.
+This catalog gives every promised feature family a stable identifier, a tier,
+and one owning specification. It is an index for navigation and acceptance
+reporting. It is not a work list, a milestone plan, or a priority order: rows
+are grouped by area, not ranked, and a row's short label is not the feature's
+scope. The scope is everything the owning specification states. The
+[Engine architecture](architecture.md) has no identifier because it binds every
+row.
 
 Each feature has exactly one owning specification and exactly one compatibility
 tier (Exact, Semantic, Familiar, or Native), defined in the
@@ -19,7 +23,7 @@ detailed specification names the identifiers it demonstrates.
 | PRJ-001 | Open and recognize existing Unity projects | Exact | [Projects and assets](project-and-assets.md) |
 | PRJ-002 | Browse, search, label, preview, move, and delete assets | Native | [Projects and assets](project-and-assets.md) |
 | PRJ-003 | Preserve GUID, local identifier, and sub-asset references | Exact | [Serialization and prefabs](serialization-and-prefabs.md) |
-| PRJ-004 | Import textures, models, animation, and audio | Semantic | [Projects and assets](project-and-assets.md) |
+| PRJ-004 | Import pipeline, import state, and source-asset families | Semantic | [Projects and assets](project-and-assets.md) |
 | PRJ-005 | Inspect dependencies and reverse dependencies | Exact | [Projects and assets](project-and-assets.md) |
 | PRJ-006 | Resolve package manifests, registries, and project extensions | Semantic | [Projects and assets](project-and-assets.md) |
 | PRJ-007 | Represent project settings and target-specific effects | Exact | [Projects and assets](project-and-assets.md) |
@@ -48,16 +52,16 @@ detailed specification names the identifiers it demonstrates.
 | ID | Feature | Tier | Owning specification |
 |---|---|---|---|
 | RUN-001 | GameObject, Component, Transform, identity, and lifetime | Semantic | [Scripting runtime](scripting-runtime.md) |
-| RUN-002 | C# scripting profile and UnityEngine-compatible APIs | Semantic | [Scripting runtime](scripting-runtime.md) |
+| RUN-002 | C# scripting profile, UnityEngine-compatible APIs, and Visual Scripting | Semantic | [Scripting runtime](scripting-runtime.md) |
 | RUN-003 | MonoBehaviour lifecycle, messages, attributes, and activation behavior | Semantic | [Scripting runtime](scripting-runtime.md) |
 | RUN-004 | Coroutines, asynchronous operations, threading, and time | Semantic | [Scripting runtime](scripting-runtime.md) |
 | RUN-005 | Runtime scene management and persistent objects | Semantic | [Scripting runtime](scripting-runtime.md) |
 | RUN-006 | Resource loading, residency, release, and content catalogs | Semantic | [Scripting runtime](scripting-runtime.md) |
 | RUN-007 | Script compilation, assemblies, defines, and plugins | Semantic | [Scripting runtime](scripting-runtime.md) |
 | RUN-008 | Serialized events, messages, and delayed invocation | Semantic | [Scripting runtime](scripting-runtime.md) |
-| RUN-009 | Web requests, file locations, JSON utilities, and randomness | Semantic | [Scripting runtime](scripting-runtime.md) |
+| RUN-009 | Web requests, sockets, file locations, JSON utilities, and randomness | Semantic | [Scripting runtime](scripting-runtime.md) |
 | RUN-010 | Editor-time scripts and content hooks | Semantic | [Scripting runtime](scripting-runtime.md) |
-| RUN-011 | Jobs, Burst-compiled code, and native collections | Semantic | [Scripting runtime](scripting-runtime.md) |
+| RUN-011 | Jobs, Burst-compiled code, native collections, and Entities | Semantic | [Scripting runtime](scripting-runtime.md) |
 | PHY-001 | 3D bodies, colliders, joints, queries, and events | Semantic | [Physics, navigation, and terrain](physics-navigation-terrain.md) |
 | PHY-002 | 2D bodies, colliders, effectors, joints, queries, and events | Semantic | [Physics, navigation, and terrain](physics-navigation-terrain.md) |
 | PHY-003 | Character movement and grounding | Semantic | [Physics, navigation, and terrain](physics-navigation-terrain.md) |

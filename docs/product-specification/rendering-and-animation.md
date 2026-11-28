@@ -6,10 +6,10 @@ This specification defines the visible behavior of cameras, geometry,
 materials, shaders, render pipelines, scripted rendering, lighting, shadows,
 textures, render targets, 2D rendering, frame presentation, animation,
 particles, and cinematic sequencing. It describes observable output and
-diagnostics, not a rendering architecture.
+diagnostics; the structure of rendering and animation is stated in
+[Architecture](#architecture).
 
-These are desired end-state requirements, not claims about currently shipped
-capability. The compatibility baseline is Unity 2022.3 LTS, as defined in the
+The compatibility baseline is Unity 2022.3 LTS, as defined in the
 [Compatibility contract](compatibility-contract.md); projects saved by earlier
 releases open after their serialized forms migrate to that baseline. URP,
 HDRP, Scriptable Render Pipeline Core, Shader Graph, and Visual Effect Graph
@@ -69,20 +69,70 @@ Visual acceptance in this document uses TST-002 visual validation, owned by
 [Diagnostics, profiling, and playtesting](diagnostics-profiling-playtesting.md):
 a capture is compared with a unitas-approved reference at the same target,
 resolution, quality level, camera, scene state, and time, with a tolerance
-declared in the scenario or reference as TST-002 defines. Draw order, the
-presence of every expected object, the shader pass
-selected for each renderer, and the set of lights affecting each renderer are
-compared exactly. A comparison without a declared tolerance is reported as not
+declared in the scenario or reference as TST-002 defines. The order of draws
+whose order is visible (transparent, 2D, UI, and sorting-group content), each
+renderer's reported sorting position, the presence of every expected object,
+the shader pass selected for each renderer, and the set of lights affecting
+each renderer are compared exactly. A comparison without a declared tolerance is reported as not
 evaluable and is never reported as matching. Unity screenshots are not
 acceptance references.
 
+## Architecture
+
+Rendering and animation follow the [Engine architecture](architecture.md).
+
+* **Render proxies.** The renderer never reads scene objects. Change tracking
+  keeps a render proxy for each renderer, light, camera, probe, decal, canvas
+  batch, and particle system (transform, bounds, mesh and material handles,
+  masks, sorting and lighting inputs), and the spatial structure that culls
+  them, current as their sources change.
+* **Frame handoff.** After `LateUpdate` and canvas rebuilds the frame's
+  changes close; pipeline code records against that state, and `Submit` hands
+  the work to render threads, which encode and submit GPU commands while the
+  main thread simulates the next frame. The main thread waits on the GPU only
+  where an API is synchronous by contract, such as a CPU read after
+  `ReadPixels`.
+* **One renderer, every pipeline.** URP, HDRP, and custom pipelines run their
+  own unmodified C# code, which records through `ScriptableRenderContext`,
+  `CommandBuffer`, and the SRP Core render graph into one native render graph;
+  the Built-in pipeline is built from the same passes. Built-in features in
+  scriptable pipelines, backend emulation, and capture outputs are passes in
+  it. The graph orders, synchronizes, aliases, and merges passes from their
+  declared reads and writes, drops unread ones, records independent ones in
+  parallel, and is what rendering diagnostics show.
+* **Culling and batching.** Frustum, layer, LOD, occlusion, and per-eye
+  culling run as jobs and produce `CullingResults`. Sorting fixes only the
+  order the sorting rules make visible. Per-object and per-material constants
+  live in persistent GPU buffers rewritten only where something changed, and
+  compatible draws are instanced or indirect where the device allows; none of
+  this alters the image.
+* **Shaders and resources.** Shaders translate at import into cooked
+  per-backend variants; a player never compiles shader source. GPU pipelines
+  are built from cooked variants, cached per device and driver, and
+  pre-created by warm-up. Meshes and textures upload asynchronously; mipmap
+  streaming follows the visible set and quality budget.
+* **Animation and particles.** Transitions, parameters, and graph topology
+  resolve on the main thread at each system's Unity update point; sampling,
+  blending, retargeting, and IK run as jobs between the script callbacks this
+  document orders and write back to native transforms in one pass before the
+  next observing callback. Events and callbacks dispatch in an order
+  independent of job scheduling. Skinning runs on the GPU from the pose CPU
+  queries read. Particle systems simulate as jobs; Visual Effect Graph
+  simulates in render-graph compute passes.
+* **Editor, headless, player.** The worker renders the edited project's game,
+  scene, and preview views with the project's pipeline; the editor renders its
+  own interface with the same renderer. Headless sessions, captures, identity
+  maps, and bakers use the same graph and translated shaders. Per-frame work
+  scales with change and visibility, and the engine's render path allocates
+  no managed memory per frame.
+
 ## Graphics API and target capability
 
-The product does not require a particular graphics API or API version for
-rendering. Direct3D, OpenGL, Vulkan, and Metal are possible implementation
-choices, not interchangeable promises. In particular, Linux and macOS support
-does not imply that Direct3D runs on those systems. ShaderLab and HLSL support
-describes accepted project content, not the API used to draw it.
+Rendering draws through `wgpu` on every target. Each target's graphics API is
+the `wgpu` backend it uses there, such as Vulkan, Metal, Direct3D 12, OpenGL
+ES, WebGL 2, or WebGPU. Support for a target does not imply that any other
+target's API runs on it. ShaderLab and HLSL describe accepted project content,
+not the API used to draw it.
 
 For each supported build target and current host, developers can inspect the
 selected graphics API and version, the device and driver where the host
@@ -91,7 +141,7 @@ the graphics API provides it directly, unitas provides it on that device by
 other means, or the device's hardware lacks it. If no usable graphics device or
 API is available, startup or build fails with an actionable reason; it does not
 silently claim a working renderer. A change of graphics API does not change the
-draw order, object presence, shader pass selection, or light assignment of a
+visible draw order, object presence, shader pass selection, or light assignment of a
 scene.
 
 A feature that a graphics API lacks but the device can perform is provided by
@@ -492,6 +542,9 @@ anisotropy, color space interpretation, readability, and residency.
   format can hold, such as a floating-point render target on hardware without
   one, is reported as Platform-limited with the format and device named. It is
   never silently replaced with a lower-precision format.
+* Render textures expose size, format, depth, update state, usage, and content
+  validity. Feedback cycles and formats no device format can hold are
+  diagnosed rather than producing unexplained stale imagery.
 * `WebCamTexture` plays the selected camera device after the target's camera
   permission is granted, on desktop, mobile, and browser targets, and on
   console targets when the platform SDK is installed. A denied permission or
@@ -534,7 +587,9 @@ The following ShaderLab and shader-program forms are translated and Supported:
 * `CGPROGRAM` and `HLSLPROGRAM` blocks, vertex, fragment, geometry, and
   tessellation programs, and `#pragma target` and `#pragma require` levels.
   Geometry and tessellation programs run on every device that can run compute
-  shaders, including graphics APIs that have no such stages. A shader whose
+  shaders, including graphics APIs that have no such stages. On WebGL 2, which
+  has no compute stage, they follow the compute rule of the Web target in
+  [Web target](web-target.md#render-pipelines-and-features-on-the-web). A shader whose
   target level exceeds the device's capability falls through to the next
   subshader or its `Fallback`.
 * Built-in includes (`UnityCG.cginc`, `Lighting.cginc`, `AutoLight.cginc`,
@@ -595,6 +650,10 @@ build report lists the shaders reachable by `Shader.Find`.
 * `ShaderVariantCollection.WarmUp` and `Shader.WarmupAllShaders` complete the
   preparation of the listed variants before returning, so the first draw that
   uses them does not incur that preparation.
+* A player never compiles shader source. First use of a variant that was not
+  warmed up creates only its GPU pipeline from cooked data, and each such
+  creation during play is reported in profiling with the shader, pass,
+  variant, and duration.
 
 ## Shader Graph
 
@@ -684,13 +743,17 @@ on the target reports the command, the script location, and the target.
   from `MaterialPropertyBlock`. Instanced and non-instanced rendering of the
   same scene produce the same image. Whether instancing actually occurred is
   a reported performance property.
+* **Draw efficiency:** draws that share a shader pass reuse persistent
+  per-object and per-material GPU data, and compatible renderers are instanced
+  wherever the device supports it, whether or not the project enabled
+  instancing on the material. Draw, batch, and state-change counts are
+  measured against the release's declared frame-time budgets (PRF-002).
 * **Compute shaders:** `ComputeShader` assets, kernels, `Dispatch`,
   `ComputeBuffer` and `GraphicsBuffer` data, and random-write textures are
   Supported on every device that can run compute work, on desktop, mobile,
   console, and browser targets. On WebGL 2, which has no compute stage, compute
-  work runs through an equivalent non-compute path, as the "Web target" section of
-  [Builds, platforms, XR, and networking](build-platforms-xr-networking.md)
-  defines. On a device whose hardware cannot run compute work,
+  passes are lowered by the render graph to passes the API can run, as the
+  [Web target](web-target.md) defines; there is no second implementation. On a device whose hardware cannot run compute work,
   `SystemInfo.supportsComputeShaders` returns false, compute usage is
   reported as Platform-limited with the asset and device named, and dispatch
   fails with an error instead of silently doing nothing.
@@ -903,19 +966,18 @@ or override whose script type is missing is preserved and reported with the
 volume profile, the effect type, and its state. It does not silently render as
 if it were disabled while the profile is reported as Supported.
 
-## Lines, trails, and render textures
+## Lines and trails
 
 Line and trail renderers retain points, width curve, color gradient, material,
 alignment, texture mode, sorting, lifetime, and visibility within scope.
-Render textures expose size, format, depth, update state, usage, and content
-validity. Feedback cycles and formats no device format can hold are diagnosed
-rather than producing unexplained stale imagery.
 
 ## Transparency and ordering
 
-Opaque content draws front to back and transparent content back to front within
-each camera, ordered first by render queue, then by sorting layer and order in
-layer, then by distance along the camera's sort axis. Alpha-tested content
+Within each camera, content is ordered first by render queue, then by sorting
+layer and order in layer, then by distance along the camera's sort axis:
+transparent content back to front, and opaque content by its requested sorting
+criteria. Any further reordering of opaque draws, for depth rejection or for
+state coherence, cannot be observed and is not compared. Alpha-tested content
 writes depth like opaque content. The editor and automation expose the
 effective ordering inputs and resulting position in the draw order for a
 selected renderer.
@@ -1065,9 +1127,9 @@ clip, they fire in time order, and events with equal times fire in their order
 in the clip. When looping crosses the clip end, the events up to the end fire
 before the events from the start. Reverse playback fires events in descending
 time order. A zero-duration clip fires its events once and holds its single
-pose. Ordering of events across different clips or animators in the same frame
-follows the order in which those animators are evaluated, which the AUT-006
-API reference states.
+pose. Events and `StateMachineBehaviour` callbacks of different animators in
+one frame are dispatched on the main thread in a stable order that does not
+depend on job scheduling; the AUT-006 API reference states that order.
 
 ## Animator controllers
 
@@ -1112,7 +1174,9 @@ processing for that state, and `OnStateMachineEnter` and
   before `LateUpdate`, using scaled delta time. Animate Physics advances it in
   each fixed time step. Unscaled Time advances it after `Update` using
   unscaled delta time, so it continues when `Time.timeScale` is 0.
-* Culling mode Always Animate advances state and writes transforms when no
+* Visibility for animator culling means visible to any camera in the most
+  recent completed culling, which is the previous rendered frame's. Culling
+  mode Always Animate advances state and writes transforms when no
   renderer is visible. Cull Update Transforms advances state, fires events,
   and computes root motion off-screen but skips retargeting, IK, and transform
   writes. Cull Completely stops advancing state and firing events while no
@@ -1208,8 +1272,10 @@ scope.
   particles after stopping: None does nothing, Disable deactivates the
   GameObject, Destroy destroys it, and Callback invokes
   `OnParticleSystemStopped` on its scripts.
-* Culling mode Automatic pauses looping systems and keeps simulating
-  non-looping systems when off-screen; Pause And Catch-up pauses and then
+* Off-screen for particle culling means not visible to any camera in the most
+  recent completed culling, which is the previous rendered frame's. Culling
+  mode Automatic pauses looping systems and keeps simulating non-looping
+  systems when off-screen; Pause And Catch-up pauses and then
   advances by the elapsed time when visible again; Pause pauses; Always
   Simulate keeps simulating.
 * With Send Collision Messages enabled, `OnParticleCollision` runs on the
@@ -1305,7 +1371,7 @@ emit-once signal fires only on its first crossing. Missing bindings identify
 the track and intended target. Custom tracks, clips, and mixers implemented
 with playable scripts behave as defined in [Playable graphs](#playable-graphs).
 
-## Camera behavior
+## Cinemachine camera rigs
 
 Cinemachine 2.x camera rigs import with their virtual cameras, priority,
 Follow and LookAt targets, body and aim behaviors, noise profiles, lens
@@ -1328,7 +1394,9 @@ Users and authorized agents can inspect camera contribution, visible and culled
 renderers, geometry counts, material and shader selection, active lights,
 shadow participation, active volumes, render targets, renderer features and
 command buffers that ran, texture residency, runtime mesh and material
-instances, animation state, playable graphs, and frame cost.
+instances, animation state, playable graphs, CPU and GPU time per camera and
+per pass, draw, batch, and state-change counts, and GPU memory by resource
+type.
 
 Diagnostics navigate to responsible project content and distinguish correctness
 errors from performance warnings. A captured image records target, resolution,
@@ -1413,9 +1481,9 @@ Items that compare images use the rule in [Visual acceptance](#visual-acceptance
     component run with their blended parameters, and an effect whose script
     type is missing is preserved and reported rather than silently ignored.
     (REN-003)
-15. Particle systems, trails, and line renderers report their playback state
-    and produce the same particle count and positions under a fixed random
-    seed in preview, play mode, and player. (REN-004)
+15. Particle systems produce the same particle count and positions under a
+    fixed random seed in preview, play mode, and player on the same target,
+    and trails and line renderers report their state. (REN-004)
 16. `Emit` with `EmitParams`, `SetParticles`, custom data, a Destroy stop
     action, a Callback stop action invoking `OnParticleSystemStopped`,
     `OnParticleCollision`, `OnParticleTrigger`, and a force field each behave
@@ -1461,8 +1529,8 @@ Items that compare images use the rule in [Visual acceptance](#visual-acceptance
     render pipeline, and a comparison without a declared tolerance is reported
     as not evaluable. (REN-001, REN-006, REN-007)
 26. On each supported build target, a developer or agent can identify the
-    effective graphics API and diagnose missing device capabilities without
-    assuming Direct3D on Linux or macOS. (REN-006, REN-007)
+    effective graphics backend and API and diagnose missing device
+    capabilities. (REN-006, REN-007)
 27. Animation preview, play mode, and built-player playback produce the same
     pose and animation event sequence for the same sequence of frame times,
     including looping and reverse playback across events. (ANI-001)

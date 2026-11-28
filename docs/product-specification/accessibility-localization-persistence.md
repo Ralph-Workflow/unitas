@@ -1,4 +1,4 @@
-# Accessibility, Localization, and Persistence Product Specification
+# Accessibility, Localization, and Persistence
 
 ## Scope
 
@@ -40,6 +40,52 @@ baseline is Unity 2022.3 LTS:
 * **SAV-001 (Semantic):** `PlayerPrefs` and the serializers used for save data
   behave as documented for Unity 2022.3 LTS in ordinary use; a found difference
   is reported as Partially supported, naming it.
+
+## Architecture
+
+The domain spans the UI and text subsystems, the platform layer, and scripting, layered as in
+[Engine architecture](architecture.md).
+
+* **Accessibility tree.** Each engine instance derives one accessibility tree from its UI
+  (uGUI, TextMeshPro, and UI Toolkit panels) through change tracking: a node updates only when
+  its control's label, value, state, focus, or visibility changes. Script overrides and
+  announcements write into the tree. Per-target adapters in the platform layer expose it to
+  UI Automation, the Apple accessibility interfaces, the Android accessibility framework,
+  AT-SPI, and the browser's accessibility tree. Platform requests arrive on platform threads
+  and are answered from the tree's last published state, never by calling into scripts.
+* **Editor accessibility.** The editor, being a unitas project, uses the same tree and
+  adapters. Extension controls running in a worker contribute through the element trees the
+  worker publishes for agents, so drawing, agent operation, and accessibility share one
+  description of each control.
+* **Platform preferences.** Screen-reader presence, reduced motion, high contrast, text scale,
+  and caption preferences are read by the platform layer and delivered to scripts as
+  main-thread notifications at a frame boundary.
+* **Localization.** The Localization package compiles and runs as ordinary package code. Below
+  scripting the engine supplies culture and plural data for every locale on every target,
+  including ahead-of-time and browser targets; shaping and bidirectional layout through the
+  text subsystem; and asynchronous loading of cooked tables and assets. A locale change is a
+  main-thread event; layout re-runs only for text whose content changed. Editor locale preview
+  runs in the worker and writes no project content, and localization diagnostics (overflow,
+  clipping, missing glyphs, missing shaping data) come from the text subsystem's own layout
+  results.
+* **Storage roots.** Project assets, project settings, editor preferences, player preferences,
+  and game data each live in a distinct storage root with one owner; clearing one root never
+  touches another. Each isolated play session has its own player-preference and
+  persistent-data roots.
+* **Preferences and files.** `PlayerPrefs` is an in-memory store on the main thread backed by
+  each target's Unity location. Engine-initiated I/O is asynchronous and never blocks the main
+  thread; synchronous script APIs (`PlayerPrefs.Save`, `System.IO` writes) block only their
+  calling thread, only as long as their contract requires. Durability (flush to stable storage
+  and atomic replace) is implemented once per target in the platform layer. On the browser
+  target the persistent-data directory is a filesystem whose closed files are copied to
+  persistent browser storage asynchronously, with each file's pending state tracked, and atomic
+  replace is journaled over that storage.
+* **Serializers.** Save serializers run on the hosted .NET runtime; on ahead-of-time targets the
+  build supplies the metadata and code they need
+  ([Builds, platforms, XR, and networking](build-platforms-xr-networking.md)).
+* **Everywhere.** Editor play mode, headless play sessions, and packaged players run the same
+  accessibility, localization, and storage code; only the storage locations differ, as owned by
+  [Scripting runtime](scripting-runtime.md).
 
 ## Accessible editor experience
 
@@ -104,9 +150,12 @@ is not represented as Unity-compatible behavior:
 * A control that has no name from its label or from a script is reported in
   diagnostics and in accessibility playtest results, naming the control.
 
-The player retains accessibility choices across sessions when the project
-requests persistence. A first-run flow can expose essential accessibility
-choices before visually or physically demanding content begins.
+Accessibility choices that a game stores through `PlayerPrefs` or file access
+persist across sessions like any other preference, and a playtest scenario
+observes them after a relaunch. The platform accessibility preferences above
+are readable from the first frame, so a game can offer its essential
+accessibility choices before visually or physically demanding content
+begins.
 
 Caption and subtitle behavior can represent text, speaker, timing, duration,
 sound cues, and readability choices. Muting audio does not remove textual
@@ -236,9 +285,10 @@ accessibility, and gameplay preferences. `PlayerPrefs` (`SetInt`, `SetFloat`,
 `SetString`, `GetInt`, `GetFloat`, `GetString`, `HasKey`, `DeleteKey`,
 `DeleteAll`, and `Save`) behaves as in Unity and stores data in the same
 per-user location that Unity uses for the target, company name, and product
-name. On the browser target, `PlayerPrefs` has no fixed size limit, unlike
-Unity 2022.3's 1 MB limit there; it is bounded only by the storage quota the
-browser grants the page. Preference failures, such as exceeding that quota,
+name. On the browser target, `PlayerPrefs` has no fixed size limit and is
+bounded only by the storage quota the browser grants the page. This is a unitas
+extension to Unity 2022.3's 1 MB browser limit, and it is reported as such in
+the compatibility report. Preference failures, such as exceeding that quota,
 are reported to gameplay code as in Unity and in diagnostics.
 
 Project assets, shared project settings, editor preferences, player preferences,
@@ -301,7 +351,10 @@ knowledge (AUT-006 in [Automation and MCP](automation-and-mcp.md)).
   browser target. On ahead-of-time backends (BLD-003 in
   [Builds, platforms, XR, and networking](build-platforms-xr-networking.md))
   they serialize and deserialize the same data as on just-in-time backends,
-  for every type the project serializes with them.
+  for every type the project serializes with them. Current .NET no longer
+  provides a working `BinaryFormatter`; unitas supplies and maintains a
+  compatible implementation and does not depend on the base class library
+  for it.
 * A serialization that fails because the project's managed code stripping
   settings removed a type or member names that type and member and the
   preservation mechanisms that would retain it, as defined by BLD-003.
@@ -318,20 +371,24 @@ available on every target, and does not masquerade as a new game.
 
 ## Cloud and conflict behavior
 
-When a game uses synchronized storage from a platform service, the game distinguishes local and remote
-versions, offline changes, upload or download failure, quota, authentication,
-and conflict. A conflict exposes enough information for the conflict policy
-the game implements or for a user choice; it never silently treats the newest timestamp as correct
-when ordering is unknown.
+Synchronized storage from platform services, including cloud saves, is owned
+by Online and platform services in
+[Builds, platforms, XR, and networking](build-platforms-xr-networking.md#online-and-platform-services).
+The engine's part is local: saves written through `PlayerPrefs` or file access
+stay intact when a service call fails, and each service failure reaches game
+code as the service's SDK reports it and appears in diagnostics naming the
+service and operation.
 
 ## Privacy and user control
 
-Persistent data categories and their purpose are inspectable by the project.
-The product does not label diagnostic, playtest, identity, or telemetry data as
-ordinary preferences. Deleting player data reports what was removed, retained,
-unavailable, or controlled by an external platform service.
+The editor and its MCP interface list each storage root of a play session or a
+development player (player preferences, persistent data, and cache) with its
+location and size. Clearing one root reports what it removed, leaves the other
+roots untouched, and names data it cannot remove because an external platform
+service controls it. Diagnostic, playtest, identity, and telemetry data never
+live in the player-preference or persistent-data roots.
 
-## Acceptance stories
+## Acceptance outcomes
 
 1. Editor authoring, diagnostics, and play controls, including custom
    inspectors and editor windows drawn by extensions, are usable by keyboard,

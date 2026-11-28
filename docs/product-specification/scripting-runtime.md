@@ -43,6 +43,55 @@ Projects saved by earlier Unity releases are compiled and run with the 2022.3
 LTS behavior after their serialized forms migrate (SER-005 in
 [Serialization and prefabs](serialization-and-prefabs.md)).
 
+## Architecture
+
+* **Hosting.** Each worker (editor or headless) and each player hosts one .NET
+  runtime in process; the editor process loads no project code. Engine API
+  assemblies never unload. Project, package, and managed plugin assemblies
+  load together into one collectible load context per compilation; editor
+  assemblies load only in workers.
+* **Compilation.** A compiler service in a worker (analyzers
+  and source generators are project code) caches each assembly under the
+  content hash of its sources, references, defines, and options, so a change
+  rebuilds only the assemblies whose inputs changed. It also emits per-type
+  metadata (implemented messages, execution order, serialization transfer
+  code), so dispatch and serialization need no runtime reflection and work
+  unchanged under ahead-of-time compilation.
+* **Bindings.** A managed `UnityEngine.Object` carries only its native
+  object's identity; destroyed-object equality and editor placeholders derive
+  from the binding's liveness check. A script's own fields live in its managed
+  instance, and the generated transfer code is the one path between them and
+  the native serialized form for save, load, `Instantiate`, undo, inspection,
+  agent edits, and domain reload.
+* **Dispatch.** The native PlayerLoop drives every message. Per message, the
+  world keeps the enabled behaviours whose type implements it, in execution
+  order, maintained by change tracking; each phase enters managed code once
+  per batch, a type without the message costs nothing, and each callback has
+  its own exception boundary. Coroutines, `Invoke` timers, and the main-thread
+  synchronization context resume at Unity's phases.
+* **Domain reload.** Script state transfers to native memory, the collectible
+  context unloads, the new compilation loads, and instances are restored;
+  native objects and identities persist. If project threads or native
+  callbacks keep the old context alive, the reload still completes: its
+  handles stop resolving, and the context and its holders are reported with
+  their origin until they end.
+* **Jobs and Burst.** Managed jobs run on the engine job system and a
+  `JobHandle` is an engine job dependency. `Temp`, `TempJob`, and `Persistent`
+  map onto the per-frame, job-scoped, and persistent engine allocators; safety
+  handles exist only in the editor and development players. Burst-marked
+  methods compile to native code cached by content hash, asynchronously in the
+  editor as in Unity; a target without native code generation runs the same
+  methods as managed code.
+* **Entities.** The Entities packages run as package code on this layer, with
+  no second entity engine: systems update from the PlayerLoop, baking runs at
+  import and writes entity scenes to the cache, and Entities Graphics submits
+  batches to the render graph. An Entities `World` is package state, not the
+  engine's world.
+* **Sameness.** Workers and players share runtime, bindings, and dispatch; they
+  differ only in loaded assemblies, compiled-in safety checks, and JIT versus
+  ahead-of-time code. Editor extensions draw in the worker, and the editor
+  presents their output and forwards input.
+
 ## Script authoring experience
 
 As a gameplay programmer, I can add supported C# scripts to an existing project
@@ -212,6 +261,11 @@ type or member has compatible
 effects, return values, exceptions, null behavior, timing, object lifetime, and
 platform limits.
 
+Every public type and member of the scripting profile is available. None
+behaves as an inert placeholder. A member that needs a device capability or
+platform service that the running target lacks reports that status naming the
+member, as defined for each owning feature.
+
 Core compatibility covers Object, GameObject, Component, Behaviour,
 MonoBehaviour, Transform, ScriptableObject, instantiation, destruction,
 discovery, and component access, together with:
@@ -277,6 +331,18 @@ their log file to the location Unity uses on each target and honor the
 by DIA-003 in
 [Diagnostics, profiling, and playtesting](diagnostics-profiling-playtesting.md).
 
+Log entries expose severity, message, time, frame, stack information, runtime
+instance, originating object, and, for entries received from a connected
+player, that player connection. Presentation groups repeated messages with
+their count and each distinct context (DIA-001); the recorded entries are never
+merged. Presentation and navigation of logs are owned by DIA-001 in
+[Diagnostics, profiling, and playtesting](diagnostics-profiling-playtesting.md).
+
+Unhandled exceptions remain visible. Development players report the exception
+type, message, script, method, and managed stack with file and line. Release
+players report the type, the message, and the stack detail that the
+stack-trace Player settings select, and state which detail was omitted.
+
 ### Visual Scripting
 
 With the Visual Scripting package (`com.unity.visualscripting`, scoped by
@@ -313,11 +379,6 @@ headless play sessions, and players. (RUN-002)
   stays in the graph with its connections, and the rest of the graph runs as
   the package defines for a missing member. An exception thrown inside a
   graph is logged naming the graph, node, and owning object.
-
-Every public type and member of the scripting profile is available. None
-behaves as an inert placeholder. A member that needs a device capability or
-platform service that the running target lacks reports that status naming the
-member, as defined for each owning feature.
 
 ## Object identity and lifetime
 
@@ -594,7 +655,9 @@ Asynchronous work, threads, and timers that outlive the play session in which
 they started are reported at the end of that session with their origin, and
 their later attempts to touch destroyed objects or main-thread APIs are
 reported as such. Ending a play session does not silently cancel such work, as
-in Unity.
+in Unity. A domain reload completes even while such work runs; that work keeps
+running the previous assemblies, its object handles no longer resolve, and it
+is reported with its origin until it ends.
 
 Browser players run explicitly created threads, the thread pool, `Task.Run`
 work, timers, and blocking waits with the same results as desktop players.
@@ -952,7 +1015,9 @@ the player restarts.
 
 ## Editor-time scripts and content hooks
 
-Editor scripts run in the editor and in headless sessions of a trusted project.
+Editor scripts run in the worker of an editor or headless session
+([Editor and authoring](editor-and-authoring.md#architecture), AUT-004), and
+only in a trusted project.
 Assemblies that reference `UnityEditor` as editor-only, and the predefined
 editor assemblies, are never included in players.
 
@@ -1047,8 +1112,9 @@ Custom editor extensions that the project and its packages declare run with
 Unity's meaning and are drawn in the visual editor, where their presentation is
 owned by EDT-002, EDT-003, and EDT-006 in
 [Editor and authoring](editor-and-authoring.md). Like other editor scripts,
-they run only in a trusted project (PRJ-008), outside the editor process, in
-the process that runs project code (AUT-004). (RUN-010)
+they run only in a trusted project (PRJ-008), in a worker, never in the editor
+instance ([Editor and authoring](editor-and-authoring.md#architecture)).
+(RUN-010)
 
 * **Custom inspectors.** `Editor` subclasses selected by `[CustomEditor]`,
   including `editorForChildClasses` and `[CanEditMultipleObjects]`, draw
@@ -1168,7 +1234,7 @@ effect, jobs run on the main thread with the same results, and the absence of
 parallelism is reported as a performance property (PRF-001), not as a
 compatibility limitation.
 
-### Entities
+## Entities and Entities Graphics
 
 With the Entities (`com.unity.entities`) and Entities Graphics
 (`com.unity.entities.graphics`) packages, scoped by CMP-002 in the
@@ -1240,21 +1306,7 @@ Failures name their source:
   entity lacks, raise the package's exceptions naming the entity and component
   type. Safety checks follow [Native containers](#native-containers).
 
-## Logging and exception behavior
-
-Log entries expose severity, message, time, frame, stack information, runtime
-instance, originating object, and, for entries received from a connected
-player, that player connection. Repeated messages may be grouped without
-losing their count or distinct context.
-Presentation and navigation of logs are owned by DIA-001 in
-[Diagnostics, profiling, and playtesting](diagnostics-profiling-playtesting.md).
-
-Unhandled exceptions remain visible. Development players preserve enough
-context to identify the responsible script and execution point. Release-player
-diagnostics accurately reflect the selected product settings and never imply
-that an exception did not occur merely because extended details were omitted.
-
-## Acceptance stories
+## Acceptance outcomes
 
 1. A supported Unity MonoBehaviour compiles, attaches to the intended object,
    retains inspector values, and receives its expected lifecycle callbacks.
@@ -1388,9 +1440,7 @@ that an exception did not occur merely because extended details were omitted.
     `-logFile`. (RUN-002)
 37. A Visual Scripting script machine whose flow graph moves its object on
     `Update` and fires a custom event runs the same in an editor play session
-    and an ahead-of-time compiled player, and an Entities subscene in the same
-    project bakes, streams in, and renders its entities while a job using
-    `NativeArray` keeps working. (RUN-002, RUN-011)
+    and an ahead-of-time compiled player. (RUN-002)
 38. On an Android player, an `AndroidJavaClass` call reaches Java and an
     `AndroidJavaProxy` callback reaches managed code; on a desktop build, the
     same calls are listed as Platform-limited naming the calling member, and an
@@ -1476,3 +1526,6 @@ that an exception did not occur merely because extended details were omitted.
     session. (RUN-010)
 58. A `SettingsProvider` page appears among the project settings with its
     keywords searchable and edits its settings asset. (RUN-010)
+59. An Entities subscene bakes, streams in, and renders its entities in an
+    editor play session and in a player, while a job using `NativeArray` keeps
+    working. (RUN-011)

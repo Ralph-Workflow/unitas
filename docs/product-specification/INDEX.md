@@ -12,9 +12,15 @@ or released. Current implementation status belongs in verifiable project
 status, not in this product specification.
 
 The specifications describe observable outcomes, compatibility contracts,
-states, edge cases, failures, and acceptance stories. They do not prescribe
-architecture, source-code organization, dependencies, algorithms, toolchains,
-delivery phases, or implementation tasks.
+states, edge cases, failures, and acceptance outcomes. The
+[Engine architecture](architecture.md) and the Architecture section of each
+detailed specification define how the engine is built: its layers, where state
+lives, how time and work flow, the boundaries between subsystems, the
+dependencies it builds on, and the performance principles every subsystem
+follows. Architecture is binding: a capability whose observable behavior is
+correct but whose structure violates it is incomplete. No part of the
+specification prescribes source-file layout, delivery phases, schedules, or
+implementation tasks.
 
 This index defines the product-wide vision and boundaries. The documents below
 expand that contract. When a summary in this index is less specific than a
@@ -84,19 +90,17 @@ Every catalog feature has exactly one tier, recorded in the
 [Feature catalog](feature-catalog.md) and defined in the
 [Compatibility contract](compatibility-contract.md):
 
-* **Exact:** content identity and serialization (scenes, prefabs and
-  overrides, GUIDs and local identifiers, materials, project settings, and
-  round-trip saving) match Unity 2022.3 LTS exactly.
-* **Semantic:** the core scripting model, physics bodies, callbacks, and
-  queries, scene loading, and resource loading behave as Unity 2022.3 LTS does
-  in ordinary use; bug-for-bug parity is not promised.
-* **Familiar:** UI, text, animation, audio, video, input, particles,
-  navigation, terrain, localization, XR, and networking import Unity content
-  and keep Unity's API shape, while unitas defines the behavior and reports
-  every difference.
-* **Native:** rendering, the editor, builds and platforms, diagnostics, and
-  the agent and MCP layer are unitas-defined. Unity shaders and materials are
-  translated; pixel identity with Unity is not promised.
+* **Exact:** the feature matches Unity 2022.3 LTS exactly. Content identity
+  and serialization are in this tier.
+* **Semantic:** the feature behaves as Unity 2022.3 LTS does in ordinary use;
+  bug-for-bug parity is not promised. The core scripting model is in this tier.
+* **Familiar:** the feature imports Unity content and keeps Unity's API shape,
+  while unitas defines the behavior and reports every difference.
+* **Native:** the feature is unitas-defined. Rendering, the editor, and the
+  agent and MCP layer are in this tier; Unity shaders and materials are
+  translated, and pixel identity with Unity is not promised.
+
+The catalog, not this summary, records the tier of each feature.
 
 Behavior outside a feature's tier is reported with a compatibility state and is
 never silently approximated.
@@ -141,15 +145,64 @@ LIC-001 in [Builds, platforms, XR, and networking](build-platforms-xr-networking
 
 ## How to Read the Specification
 
-Each feature document answers the same questions:
+### Reading order
+
+1. This index: the product vision and boundaries.
+2. [Engine architecture](architecture.md): how the whole engine is built. Every
+   detailed specification applies it.
+3. [Compatibility contract](compatibility-contract.md): the baseline, the tiers,
+   the compatibility states, and what counts as evidence. Every behavior
+   statement is read through the tier of the feature that owns it.
+4. [Automation and MCP](automation-and-mcp.md): every capability is reachable by
+   agents through the editor, and a capability that agents cannot reach is
+   incomplete.
+5. The detailed specification of the area at hand, in full, and then the Scope
+   and Architecture sections of every neighbouring specification it names.
+6. The [Feature catalog](feature-catalog.md) and
+   [Playable samples and benchmarks](sample-games/INDEX.md), as indexes into the
+   above.
+
+### The catalog is an index
+
+A catalog identifier names a feature family and points to the one
+specification that owns it. It is a navigation and traceability label, not a
+work item, a milestone, or a unit of priority. Catalog rows are not ordered by
+importance, and the short label in a row is not the scope of the feature: the
+scope is everything the owning specification states for it.
+
+### Samples and benchmarks are evidence
+
+The playable samples, development workflows, and benchmarks show that declared
+features work together in real projects. They are not an agenda, a priority
+order, or the boundary of what the engine supports. No sample is more
+important than another, and a behavior that no sample exercises is required
+with the same weight as one that every sample exercises. The engine never
+recognizes or special-cases a sample; a sample passes because the engine
+implements its owning specifications.
+
+### Where architecture lives
+
+[Engine architecture](architecture.md) holds the rules for the whole engine.
+Each detailed specification has an Architecture section, directly after its
+compatibility tiers, that applies those rules to its domain: its components,
+where its data lives and flows, its threading and timing, its boundaries with
+neighbouring subsystems, and its domain-specific performance principles. An
+Architecture section adds detail and never relaxes an engine-wide rule; when
+they disagree, the Engine architecture holds. Behavior sections say what the
+product does, Architecture sections say how it is built, and neither restates
+the other.
+
+### What each detailed specification answers
 
 1. Who uses the feature and what outcome do they receive?
 2. What concepts and states are visible to that user?
-3. How does the feature behave during ordinary use?
-4. How does it behave at lifecycle boundaries and in edge cases?
-5. What does failure look like, and what information remains available?
-6. What Unity-compatible behavior is promised?
-7. What observable stories establish that the feature is complete?
+3. How is the domain built, and where are its boundaries with neighbouring
+   domains?
+4. How does the feature behave during ordinary use?
+5. How does it behave at lifecycle boundaries and in edge cases?
+6. What does failure look like, and what information remains available?
+7. What Unity-compatible behavior is promised, at which tier?
+8. What observable outcomes demonstrate the feature?
 
 “Compatible” always refers to the observable behavior that a feature's
 compatibility tier promises against the Unity 2022.3 LTS baseline. It never
@@ -160,20 +213,43 @@ opens.
 
 | Area | Detailed specification | Principal outcomes |
 |---|---|---|
+| Engine structure | [Engine architecture](architecture.md) | Layers, the native world, frame loop and time, concurrency, memory, the managed boundary, content pipeline, presentation, engine instances, performance principles, robustness, and dependencies |
 | Agents and automation | [Automation and MCP](automation-and-mcp.md) | The primary product interface: structured parity, MCP discovery, inspection, mutation, headless sessions, agent code workflow, product knowledge, conflict handling, and evidence |
 | Product compatibility | [Compatibility contract](compatibility-contract.md) | Meaning, limits, evidence, and reporting of Unity compatibility; supported package matrix; third-party content; versioning and release readiness |
 | Complete feature inventory | [Feature catalog](feature-catalog.md) | Traceable inventory of every declared product feature family and its single owner |
 | Projects and assets | [Projects and assets](project-and-assets.md) | Project opening and trust, asset identity, import, dependencies, packages, project settings, and content workflows |
 | Editor experience | [Editor and authoring](editor-and-authoring.md) | Focused visual authoring, inspection, play mode, undo, review of agent changes, and source-control merge |
+| Editor UI and UX | [Editor UI and UX](editor/INDEX.md) | Window-by-window detail of the visual editor: workspace and layouts, menus and toolbar, shortcuts, Scene view, Hierarchy, Inspector, Project window, Console, Game view and play mode, prefab workflow, animation, 2D, UI authoring, lighting and rendering tools, profiling and debugging windows, settings, and the agent-native additions |
 | Serialized content | [Serialization and prefabs](serialization-and-prefabs.md) | Serialized values, references, scenes, prefabs, overrides, serialization forms, and data preservation |
 | Rendering and animation | [Rendering and animation](rendering-and-animation.md) | Cameras, meshes, materials, shaders, render pipelines, 2D rendering, lighting, particles, frame presentation, animation, and cinematics |
 | UI, audio, and input | [UI, audio, and input](ui-audio-input.md) | Runtime UI, immediate-mode GUI, text, event routing, device input, rebinding, audio, and video |
 | C# and runtime | [Scripting runtime](scripting-runtime.md) | Compilation and assemblies, Unity object model, lifecycle, messaging, coroutines, threading, time, scenes, resources, editor-time scripts, and jobs |
 | Simulation and worlds | [Physics, navigation, and terrain](physics-navigation-terrain.md) | 2D/3D physics, queries, events, characters, vehicles, navigation, terrain, and world behavior |
 | Players and targets | [Builds, platforms, XR, and networking](build-platforms-xr-networking.md) | Build configuration, headless operation, scripting backends, player behavior, target coverage, licensing, installation, platform services, XR, and online play |
+| Browser delivery | [Web target](web-target.md) | Browser player, loader and page API, WebAssembly memory and threads, graphics on WebGPU and WebGL 2, hosting, storage, browser input and media, web performance budgets, and browser testing |
 | Quality and verification | [Diagnostics, profiling, and playtesting](diagnostics-profiling-playtesting.md) | Diagnostics, external debugging, profiling, engine performance commitments, scenarios, project tests, replay, comparison, coverage, and tester feedback |
 | Inclusive and durable games | [Accessibility, localization, and persistence](accessibility-localization-persistence.md) | Accessible editor and player features, localization, saves, settings, and data evolution |
 | Demonstrable outcomes | [Playable samples and benchmarks](sample-games/INDEX.md) | Complete games, agent authoring benchmarks, and behavioral benchmarks proving declared feature combinations |
+
+### Start here
+
+Each row names where to begin for an area of the engine and which documents
+share its boundaries. Read the Architecture section of every document in the
+row before changing behavior that crosses a boundary.
+
+| Working on | Read first | Shares boundaries with |
+|---|---|---|
+| Core world, frame loop, jobs, memory | [Engine architecture](architecture.md), [Scripting runtime](scripting-runtime.md) | every subsystem |
+| C# and the Unity API | [Scripting runtime](scripting-runtime.md) | [Builds, platforms, XR, and networking](build-platforms-xr-networking.md), [Serialization and prefabs](serialization-and-prefabs.md) |
+| Assets, import, serialized content | [Projects and assets](project-and-assets.md), [Serialization and prefabs](serialization-and-prefabs.md) | [Rendering and animation](rendering-and-animation.md), [UI, audio, and input](ui-audio-input.md), [Builds, platforms, XR, and networking](build-platforms-xr-networking.md) |
+| Rendering, 2D, animation, particles | [Rendering and animation](rendering-and-animation.md) | [UI, audio, and input](ui-audio-input.md), [Physics, navigation, and terrain](physics-navigation-terrain.md), [Web target](web-target.md) |
+| UI, text, audio, video, input | [UI, audio, and input](ui-audio-input.md) | [Accessibility, localization, and persistence](accessibility-localization-persistence.md), [Rendering and animation](rendering-and-animation.md) |
+| Physics, navigation, terrain | [Physics, navigation, and terrain](physics-navigation-terrain.md) | [Scripting runtime](scripting-runtime.md), [Rendering and animation](rendering-and-animation.md) |
+| The editor | [Editor and authoring](editor-and-authoring.md), [Editor UI and UX](editor/INDEX.md) | [Automation and MCP](automation-and-mcp.md) and the authoring requirements of every specification |
+| Agents and MCP | [Automation and MCP](automation-and-mcp.md) | [Editor and authoring](editor-and-authoring.md) and every specification |
+| Builds, players, targets, XR, networking | [Builds, platforms, XR, and networking](build-platforms-xr-networking.md), [Web target](web-target.md) | [Scripting runtime](scripting-runtime.md), [Compatibility contract](compatibility-contract.md) |
+| Diagnostics, performance, tests | [Diagnostics, profiling, and playtesting](diagnostics-profiling-playtesting.md) | every subsystem |
+| Compatibility reporting, packages | [Compatibility contract](compatibility-contract.md), [Feature catalog](feature-catalog.md) | every specification |
 
 ## Coverage Rules
 
@@ -185,10 +261,20 @@ outcome of its owning document.
 A feature that spans documents has one owning specification and cross-references
 from related documents rather than competing definitions.
 
+A detail document, such as [Web target](web-target.md) or a document in the
+[Editor UI and UX](editor/INDEX.md) folder, owns no catalog identifier. Its
+Scope names the features it details and the specification that owns them, and
+its acceptance outcomes demonstrate those features. It adds detail to its
+owning specification and never contradicts it.
+
 The catalog uses stable feature identifiers. These identifiers describe product
-requirements, not implementation work items. A feature remains incomplete when
-its observable acceptance outcomes are unmet, even if internal components with
-matching names exist.
+requirements, not implementation work items. A feature is complete only when
+every behavior its owning specification states holds on every declared target,
+in the editor, headless, and in packaged players, and when it is built as the
+[Engine architecture](architecture.md) and the owning Architecture section
+require. Acceptance outcomes are representative observations of that behavior,
+not its whole. Internal components with matching names never make a feature
+complete.
 
 ## Accuracy Rules
 
@@ -213,6 +299,7 @@ matching names exist.
 
 The specification corpus is complete when a reader can begin with this index,
 locate every declared feature, determine its observable behavior and
-limitations, identify its failure states, and find at least one acceptance story
-or benchmark that can demonstrate the claim without relying on private
-implementation knowledge.
+limitations, identify its failure states, determine how it is built from the
+Engine architecture and its owning Architecture section, and find at least one
+acceptance outcome or benchmark that can demonstrate the claim without relying
+on private implementation knowledge.

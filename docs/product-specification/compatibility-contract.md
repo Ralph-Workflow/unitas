@@ -1,13 +1,5 @@
 # Compatibility Contract
 
-## User Outcome
-
-As the owner of a supported Unity project, I can determine before editing,
-playing, or building which project behaviors unitas supports, at which
-compatibility tier, which have stated limits, and which cannot yet be
-represented. Compatibility information refers to my actual assets, scenes,
-scripts, settings, packages, and targets.
-
 ## Scope
 
 This specification owns the compatibility baseline, the compatibility tiers,
@@ -17,11 +9,43 @@ readiness, and the support lifecycle. Every report, matrix entry, and
 declaration it defines is available to people and to agents through
 automation, as defined in [Automation and MCP](automation-and-mcp.md).
 
-Compatibility tiers of the features this specification owns, as recorded in
-the [Feature catalog](feature-catalog.md): CMP-002 Native, CMP-003 Native,
-CMP-004 Native, CMP-005 Native.
+### User outcome
 
-## Compatibility Baseline
+As the owner of a supported Unity project, I can determine before editing,
+playing, or building which project behaviors unitas supports, at which
+compatibility tier, which have stated limits, and which cannot be
+represented. Compatibility information refers to my actual assets, scenes,
+scripts, settings, packages, and targets.
+
+### Compatibility tiers
+
+The features this specification owns are in the Native tier, as recorded in
+the [Feature catalog](feature-catalog.md): CMP-002, CMP-003, CMP-004, and
+CMP-005.
+
+## Architecture
+
+Compatibility assessment follows the [Engine architecture](architecture.md).
+
+* **Findings come from the pipeline.** Every finding is derived from the
+  outputs that importers, the script compiler, and cooking already produce:
+  import results, compiler diagnostics and API references, and cooked
+  artifacts. Findings are stored with those outputs in the content-hash cache,
+  keyed by the same inputs, so a finding is never computed by a separate scan
+  of the project.
+* **Incremental reassessment.** A change to an asset, script, package, setting,
+  or target invalidates only the findings whose inputs it changes, found
+  through the project's dependency graph. Reassessment reruns only those, and
+  the report states which findings changed and why.
+* **One assessment, several presentations.** There is one assessment
+  implementation. The editor's report views, the command line, the editor's
+  MCP interface, and build results all present its findings, and none of them
+  computes compatibility on its own.
+* **One matrix.** The supported package matrix and the feature catalog are
+  product data that ship with each release. The report, readiness
+  declarations, and diagnostics read them from that one source.
+
+## Compatibility baseline
 
 The compatibility baseline is the documented, observable behavior of Unity
 2022.3 LTS. Projects saved by Unity 2020.3 LTS, Unity 2021.3 LTS, or any
@@ -45,7 +69,7 @@ it:
 Matching names, file extensions, public members, or screen layouts alone is not
 compatibility.
 
-## Compatibility Tiers
+## Compatibility tiers
 
 Every catalog feature has exactly one tier, recorded in the
 [Feature catalog](feature-catalog.md). A behavior takes the tier of the catalog
@@ -97,7 +121,7 @@ Evidence for a claim depends on its tier:
 Behavior outside a feature's tier is reported with a compatibility state and is
 never silently approximated.
 
-## Compatibility States
+## Compatibility states
 
 Every assessed behavior has one state:
 
@@ -123,7 +147,7 @@ service, device, SDK, account, or permission prevents the behavior.
 
 The editor and automation interfaces expose the same compatibility state.
 
-## Project Compatibility Report
+## Project compatibility report
 
 A report covers project version, packages, settings, scenes, prefabs, assets,
 serialized types, scripts and APIs, shaders and materials, input, physics,
@@ -143,7 +167,7 @@ Each finding includes:
 A report distinguishes “not present in this project” from “present and
 supported.” It never converts absence into a compatibility claim.
 
-## Behavioral Equivalence
+## Behavioral equivalence
 
 Equivalent behavior means a player, developer, test scenario, or supported
 script observes the same specified outcome. Exact internal ordering is required
@@ -165,7 +189,7 @@ differ in a behavior, Unity 2022.3 LTS controls. These phrases carry no meaning
 in sections of Familiar-tier and Native-tier features, which state their
 behavior directly.
 
-## Round-Trip Expectations
+## Round-trip expectations
 
 Supported project edits preserve Unity-readable identities and content where
 the corresponding Unity format can express the result. Unknown data that can
@@ -179,7 +203,7 @@ Opening and saving an unchanged asset does not create unexplained semantic
 changes. Differences in non-semantic formatting are never presented as proof of
 compatibility.
 
-## Failure Behavior
+## Failure behavior
 
 A failed compatibility operation leaves unrelated content unchanged. It
 identifies what was attempted, what content was affected, what remains usable,
@@ -188,7 +212,7 @@ and whether a retry is safe. Partial success is reported as partial success.
 unitas never substitutes a plausible default, fallback shader, empty reference,
 different API result, or ignored setting while reporting full support.
 
-## Supported Package Matrix
+## Supported package matrix
 
 Unity package behavior is in scope only for the packages and version lines in
 the matrix below. The matrix, each package's tier and state, and the owning
@@ -263,7 +287,7 @@ Matrix rules:
 | Version Control (`com.unity.collab-proxy`) | Released or verified | Native | Supported: the package and its settings are preserved, and the editor provides source-control status, history, diff, and commit (EDT-007) | [Editor and authoring](editor-and-authoring.md) (EDT-007) |
 | High Definition Render Pipeline (`com.unity.render-pipelines.high-definition`) | 14.x | Native | Supported: assets, materials, volumes, and settings | [Rendering and animation](rendering-and-animation.md) (REN-006) |
 | Custom scriptable render pipelines (the Scriptable Render Pipeline API) | 14.x core | Native | Supported: project render pipeline assets that implement their own pipeline | [Rendering and animation](rendering-and-animation.md) (REN-006) |
-| Visual Effect Graph (`com.unity.visualeffectgraph`) | 14.x | Native | Supported | [Rendering and animation](rendering-and-animation.md) (REN-004) |
+| Visual Effect Graph (`com.unity.visualeffectgraph`) | 14.x | Familiar | Supported | [Rendering and animation](rendering-and-animation.md) (REN-004) |
 | Entities (`com.unity.entities`) and Entities Graphics (`com.unity.entities.graphics`) | 1.x | Semantic | Supported | [Scripting runtime](scripting-runtime.md) (RUN-011) |
 | Netcode for Entities (`com.unity.netcode`) | 1.x | Familiar | Supported | [Builds, platforms, XR, and networking](build-platforms-xr-networking.md) (NET-001) |
 | Unity Transport (`com.unity.transport`) | 1.x and 2.x | Familiar | Supported, including its network simulator pipeline | [Builds, platforms, XR, and networking](build-platforms-xr-networking.md) (NET-001) |
@@ -272,10 +296,14 @@ Matrix rules:
 | UI Toolkit runtime (`UIDocument`, UXML, USS, panel settings) | built into Unity 2022.3 LTS | Familiar | Supported | [UI, audio, and input](ui-audio-input.md) (UI-001) |
 | Visual Scripting (`com.unity.visualscripting`) | 1.x | Semantic | Supported | [Scripting runtime](scripting-runtime.md) (RUN-002) |
 | AR Foundation (`com.unity.xr.arfoundation`) with Apple ARKit (`com.unity.xr.arkit`) and Google ARCore (`com.unity.xr.arcore`) | 5.x | Familiar | Supported on devices that expose AR tracking | [Builds, platforms, XR, and networking](build-platforms-xr-networking.md) (XR-001) |
-| Unity Gaming Services SDKs (`com.unity.services.*`, including Authentication, Lobby, Relay, Cloud Save, and Analytics) | Released or verified | Familiar | Supported: the SDK behavior runs, and calls reach the services when the project has a service account and credentials; without them, calls return the services' own unavailable errors | [Builds, platforms, XR, and networking](build-platforms-xr-networking.md) (NET-001, PRD-002) |
+| Unity Gaming Services SDKs (`com.unity.services.*`, including Authentication, Lobby, Relay, Cloud Save, and Analytics) | Released or verified | Familiar | Supported: the SDK behavior runs, and calls reach the services when the project has a service account and credentials; without them, calls return the services' own unavailable errors; data flows as PRD-002 defines | [Builds, platforms, XR, and networking](build-platforms-xr-networking.md) (NET-001) |
 
 "Released or verified" means the versions the Unity Package Manager marks as
 released or verified for Unity 2022.3 LTS.
+
+The State column is the required end state of each line. The product's
+published matrix (CMP-002) reports each line's measured state; a measured state
+below the one declared here is a defect against the owning feature.
 
 The matrix grows until it lists every package Unity publishes as released or
 verified for Unity 2022.3 LTS. No package family and no built-in Unity feature
@@ -284,7 +312,7 @@ Unknown only until it is assessed. Each assessment ends with the line Supported
 in the matrix, or with every gap recorded as a defect against its owning
 feature.
 
-## Third-Party and Asset-Store Content
+## Third-party and asset-store content
 
 Third-party packages, Asset Store content, scoped-registry and git packages,
 precompiled assemblies, native plugins, and vendor shaders are assessed like
@@ -322,16 +350,16 @@ architecture. Behavior of a precompiled assembly beyond the Unity APIs it
 references is Unknown until assessed. Non-public `UnityEngine` and
 `UnityEditor` members that packages and projects reach through reflection are
 supported where an owning specification names them. Any other non-public
-member is reported Unknown, naming the member and the code that uses it. Each
-member found in assessed third-party content is then added to its owning
-specification and supported.
+member is reported Unknown, naming the member and the code that uses it. Every
+non-public member that assessed third-party content reaches is named by its
+owning specification and supported.
 
 Updating, adding, or removing a third-party package reassesses the findings it
 affects. A vendor's own statement of compatibility with unitas is never treated
 as compatibility evidence. unitas does not assess vendor license terms or grant
 third-party entitlements.
 
-## Product Versioning, Interface Stability, and Release Readiness
+## Product versioning, interface stability, and release readiness
 
 ### Versioning
 
@@ -383,7 +411,8 @@ A feature family is generally available on target T in a release only when, on
 T and with that release:
 
 * the acceptance outcomes in its owning specification pass;
-* the sample scenarios that map to it (SMP-001) pass;
+* the scenarios of samples, development workflows, and benchmarks that map to
+  it (SMP-001) pass;
 * the behavioral benchmarks that cover it (CMP-001) pass, or each failing
   behavior is named as an exclusion in the family's Partially supported claim
   for T, and the readiness declaration lists those exclusions;
@@ -400,14 +429,15 @@ A release declares target T production-ready only when:
 * every family declared generally available on T meets the criteria above;
 * player builds (BLD-001), the player lifecycle on T (PLT-001), and the build's
   licensing report (LIC-001) are generally available on T;
-* the Roll-a-Ball-style sample and at least one further playable sample pass all
-  of their acceptance scenarios both in editor play mode and in a player on T.
+* at least one playable sample declares T, and every playable sample whose
+  declared targets include T passes all of its acceptance scenarios both in
+  editor play mode and in a player on T.
 
 Each readiness declaration links to the scenario, benchmark, and budget
 evidence it rests on, recorded with the unitas version, and is available to
 people and agents through automation.
 
-## Support Lifecycle, Host Requirements, and Store Requirements
+## Support lifecycle, host requirements, and store requirements
 
 Each release line declares its support window: the date it was released, the
 period during which it receives security patches, the period during which it
@@ -420,6 +450,9 @@ Each release declares:
 
 * the supported host operating systems, with their versions and architectures,
   for the editor, the command line, and headless operation;
+* the host-target matrix: for each target, the hosts that build it, every
+  desktop target being built by every supported host, and each step that
+  needs a platform holder's own host tooling, with the host it needs;
 * for each target, the minimum target operating system version and, where the
   target has one, the minimum API level;
 * for the web target, the minimum version of each supported browser (Chrome,
@@ -436,82 +469,82 @@ the requirement, while development and local builds for that target remain
 available. These declarations are versioned with the release under CMP-004 and
 are available to people and agents through automation.
 
-## Acceptance Stories
+## Acceptance outcomes
 
-* Before relying on a release build, a project owner can identify every
-  recognized, assessed unsupported behavior in the selected project and target;
-  unknown or unassessed behavior remains explicit. (CMP-002, CMP-003)
-* A missing asset reference remains missing and identifies its original
-  identity rather than resolving to a similarly named asset. (PRJ-003, SER-004)
-* A partially supported shader reports the omitted pass and visible effect.
-  (REN-002, REN-006)
-* A console target without private SDK access is externally unavailable rather
-  than reported as an engine failure or a supported build. (PLT-001)
-* Reassessment after a project change updates only affected findings and makes
-  the report's project state clear. (CMP-002, CMP-003)
-* A project using URP 14.x and Input System 1.x on Unity 2022.3 LTS reports both
-  as Supported with their tiers and owning specifications, while an unlisted package and a
-  preview version of a listed package are each reported Unknown. (CMP-002)
-* A project containing HDRP assets and a Visual Scripting graph reports each as
-  Supported with its tier and owning specification, renders its HDRP scenes,
-  and runs its graph. (CMP-002)
-* A locally modified embedded copy of a listed package is not matched to the
-  released version and is assessed as third-party content. (CMP-002, CMP-003)
-* An Asset Store package containing scripts, a native plugin without an ARM64
-  binary, and a custom shader produces findings for each item that name the
-  vendor package, version, source, affected features, and dependent scenes; its
-  summary never reads Supported while any of its content is Unknown. (CMP-003)
-* Reflection on a non-public `UnityEditor` member in a vendor package that no
-  owning specification names is reported Unknown, naming the member and the
-  calling code. After assessment, the member is specified and supported.
-  (CMP-003)
-* A compatibility report and a build result each record the unitas version, and
-  comparing reports from two versions identifies differences caused by the
-  version change. (CMP-004)
-* An agent calling a deprecated MCP tool receives a deprecation notice naming the
-  replacement and removal release, and the tool remains available through the
-  next minor release. (CMP-004, AUT-002)
-* A release's readiness declaration for a target lists its generally available
-  families with links to passing acceptance, sample, benchmark, and budget
-  evidence; a family with a budget regression is not declared generally
-  available. (CMP-004, SMP-001, CMP-001, PRF-002)
-* A target is declared production-ready only when builds, player lifecycle, the
-  licensing report, the Roll-a-Ball-style sample, and one further sample pass in
-  editor and player on that target. (CMP-004, BLD-001, PLT-001, LIC-001,
-  SMP-001)
-* A readiness declaration for a target with a failing benchmark lists the
-  failing behavior as an exclusion of that family's Partially supported claim.
-  (CMP-004, CMP-001)
-* A project saved by Unity 2021.3 LTS with URP 12.x opens with its serialized
-  forms migrated, is assessed against Unity 2022.3 LTS and the URP 14.x line,
-  and its report does not claim 2021.3-specific behavior. (CMP-002)
-* A report finding for a Semantic-tier behavior cites Unity 2022.3 LTS as its
-  reference and is backed by a CMP-001 benchmark, while a finding for a
-  Familiar-tier behavior cites the owning unitas specification and lists each
-  difference from Unity 2022.3 LTS that the content relies on. (CMP-002,
-  CMP-001)
-* A translated material is accepted against a unitas-approved reference image,
-  and its report never presents a pixel difference from a Unity screenshot as
-  a compatibility failure. (CMP-002, REN-002, TST-002)
-* A Supported package behavior that its owning specification neither names nor
-  excludes is reported Unknown, and the matrix shows each package's tier from
-  its owning catalog feature. (CMP-002)
-* A project that uses Enlighten realtime global illumination, loads Unity-built
-  AssetBundles, and includes the Rider IDE and Version Control packages reports
-  all four as Supported. Its realtime GI updates, its bundles load, and its
-  source-control status appears in the editor. (CMP-002, REN-003, BLD-005,
-  DIA-002, EDT-007)
-* A release that finds an earlier Supported claim inaccurate and does not fix it
-  lowers the state and lists the corrected claim in its release notes with the
-  affected catalog identifiers. (CMP-004)
-* A Shader Graph asset that uses any node of the 14.x line compiles and renders
-  on its URP, HDRP, Built-in, and Visual Effect Graph targets. A malformed graph
-  is reported by graph and node. (CMP-002, REN-006)
-* A release line reports its security and correction patch periods and end of
-  support, and an installation past end of support identifies itself as
-  unsupported while continuing to run. (CMP-005)
-* An Android build from a release that does not meet the current store target
-  API level reports store submission blocked with that requirement, while a
-  development build for the device still succeeds; an unsupported host
-  operating system version is reported before the project opens. (CMP-005,
-  BLD-001)
+1. Before relying on a release build, a project owner can identify every
+   recognized, assessed unsupported behavior in the selected project and target;
+   unknown or unassessed behavior remains explicit. (CMP-002, CMP-003)
+2. A missing asset reference remains missing and identifies its original
+   identity rather than resolving to a similarly named asset. (PRJ-003, SER-004)
+3. A partially supported shader reports the omitted pass and visible effect.
+   (REN-002, REN-006)
+4. A console target without private SDK access is externally unavailable rather
+   than reported as an engine failure or a supported build. (PLT-001)
+5. Reassessment after a project change updates only affected findings and makes
+   the report's project state clear. (CMP-002, CMP-003)
+6. A project using URP 14.x and Input System 1.x on Unity 2022.3 LTS reports both
+   as Supported with their tiers and owning specifications, while an unlisted package and a
+   preview version of a listed package are each reported Unknown. (CMP-002)
+7. A project containing HDRP assets and a Visual Scripting graph reports each as
+   Supported with its tier and owning specification, renders its HDRP scenes,
+   and runs its graph. (CMP-002)
+8. A locally modified embedded copy of a listed package is not matched to the
+   released version and is assessed as third-party content. (CMP-002, CMP-003)
+9. An Asset Store package containing scripts, a native plugin without an ARM64
+   binary, and a custom shader produces findings for each item that name the
+   vendor package, version, source, affected features, and dependent scenes; its
+   summary never reads Supported while any of its content is Unknown. (CMP-003)
+10. Reflection on a non-public `UnityEditor` member in a vendor package that no
+    owning specification names is reported Unknown, naming the member and the
+    calling code; every member that assessed content reaches is named by its
+    owning specification and supported. (CMP-003)
+11. A compatibility report and a build result each record the unitas version, and
+    comparing reports from two versions identifies differences caused by the
+    version change. (CMP-004)
+12. An agent calling a deprecated MCP tool receives a deprecation notice naming the
+    replacement and removal release, and the tool remains available through the
+    next minor release. (CMP-004, AUT-002)
+13. A release's readiness declaration for a target lists its generally available
+    families with links to passing acceptance, sample, benchmark, and budget
+    evidence; a family with a budget regression is not declared generally
+    available. (CMP-004, SMP-001, CMP-001, PRF-002)
+14. A target is declared production-ready only when builds, player lifecycle, the
+    licensing report, and every playable sample that declares the target pass in
+    editor and player on that target. (CMP-004, BLD-001, PLT-001, LIC-001,
+    SMP-001)
+15. A readiness declaration for a target with a failing benchmark lists the
+    failing behavior as an exclusion of that family's Partially supported claim.
+    (CMP-004, CMP-001)
+16. A project saved by Unity 2021.3 LTS with URP 12.x opens with its serialized
+    forms migrated, is assessed against Unity 2022.3 LTS and the URP 14.x line,
+    and its report does not claim 2021.3-specific behavior. (CMP-002)
+17. A report finding for a Semantic-tier behavior cites Unity 2022.3 LTS as its
+    reference and is backed by a CMP-001 benchmark, while a finding for a
+    Familiar-tier behavior cites the owning unitas specification and lists each
+    difference from Unity 2022.3 LTS that the content relies on. (CMP-002,
+    CMP-001)
+18. A translated material is accepted against a unitas-approved reference image,
+    and its report never presents a pixel difference from a Unity screenshot as
+    a compatibility failure. (CMP-002, REN-002, TST-002)
+19. A Supported package behavior that its owning specification neither names nor
+    excludes is reported Unknown, and the matrix shows each package's tier from
+    its owning catalog feature. (CMP-002)
+20. A project that uses Enlighten realtime global illumination, loads Unity-built
+    AssetBundles, and includes the Rider IDE and Version Control packages reports
+    all four as Supported. Its realtime GI updates, its bundles load, and its
+    source-control status appears in the editor. (CMP-002, REN-003, BLD-005,
+    DIA-002, EDT-007)
+21. A release that finds an earlier Supported claim inaccurate and does not fix it
+    lowers the state and lists the corrected claim in its release notes with the
+    affected catalog identifiers. (CMP-004)
+22. A Shader Graph asset that uses any node of the 14.x line compiles and renders
+    on its URP, HDRP, Built-in, and Visual Effect Graph targets. A malformed graph
+    is reported by graph and node. (CMP-002, REN-006)
+23. A release line reports its security and correction patch periods and end of
+    support, and an installation past end of support identifies itself as
+    unsupported while continuing to run. (CMP-005)
+24. An Android build from a release that does not meet the current store target
+    API level reports store submission blocked with that requirement, while a
+    development build for the device still succeeds; an unsupported host
+    operating system version is reported before the project opens. (CMP-005,
+    BLD-001)

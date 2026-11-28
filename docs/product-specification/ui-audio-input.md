@@ -5,10 +5,11 @@
 This specification defines player-facing user interfaces, immediate-mode
 runtime GUI, text and fonts, input devices and actions, audio playback,
 spatialization, mixing, capture, video playback, and the diagnostics used to
-validate them.
+validate them. The editor's own interface is built on the UI Toolkit, IMGUI,
+and text behavior defined here; editor windows and inspectors are owned by
+[Editor and authoring](editor-and-authoring.md).
 
-These are desired end-state requirements, not claims about currently shipped
-capability. The compatibility baseline is Unity 2022.3 LTS, as defined in the
+The compatibility baseline is Unity 2022.3 LTS, as defined in the
 [Compatibility contract](compatibility-contract.md). uGUI (`com.unity.ugui`)
 1.0.x, TextMeshPro 3.0.x, the Input System 1.x, and other package content are
 covered only for the package families and version lines listed in the
@@ -54,6 +55,53 @@ Every difference from Unity 2022.3 is listed in the API reference owned by
 AUT-006 in [Automation and MCP](automation-and-mcp.md) and in the project
 compatibility report for each project that uses the affected member.
 
+## Architecture
+
+These subsystems follow the [Engine architecture](architecture.md).
+
+* **One text engine.** Legacy `Text` and `TextMesh`, TextMeshPro, UI Toolkit,
+  and IMGUI share one native text engine: font loading, fallback resolution,
+  shaping, bidirectional ordering, and line breaking, from mature shaping and
+  rasterization libraries. Each front end keeps only its own layout rules and
+  API, so the same string, font, and settings yield the same glyph run in all
+  of them. Shaped runs are cached until their inputs change; glyphs rasterize
+  off the main thread into shared atlases uploaded through the renderer's
+  resource path, and static font atlases are cooked at import.
+* **UI front ends.** uGUI canvases, UI Toolkit panels, and IMGUI produce
+  geometry; the renderer draws it from render proxies. A uGUI graphic or
+  layout marked dirty is rebuilt in the rebuild pass this document times;
+  canvas batching, run as jobs, merges draws by material, texture, and clip
+  in sorted order, and a canvas with no changes resubmits its previous
+  batches. UI Toolkit restyles, lays out, and regenerates only dirty elements
+  in its panel update. IMGUI records one draw list per Repaint, drawn after
+  the cameras. The editor's own interface uses these same front ends.
+* **Input.** Platform threads write device events (keys, pointers, touches,
+  pens, gamepads and HID, sensors, IME) with timestamps into a lock-free
+  queue. The frame loop drains it at the points this document defines for
+  legacy `Input` and each Input System update mode, so a script never sees
+  input change within one update. Both backends read one device model.
+  Synthetic input from automation enters the same queue, marked synthetic.
+* **Audio graph.** The main thread posts voice, listener, mixer-parameter,
+  and snapshot changes as commands that the mixer applies at buffer
+  boundaries. The device thread runs the graph (voices, resampling,
+  spatialization, effect chains, sends, ducking, output) with sample-accurate
+  scheduling; `dspTime` is its sample count. Compressed and streamed clips
+  decode on worker threads into buffers ahead of the play position; data not
+  ready plays as reported silence, never a wait. Managed audio callbacks run
+  on an audio thread that is not the device thread and hand their buffers to
+  the device thread without locks. Analysis and capture read published
+  buffers.
+* **Video.** Demuxing and decoding run on media threads, with platform
+  hardware decoders where present and mature software decoders otherwise.
+  Frames upload as GPU textures and present by the player's time reference,
+  and audio tracks play as voices in the audio graph.
+* **Editor, headless, player.** In the editor, the game view forwards its
+  input into the worker's queue and the worker's audio reaches the host
+  device. Headless sessions use virtual input, audio, and display devices on
+  the same paths; under a fixed simulated frame delta, the virtual audio
+  device renders each simulated frame's samples. Unchanged UI and text cost
+  nothing per frame, and the main thread never decodes media or waits on audio.
+
 ## Canvas and layout
 
 The runtime user-interface feature supports screen-space overlay,
@@ -88,7 +136,9 @@ relationships.
   `CanvasGroup` multiplies alpha down the hierarchy, and its interactable and
   blocks-raycasts flags apply to descendants unless a nested group sets
   ignore parent groups.
-* UI scale and readable size choices apply without corrupting saved layout.
+* Changing `CanvasScaler` or `PanelSettings` scale at runtime changes only
+  computed rectangles; serialized RectTransform and style values are
+  unchanged.
 
 ## Controls and event behavior
 
@@ -185,9 +235,11 @@ selectables in the permitted directions, the one whose offset from the current
 control maximizes the dot product with the requested direction divided by the
 squared distance. Disabled, hidden, or non-interactable controls are skipped.
 
-Changing input device does not strand focus. Modal content constrains focus to
-its intended scope. Opening and closing a modal restores the prior selection
-when that control still exists and is interactable. The editor and automation
+When the selected object is destroyed, deactivated, or made non-interactable,
+or when the active input device changes and nothing is selected, the event
+system selects its first selected object when that object is interactable, and
+otherwise selects nothing and reports it. A difference from Unity's behavior
+is listed in the AUT-006 API reference. The editor and automation
 can show why a control did or did not receive navigation or pointer input.
 
 ## UI Toolkit runtime
@@ -262,7 +314,8 @@ operates them with pointer, touch, keyboard, gamepad, and automation.
   Value controls raise `ChangeEvent<T>` when their value changes, and
   `SetValueWithoutNotify` changes the value without one.
 * `ListView`, `TreeView`, and the multi-column views create elements through
-  `makeItem` only for the visible rows and a small buffer, and call `bindItem`
+  `makeItem` only for a number of elements bounded by the viewport,
+  independent of item count, and call `bindItem`
   and `unbindItem` as rows scroll in and out of view. Fixed and dynamic row
   heights, single and multiple selection, reordering, `RefreshItems`, and
   `Rebuild` apply.
@@ -593,8 +646,9 @@ and multi-tap), processors, and control schemes.
   from its HID report descriptor. Controller-specific outputs, such as the
   DualShock and DualSense light bar and motors, apply wherever the controller
   is connected. On the web target, they apply where the browser offers HID or
-  gamepad-effect access, and each output reports whether it is available. Sensor devices (accelerometer, gyroscope, gravity, attitude,
-  linear acceleration, magnetic field, light, pressure, proximity, humidity,
+  gamepad-effect access, and each output reports whether it is available.
+* Sensor devices (accelerometer, gyroscope, gravity, attitude, linear
+  acceleration, magnetic field, light, pressure, proximity, humidity,
   ambient temperature, and step counter) report values after
   `InputSystem.EnableDevice` on devices that have the sensor, at the
   requested sampling frequency.
@@ -603,7 +657,11 @@ and multi-tap), processors, and control schemes.
 * The Input System settings asset applies its update mode (dynamic update,
   fixed update, or manual), background behavior, default dead zones, default
   press point and tap and hold times, supported devices, and filtering of
-  noisy controls. The update mode determines when actions observe new values.
+  noisy controls. Queued input events are processed at the frame-loop point
+  that the update mode selects: in dynamic update, once per frame before
+  `Update`; in fixed update, before each `FixedUpdate` step; in manual mode, at
+  each `InputSystem.Update` call. Legacy `Input` state updates once per frame
+  before the first script callback that can read it.
 * Custom processors, interactions, composites, and device layouts registered
   by project code (`InputSystem.RegisterProcessor`, `RegisterInteraction`,
   `RegisterBindingComposite`, and `RegisterLayout`) participate in binding
@@ -761,8 +819,10 @@ source. Preview audio is distinguished from runtime audio.
   `AudioEchoFilter`, `AudioDistortionFilter`, `AudioReverbFilter`, and
   `AudioChorusFilter`) on an `AudioSource` or `AudioListener` process audio in
   component order from top to bottom.
-* `OnAudioFilterRead(float[] data, int channels)` runs on the audio thread and
-  receives interleaved samples at the output sample rate at its component
+* `OnAudioFilterRead(float[] data, int channels)` runs on an audio processing
+  thread that is not the main thread. Its output reaches the device mix without
+  locks, and a callback that misses its buffer deadline causes a reported
+  underrun for its own chain only. It receives interleaved samples at the output sample rate at its component
   position in the filter chain. A script on a GameObject without an
   `AudioSource` acts as a generator. Unity APIs called from this callback are
   governed by the main-thread rules of RUN-004 in
@@ -786,7 +846,9 @@ source. Preview audio is distinguished from runtime audio.
   back at exact sample boundaries play with no gap and no overlap. A time
   already in the past starts playback at the next audio buffer.
 * In headless sessions, audio renders at the project's audio output sample
-  rate to a capturable output. Audio capture (listener or mixer output, time
+  rate to a virtual output device that is capturable. Under a fixed simulated
+  frame delta (AUT-002), it renders exactly that delta's samples each frame, so
+  `dspTime` advances with simulated time; otherwise it renders in real time. Audio capture (listener or mixer output, time
   range, samples, channel layout, DSP start time, and contributing voices) is
   defined by AUT-002 in [Automation and MCP](automation-and-mcp.md), and audio
   validation by TST-002 in
@@ -876,14 +938,27 @@ in the editor and through automation.
 Input, audio, and video capabilities are reported for the active platform and
 connected hardware. Connection, disconnection, permission denial, focus
 changes, output device changes, mobile interruptions, and application
-backgrounding have defined, inspectable results.
+backgrounding have these results:
+
+* On backgrounding or an audio interruption, audio output and video pause and
+  resume, and `dspTime` continues from where it stopped.
+* Held controls reset, and in-progress actions cancel or continue as the Input
+  System background behavior setting selects.
+* A device connection, disconnection, or output device change raises the
+  device-change notifications this document defines, and the editor and
+  automation show the device state before and after it.
+* A permission denial is reported with the capability and the permission it
+  needed.
+
+Player lifecycle on each target is owned by PLT-001 in
+[Builds, platforms, XR, and networking](build-platforms-xr-networking.md).
 
 Unavailable vibration, haptics, microphones, motion sensors, on-screen
 keyboards, or audio outputs on a device that lacks them return explicit
 status. Platform
 capability is not inferred merely because a corresponding API exists.
 
-## Accessibility outcomes
+## Accessibility
 
 The feature set enables games to provide remappable controls, keyboard-only and
 controller-only navigation, scalable text and interfaces, captions and
@@ -992,7 +1067,8 @@ recovery.
     specificity and order, applies `:hover` and `:focus` styles and their
     transitions, lays out with flexbox to the stated rectangles under each
     `PanelSettings` scale mode, and a `ListView` over 10,000 items creates
-    elements only for visible rows. (UI-001)
+    a number of elements bounded by the viewport, independent of item count.
+    (UI-001)
 26. A UI Toolkit `ClickEvent` runs trickle-down callbacks from the root, then
     the target's, then bubble-up callbacks, and `StopPropagation` ends dispatch
     after the current element; with an `EventSystem` and an overlay canvas at a

@@ -10,8 +10,7 @@ and references, serialized values, scenes and additive scene sets, prefabs and
 variants, missing and unknown content, and serialization forms and generated
 caches.
 
-These are desired end-state requirements, not claims about currently shipped
-capability. Unity 2022.3 LTS serialization is the baseline. Projects saved by
+Unity 2022.3 LTS serialization is the baseline. Projects saved by
 earlier Unity releases, including Unity 2020.3 LTS and Unity 2021.3 LTS, are
 migrated to that baseline, as defined in
 [Serialized version migration](#serialized-version-migration).
@@ -33,6 +32,53 @@ identities, ordering, references, overrides, and saved forms round-trip
 exactly as Unity 2022.3 LTS reads and writes them, and any divergence is a
 defect. Tiers are defined in the
 [Compatibility contract](compatibility-contract.md).
+
+## Architecture
+
+* **One object model, several forms.** The serializer works on one
+  format-independent representation: objects keyed by GUID and local
+  identifier, each a typed tree of named fields. Unity text, Unity binary,
+  and cooked forms are readers and writers of that representation; no feature
+  reads or writes a file format directly. The Unity source readers belong to
+  the importers and the source writers to the editor's save path.
+* **Type layouts.** Native types publish their field layout to a type
+  registry; script types publish theirs through transfer code generated at
+  compilation. Inspection, undo, prefab overrides, diff and merge, and agent
+  edits address fields by property path through the registry; loading and
+  `Instantiate` copy whole objects through the same layouts without path
+  lookups.
+* **Source fidelity.** Reading a source file keeps each object's original
+  record next to its parsed values. Unchanged records are written back
+  byte-for-byte; edited records are re-emitted in Unity's field order and
+  number format; fields no registered type claims stay in the record. This is
+  what makes unchanged saves write nothing and unknown data survive.
+* **Migration at read.** `serializedVersion` upgraders run as the source
+  reader produces the representation, so every consumer sees the 2022.3 form.
+  The writer emits the upgraded form only for records that are saved.
+* **Prefabs.** Prefab assets, variants, and instances keep their on-disk
+  shape in the editor: an instance is its source reference plus its
+  modification list. A resolver materializes the resulting objects in the
+  world and re-resolves, through the dependency graph, only the instances and
+  variants whose sources changed. Editing an instance records a modification;
+  it never rewrites the materialized objects as independent data.
+* **Cook.** The import pipeline ([Projects and assets](project-and-assets.md))
+  converts scenes, prefabs, and assets into per-target cooked artifacts:
+  prefab instances flattened, editor-only data stripped, references
+  compacted, and objects laid out per type for loading without parsing. Each artifact keeps the GUID and local identifier of every object
+  for diagnostics and identity queries.
+* **Loading.** Reading, decompression, and deserialization run on loading
+  threads into staging memory, where `OnAfterDeserialize` runs under Unity's
+  restrictions; integration into the world and `Awake` run on the main thread
+  at frame-loop points, time-sliced, so loading never stalls a frame. Load
+  cost scales with the content loaded, not with what is resident.
+* **Unity-built content.** AssetBundles and Addressables content built by
+  Unity are Unity's cooked form, not a source form. A player reader for that
+  form, with or without type trees, feeds the same staging and integration
+  path as unitas-cooked artifacts.
+* **Sameness.** Editor play sessions, headless play sessions, and players
+  load the same cooked artifacts through the same loader. Source forms are
+  read and written only by importers and the save path, to open project
+  content for editing and to save it.
 
 ## Asset identity and references
 
@@ -100,7 +146,8 @@ with `[SerializeReference]`.
 * Floating-point special values (infinity, negative infinity, NaN, negative
   zero) and full single- and double-precision values round-trip unchanged.
 * Saving cannot silently replace unreadable or unknown data with defaults.
-* Unknown data that can be safely retained survives unrelated edits.
+* Unknown data survives unrelated edits unchanged. A save that cannot retain it
+  is blocked until the user explicitly discards the identified data.
 
 ## Script field behavior
 
@@ -153,8 +200,8 @@ run on every occasion Unity runs them, including saving, loading,
 `Object.Instantiate`, inspector refresh, domain reload, and serialization
 during play. An exception thrown by a callback is reported with the type and
 object and does not corrupt the stored data. Calls to Unity APIs from these
-callbacks follow Unity's restrictions for code that can run on the
-serialization thread, and a disallowed call produces Unity's error.
+callbacks follow Unity's restrictions for code that Unity runs on loading
+threads during deserialization, and a disallowed call produces Unity's error.
 
 ### Hide flags
 
@@ -183,7 +230,7 @@ ScriptableObjects within their valid scope.
 ## Missing, unknown, and cross-scene content
 
 * A missing script remains an identifiable missing component record with its
-  serialized data preserved where safely possible. It does not disappear,
+  serialized data preserved unchanged. It does not disappear,
   become a different script, or make its GameObject appear fully compatible.
 * A missing prefab source leaves its instances as identifiable broken prefab
   instances with their overrides preserved.
@@ -375,9 +422,10 @@ non-LTS releases:
   assets, Unity detects and reimports them as it would any external edit.
 * unitas-owned state is machine, session, and per-user data: import results,
   caches, editor view state, session records, and per-user configuration
-  (such as trust records and personal preferences). It is stored where Unity
-  does not import it as project content and where a repository using the
-  standard Unity ignore template does not show it as an untracked change.
+  (such as trust records and personal preferences). It is stored outside the
+  project directory, in per-user locations keyed by project location, so Unity
+  never imports it and a repository never shows it as an untracked change.
+  Import artifacts are additionally addressed by content hash.
 * Deleting unitas-owned caches and reopening the project produces the same
   identities, import results, and behavior.
 * unitas-specific project content is shared data intended for source
@@ -403,8 +451,9 @@ reported failed with the last valid saved content identifiable. Partial writes
 are never presented as success.
 
 For supported shared formats, content saved by unitas retains its meaning when
-reopened in supported Unity versions. Content that cannot remain interoperable
-requires an explicit user-visible boundary before commitment.
+reopened in Unity 2022.3 LTS. Content that cannot remain interoperable is
+listed and confirmed before it is saved, as
+[Serialized version migration](#serialized-version-migration) defines.
 
 ## Acceptance outcomes
 

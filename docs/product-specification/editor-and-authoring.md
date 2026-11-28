@@ -8,26 +8,38 @@ recovery, commands, drawing of project and package editor extensions,
 source-control status, history, diff, and commit, semantic merge, and the
 review, approval, and reversal of changes made by agents.
 
-The editor is the unitas IDE. It owns the open project's model and every
-operation a developer performs on it, and it runs with a window (the visual
-editor, described here) or headless. Agents are developers who use the editor
-through its MCP interface, defined in [Automation and MCP](automation-and-mcp.md),
-which exposes every editor operation. People use the same operations, on the
-same project model, through the visual editor. The visual editor's purposes
-are to make project and runtime state clear, to support direct authoring of
-scenes and content, and to let a developer review, approve, and reverse agent
-changes. Its views and workflows are defined by
-this specification and by the authoring requirements of each content kind's
-owning specification, not copied from the Unity Editor. The editor extensions
-that a project and its packages declare (custom inspectors, drawers, editor
-windows, scene view tools, and settings pages) draw and run in it, as defined
-in [Custom editor extensions](#custom-editor-extensions), so the authoring
-surfaces that a Unity 2022.3 project and its packages bring with them are
-available in unitas.
+The terms editor, visual editor, and headless editor have the meanings defined
+in [Sessions and project state](automation-and-mcp.md#sessions-and-project-state)
+in Automation and MCP; this specification describes the visual editor. Agents
+are developers who use the editor through its MCP interface, defined in
+[Automation and MCP](automation-and-mcp.md), which exposes every editor
+operation. People use the same operations, on the same project model, through
+the visual editor.
 
-The editor is itself a unitas project: it is built by unitas and runs as a
-unitas engine instance on the unitas player, not as a separate native
-application.
+The visual editor's purposes are to make project and runtime state clear, to
+support direct authoring of scenes and content, and to let a developer
+review, approve, and reverse agent changes. Its working surface is the
+Hierarchy, Scene view, Game view, Inspector, Project window, and Console,
+with the Animation, Animator, Timeline, Profiler, Frame Debugger, Lighting,
+Package Manager, Project Settings, Preferences, Sprite Editor, Tile Palette,
+and UI Builder windows and their companions. Those windows, the Default,
+2 by 3, 4 Split, Tall, and Wide layouts, the File, Edit, Assets, GameObject,
+Component, Window, and Help menus, the main toolbar, the keyboard bindings
+and mouse gestures, drag and drop, inspector and prefab conventions, and
+play mode behave as the [Editor UI and UX](#editor-ui-and-ux) documents
+detail, so that a person who builds games with component-based scene editors
+works in it from the first hour. Agent-native features (every command an MCP
+tool, agent changes live-visible, reviewable, and reversible) are additions
+that never move, rename, or rebind any of them. The editor extensions that a
+project and its packages declare (custom inspectors, drawers, editor
+windows, scene view tools, and settings pages) draw and run in it, as
+defined in [Custom editor extensions](#custom-editor-extensions), so the
+authoring surfaces that a Unity 2022.3 project and its packages bring with
+them are available in unitas.
+
+The editor is itself a unitas project running on the unitas player. Its
+editor instance and the workers that run project code are defined in
+[Architecture](#architecture).
 
 The visual editor has no built-in code editor. Script source is edited in the
 developer's external editor, IDE, or agent, as defined in
@@ -40,8 +52,7 @@ inspectable as structured data, and every edit an agent makes is reviewable
 here (EDT-008). Automation rules are owned by
 [Automation and MCP](automation-and-mcp.md) and are not restated here.
 
-These are desired end-state requirements, not claims about currently shipped
-capability. Package-dependent features are bounded by the supported package
+Package-dependent features are bounded by the supported package
 matrix (CMP-002) in the [Compatibility contract](compatibility-contract.md).
 
 ### Compatibility tiers
@@ -49,19 +60,95 @@ matrix (CMP-002) in the [Compatibility contract](compatibility-contract.md).
 Every feature this document owns is in the Native tier, as defined in the
 [Compatibility contract](compatibility-contract.md): EDT-001, EDT-002, EDT-003,
 EDT-004, EDT-005, EDT-006, EDT-007, and EDT-008 are Native. The visual editor's
-behavior is defined by this specification, not by the Unity Editor. Unity
-project content that the editor presents and saves keeps the identity and
+behavior is defined by this specification and the
+[Editor UI and UX](editor/INDEX.md) documents. Unity project content that the editor presents and saves keeps the identity and
 serialization guarantees of its own owners (for example SER-001 and PRJ-003 in
 [Serialization and prefabs](serialization-and-prefabs.md)), and script-visible
 editor API shapes such as `[MenuItem]` and `OnDrawGizmosSelected` keep their
 documented Unity 2022.3 LTS meaning.
+
+## Architecture
+
+The editor is a unitas project running on the unitas player
+([Engine architecture](architecture.md)), made of two kinds of engine instance:
+
+* **The editor instance** runs the editor's own scripts and holds the project model: the
+  asset database view, open scene documents, revisions, undo history, change sets, selection,
+  workspace arrangement, and the command layer. It never loads or runs project code.
+* **Workers** each run in their own operating-system process and host project code and its
+  live world: edit-time scripts and content hooks, editor extensions, project commands, the
+  editor's play mode, tests, and compilation with its analyzers and source generators. Each
+  isolated play session and each isolated proposal environment is its own worker. A worker
+  that crashes is restarted from the project model; the editor instance and other workers
+  continue.
+
+Authority stays with the editor instance: it is authoritative for project content, and a
+worker loads open scenes from it. Edits reach a worker as commands, and changes project code
+makes in a worker are captured by the world's change tracking and returned as change records
+attributed to the invocation. A worker renders the scene view, game view, and previews offscreen
+through the engine's render pipeline; the editor instance presents those frames and routes input
+back. Extensions lay out and handle events in the worker, which publishes their element trees
+(the trees agents operate) and draw output to the editor instance.
+
+* **One command layer.** Each editor operation is one command implemented once in the editor
+  instance, with a stable identifier, typed inputs, availability, and a result. The visual UI
+  (menus, palette, shortcuts, drag and drop, inspector controls), MCP
+  ([Automation and MCP](automation-and-mcp.md)), and the command line invoke it; no front end
+  holds state or logic of its own.
+* **One pipeline.** Every invocation is checked for permission, trust, and held writes,
+  validated across all targets, checked against the revision it was based on, executed, and
+  recorded. One gesture or request yields one command record holding before and after state
+  by identity; undo, change sets, dirty tracking, the audit log, and notifications are views
+  of those records. Under the require-approval policy, records apply to a proposal overlay
+  rather than to project content, and the isolated proposal environment is a worker loaded
+  with it.
+* **Scale.** Views are virtualized: the Hierarchy, Project window, Console, and lists realize
+  only visible rows, and per-frame cost follows visible rows and changes, never project or
+  scene size. Search uses indexes maintained incrementally from command records. Queries are
+  paginated with revision-bound cursors and serve the views and MCP alike, which is how the
+  [scale floor](diagnostics-profiling-playtesting.md#scale-floor) holds.
+* **Off the main thread.** Import, compilation, source-control operations, semantic diff and
+  merge, and saving run as asynchronous operations; the editor's frame never waits on them.
+* **Windowed and headless.** The visual and headless editor are the same editor instance with
+  and without a window; attaching a window to a headless session adds views and changes no
+  state.
+
+## Editor UI and UX
+
+The visual editor's windows, layout, menus, toolbar, shortcuts, gestures,
+and workflows are detailed in the [Editor UI and UX](editor/INDEX.md)
+documents. They detail the features this specification owns (EDT-001
+through EDT-008) and own no catalog ID. Where they and this specification
+differ about how a window looks or responds to input, they are the detailed
+requirement; where they differ about what an operation does to project
+content, undo, change sets, or permissions, this specification and the
+owning specifications govern.
+
+* [Workspace and layout](editor/workspace-and-layout.md),
+  [Menus and toolbar](editor/menus-and-toolbar.md), and
+  [Shortcuts](editor/shortcuts.md) define the shell.
+* [Scene view](editor/scene-view.md), [Hierarchy](editor/hierarchy.md),
+  [Inspector](editor/inspector.md), [Project window](editor/project-window.md),
+  [Console](editor/console.md),
+  [Game view and play mode](editor/game-view-and-play-mode.md), and
+  [Prefab workflow](editor/prefab-workflow.md) define the core windows.
+* [Animation and timeline windows](editor/animation-and-timeline-windows.md),
+  [2D tools](editor/2d-tools.md), [UI authoring](editor/ui-authoring.md),
+  [Lighting and rendering tools](editor/lighting-and-rendering-tools.md),
+  [Profiler and debugging windows](editor/profiler-and-debugging-windows.md),
+  and [Settings and preferences](editor/settings-and-preferences.md) define
+  the content-specific windows.
+* [Agent-native additions](editor/agent-native-additions.md) defines agent
+  presentation and the rule that agent features never disturb the familiar
+  editor.
 
 ## Workspace
 
 ### User stories
 
 * As a developer, I see project content, scene structure, selected object
-  state, runtime output, diagnostics, and agent activity at once, without
+  state, runtime output, and diagnostics at once in the Default layout,
+  and agent activity through the status bar's agent indicator, without
   assembling a layout first.
 * As a developer, I can show, hide, and resize the views I need, and the editor
   restores my arrangement when I reopen the project.
@@ -70,20 +157,20 @@ documented Unity 2022.3 LTS meaning.
 
 ### Required behavior
 
-The workspace provides these built-in views:
+The workspace provides these built-in windows, detailed in
+[Editor UI and UX](editor/INDEX.md):
 
-* project browser;
-* scene hierarchy;
-* inspector;
-* scene view;
-* game view;
-* console and diagnostics;
-* compatibility report;
-* agent activity and change review (EDT-008);
-* source control (EDT-007);
-* build status;
-* play controls;
-* project settings and preferences.
+* Hierarchy, Scene view, Game view, Inspector, Project window, and Console;
+* Animation, Animator, Audio Mixer, Profiler, Frame Debugger, Lighting,
+  Light Explorer, Occlusion Culling, Physics Debugger, UI Builder, Search,
+  Undo History, Progress, and Import Activity;
+* Package Manager, Project Settings, Preferences, Build Settings, and the
+  Shortcuts Manager;
+* the compatibility report and the source-control window (EDT-007);
+* the Agent Activity and Change Review windows (EDT-008).
+
+The play controls are on the main toolbar, and build and background
+operation status is on the status bar and in the Progress window.
 
 Editor windows that the project and its packages declare open as further views
 (see [Custom editor extensions](#custom-editor-extensions)). Each view, built-in
@@ -94,15 +181,17 @@ kind allows it, such as a second inspector locked to one object. Selection is
 shared across views and identifies the same underlying object or asset in
 each. (EDT-006)
 
-The arrangement, view visibility, view sizes, and other personal preferences
-are stored per user and per project, outside shared project content, so changing
+The current arrangement (docking, sizes, visibility, floating windows, and
+each window's own state) is stored per user and per project. Named layouts,
+shortcut profiles, and preferences are stored per user and shared across the
+user's projects. All of them are outside shared project content, so changing
 them never dirties a scene, asset, or project setting. An arrangement that
 cannot be restored (for example, saved by a newer unitas version or for a
 display that is no longer connected) falls back to the default arrangement and
 reports why. Resetting restores the default arrangement and changes nothing
 else.
 
-## Scene hierarchy
+## Hierarchy
 
 As a developer, I can create, name, duplicate, parent, reorder, activate,
 deactivate, tag, layer, and delete GameObjects. I can search the hierarchy by
@@ -113,10 +202,13 @@ nested parentage, prefab status, hidden or locked state, and unsaved changes
 for each scene and object. Multi-selection supports batch operations while
 mixed values remain visible.
 
-Parenting can preserve either the object's world placement or its local values.
-Cyclic hierarchy operations are rejected. Moving objects between scenes makes
-the effect on references and prefab relationships explicit. Deleting a parent
-shows the complete descendant scope.
+Parenting by drag in the Hierarchy preserves the object's world placement;
+Alt-drop, and the parenting command's input, preserve local values instead
+([Hierarchy](editor/hierarchy.md)). Cyclic hierarchy operations are rejected.
+Moving objects between scenes makes the effect on references and prefab
+relationships explicit in the operation's result and in the Console. Deleting
+acts at once as one undo operation, with no confirmation; the undo entry and
+the command's result list the complete descendant scope.
 
 Objects and scenes that an active agent session is currently changing carry a
 live indicator naming that agent session (EDT-008).
@@ -133,12 +225,15 @@ and managed references (`[SerializeReference]`).
 * Validation appears beside the affected property.
 * Intentional null, missing reference, incompatible reference, and unloaded
   reference are distinct states.
-* Components can be added, reordered, reset, copied, pasted, duplicated, and
-  removed when their contract permits it.
+* Components can be added, reordered (Move Up, Move Down, and drag), reset,
+  copied, pasted as new or as values, and removed when their contract permits
+  it, through the component menu ([Inspector](editor/inspector.md)).
 * Required or mutually dependent components (for example through
   `[RequireComponent]` or `[DisallowMultipleComponent]`) communicate
   consequences before an add or removal.
-* Runtime values are visually distinct from saved edit-time values.
+* During play mode, the play-mode tint marks every value shown as a runtime
+  value that reverts on exit
+  ([Game view and play mode](editor/game-view-and-play-mode.md)).
 * Built-in presentation attributes are honored: `[HideInInspector]`,
   `[Header]`, `[Space]`, `[Tooltip]`, `[Range]`, `[Min]`, `[Multiline]`,
   `[TextArea]`, `[ColorUsage]`, `[GradientUsage]`, `[Delayed]`,
@@ -149,8 +244,8 @@ and managed references (`[SerializeReference]`).
 
 Custom editor extensions that the project and its packages declare are drawn
 in the visual editor. Their API behavior, and the rule that they run only in a
-trusted project and outside the editor process, are owned by RUN-010 in
-[Scripting runtime](scripting-runtime.md).
+trusted project and in a worker (see [Architecture](#architecture)), are owned
+by RUN-010 in [Scripting runtime](scripting-runtime.md).
 
 * **Custom inspectors** (`Editor` subclasses, through `OnInspectorGUI` or
   `CreateInspectorGUI`) draw in the inspector in place of the default
@@ -288,9 +383,10 @@ displays are selectable when the project uses them. (EDT-004)
 
 Entering play mode starts a play session from the current project state;
 proposed changes held under the require-approval policy (EDT-008) are excluded
-unless the developer previews them. If unsaved content is used by the play
-session, the editor identifies whether the play session uses saved content or
-current unsaved editor content. It does not silently mix the two. Play, pause, and frame-step states are unambiguous.
+unless the developer previews them. A play session uses the current editor
+content, including unsaved changes, without prompting to save, and never mixes
+saved and unsaved content; the title bar's unsaved marker and the play-mode
+tint show this. Play, pause, and frame-step states are unambiguous.
 Domain reload and scene reload follow the project's Enter Play Mode Options as
 defined by RUN-003 in [Scripting runtime](scripting-runtime.md).
 
@@ -312,7 +408,7 @@ agents may run; agent play sessions isolated from it are defined by AUT-004 in
 
 The visual editor provides no text-editing surface for script source.
 
-Opening a script, from the project browser, a component's script field, a
+Opening a script, from the Project window, a component's script field, a
 console entry, a compiler diagnostic, a stack frame, or a test result, opens the
 configured external editor at the script's file and, when known, its line and
 column. The external editor is a per-user preference.
@@ -353,10 +449,13 @@ a description, its required inputs, its current availability, and, when
 unavailable, the reason (for example "no selection", "play mode is running",
 "asset is read-only", or "agent writes are held"). (EDT-006)
 
-* A command palette lists all commands, searchable by name, description, and
-  shortcut, and shows each command's availability and disabled reason.
-* Menus and context menus are views of the same commands and never hide the
-  full affected scope of an action.
+* A command palette, the Search window's command scope (`Ctrl/Cmd+K`, then
+  the `m:` filter), lists all commands, searchable by menu path, name,
+  description, and shortcut, and shows each command's availability and
+  disabled reason.
+* Menus and context menus are views of the same commands; each item keeps its
+  familiar name and position, and the full affected scope of an action is in
+  its result and its undo entry.
 * Shortcuts are per-user preferences. Assigning a shortcut that is already bound
   in the same context reports the conflict and names the other command.
   Defaults can be restored per shortcut or all at once.
@@ -367,15 +466,22 @@ unavailable, the reason (for example "no selection", "play mode is running",
 * Every command, built-in or project-contributed, is also an MCP tool with the
   same identifier, inputs, availability, and result, as defined in
   [Automation and MCP](automation-and-mcp.md).
+* Every command's MCP tool is titled by its menu path verbatim (for example
+  `GameObject/Create Empty`), or, for a command without a menu item, by its
+  Shortcuts Manager identifier; its tool name is a deterministic encoding of
+  that title, and either invokes it.
 
 ### Drag and drop
 
 A developer can drag assets into the hierarchy or scene view to instantiate them,
 onto object-reference fields to assign them, and onto objects to add components
 from scripts; drag hierarchy objects to reparent or reorder them; and drag
-objects into the project browser to create prefabs. Before a drop completes, the
-target shows the resulting action and its scope. A drop that is not permitted
-shows why (for example an incompatible reference type or a cyclic parent) and
+objects into the Project window to create prefabs. Before a drop completes, the
+target shows the resulting action with the familiar feedback: an insertion line
+or parent highlight in the Hierarchy, a placement preview in the Scene view, a
+highlighted field in the Inspector, and an accept or reject cursor. A drop that
+is not permitted shows the reject cursor, states why in a tooltip and the
+status bar (for example an incompatible reference type or a cyclic parent), and
 changes nothing. Every drag-and-drop outcome is also available as a command.
 
 ### Multi-editing
@@ -384,19 +490,22 @@ Multi-object editing in the inspector exposes shared and mixed values and never
 overwrites a mixed property until the user commits a value. Committing a value
 changes only that property on every selected object and forms one undo
 operation. Components that are not present on every selected object are listed
-as not shared and are not edited. Multi-selection in the hierarchy and project
-browser supports batch rename, activation, tag, layer, reparent, duplicate, and
-delete, each reporting its full scope before commitment.
+as not shared and are not edited. Multi-selection in the Hierarchy and Project
+window supports batch rename, activation, tag, layer, reparent, duplicate, and
+delete. Each acts at once as one undo operation and lists its full scope in its
+result and undo entry; deleting assets, which cannot be undone, confirms first
+and names the assets.
 
 ## Selection, search, and navigation
 
-Selection can originate from the project browser, hierarchy, scene view,
+Selection can originate from the Project window, hierarchy, scene view,
 console, diagnostics, profiler, agent change review, or automation. Each view
 that displays the selected object or asset reveals and frames it without
 changing its identity. (EDT-001)
 
 Search results state their scope and active filters. Navigation history allows
-returning to recent selections and locations. A diagnostic navigates to the
+returning to recent selections and locations through the mouse back and forward
+buttons; it takes no keyboard binding in the Default profile. A diagnostic navigates to the
 responsible asset, scene, object, component, property, script location, or
 setting when known.
 
@@ -450,8 +559,8 @@ substitutes for actual save success.
 ### Git workflows
 
 For a project inside a Git working tree, the editor provides source-control
-status, history, diff, and commit in the source-control view, in the project
-browser and hierarchy, and through MCP with the same results. (EDT-007)
+status, history, diff, and commit in the source-control view, in the Project
+window and Hierarchy, and through MCP with the same results. (EDT-007)
 
 * **Status.** Each asset shows whether it is unchanged, modified, added,
   deleted, renamed, untracked, ignored, conflicted, or staged. An asset and its
@@ -585,8 +694,9 @@ agent sessions. Results are recorded against the change set and name the
 proposed revision they ran on. Approval shows the latest results and states
 whether the proposal changed after they were produced.
 
-Agent-authored code is not compiled into the editor process or into a headless
-session (AUT-004) until it is approved, except in that isolated environment.
+Under the require-approval policy, agent-authored code compiles and runs only
+in the isolated proposal environment until it is approved; it never reaches the
+project's main worker before then.
 
 ### Risk flags
 
@@ -673,8 +783,9 @@ the keyboard.
 1. A user can author and save a scene using hierarchy, inspector, and scene view
    without losing object identity or references. (EDT-001, EDT-002, EDT-003)
 2. Hierarchy search by component, tag, and layer finds every matching object
-   across all open scenes, and deleting a parent shows its complete descendant
-   scope first. (EDT-001)
+   across all open scenes, and deleting a parent acts at once as one undo
+   operation whose undo entry and result list its complete descendant scope.
+   (EDT-001, EDT-005)
 3. A component whose script declares `[Range]`, `[Header]`, and a custom
    `PropertyDrawer` shows the range and header and draws the drawer's field
    with the drawer's own controls, and an agent reads and sets that field
@@ -685,7 +796,7 @@ the keyboard.
    for two seconds of play time. (EDT-003)
 5. Entering and exiting play mode leaves edit state unchanged unless the user
    explicitly applies a value, and pause and frame step are reflected in the
-   game view and play controls. (EDT-004)
+   Game view and the main toolbar's play controls. (EDT-004)
 6. Undo and redo restore a multi-object hierarchy edit completely, including one
    made by an agent and attributed to its agent session. (EDT-005)
 7. Every unsaved or conflicting file, including agent-produced changes, is
@@ -791,3 +902,12 @@ the keyboard.
     reported as not semantically mergeable with the reason. (EDT-007)
 38. A `SettingsProvider` page appears among the project settings, search finds
     it by its keywords, and an agent edits its fields through MCP. (EDT-006)
+39. A scripted session using only the windows, menu items, bindings, and
+    gestures in [Editor UI and UX](editor/INDEX.md) creates a scene, parents
+    objects by drag in the Hierarchy, edits components in the Inspector,
+    moves objects with `W` and the Move handle, saves with `Ctrl/Cmd+S`, and
+    enters and exits play mode with `Ctrl/Cmd+P`, with the results those
+    documents state; with an agent session connected, the menus, toolbar,
+    Default layout, and Default shortcut profile differ only by the
+    additions [Agent-native additions](editor/agent-native-additions.md)
+    lists. (EDT-001, EDT-002, EDT-003, EDT-004, EDT-006, EDT-008)

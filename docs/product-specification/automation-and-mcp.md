@@ -1,6 +1,6 @@
 # Automation and MCP
 
-## Agents Work Through the Editor
+## Scope
 
 An agent works on a unitas project the way a developer does: through the
 editor. The **editor** is the unitas IDE, described in
@@ -17,10 +17,6 @@ described by BLD-002 in
 the editor's other front ends. None of them keeps its own copy of the project
 state or its own implementation of an operation. A player contains no MCP
 interface.
-
-The MCP host is part of the editor's scripting—the editor's own scripts and a
-support assembly—and is not engine code. It is never present in a player
-build.
 
 Automation is also the completeness bar. A product capability is complete only
 when an authorized agent can use it through MCP with the same behavior,
@@ -42,7 +38,46 @@ layer is defined entirely by this specification; it has no Unity counterpart to
 match. Where it exposes Unity project content or Unity-shaped APIs, those keep
 the tier of their owning features.
 
-## User Outcome
+## Architecture
+
+MCP is a front end of the editor's command layer
+([Editor and authoring](editor-and-authoring.md#architecture)). It lives entirely in the
+editor instance's own scripts and a support assembly, has no engine counterpart, and is absent
+from every player ([Engine architecture](architecture.md)).
+
+* **Server.** One MCP server per editor instance serves every agent session over the standard
+  input/output and HTTP transports. A standard input/output client started on a project
+  location that an editor already holds reaches that editor through a relay over a local
+  channel; it never opens a second copy of the project state.
+* **Tools are commands.** Tools are generated from the command registry: each command's
+  identifier, input schema, availability, and result shape are the tool's. Project-contributed
+  commands, reported by workers, register under their project or package origin; the registry
+  rebuilds on recompilation and emits one tool-set change. Resources are the same paginated,
+  revision-bound queries that back the visual editor's views.
+* **Request path.** A request is decoded off the editor's main thread, authorized against the
+  agent session's scopes, project trust, and held-writes state, and then runs as a command
+  invocation through the same pipeline as a person's gesture; its result is the command's
+  result. Request identifiers map to command records, so a repeated request returns the
+  recorded result and an outcome query reads the record.
+* **Actors.** An agent session is an actor of the command layer with its own identity, scopes,
+  change sets, and undo stream; people and command-line invocations are other actors.
+  Conflicts come from the pipeline's revision check, not from MCP-specific logic.
+* **Runtime access.** Inspection, input injection, time control, debugging, and captures reach
+  a play session's worker or a connected development player over the editor's player
+  connection. The player side speaks only that connection and contains no MCP code. Captures
+  and identity maps render through the engine's render pipeline offscreen in the worker.
+* **Operations and notifications.** Long-running work is an editor operation with a handle;
+  progress and subscription notifications are fed from the same operation and change records
+  the views observe, through a bounded queue per agent session that reports drops instead of
+  slowing the editor.
+* **State.** Product knowledge ships with the editor as versioned local resources. The audit
+  log, evidence store, credentials, and grants are editor-owned state outside project content;
+  nothing in this layer writes provenance into project files.
+* **Headless.** A headless editor runs the same instance, server, and pipeline without a
+  window; requests that need a person return the no-person-present outcome from the pipeline,
+  not from a separate code path.
+
+## User outcome
 
 As an authorized automated agent, I can discover, inspect, operate, and verify
 every project feature available to a developer, with or without the visual
@@ -55,7 +90,7 @@ Automation does not receive broader access merely because an operation is
 available. Project, runtime, filesystem, build, platform, account, and external
 service permissions are granted explicitly through permission scopes (AUT-007).
 
-## Structured Feature Parity
+## Structured feature parity
 
 Every visual editor command is an MCP tool with the same identifier, inputs,
 availability, disabled reason, and result (EDT-006). Every view's state—
@@ -65,7 +100,8 @@ as structured data. Commands that a project contributes through `[MenuItem]`,
 `[ContextMenu]`, and custom editor extensions are tools as well. The controls
 and values that custom inspectors, property drawers, and editor windows draw
 are readable as structured data, and their controls are operable through
-tools, as defined by RUN-010 in [Scripting runtime](scripting-runtime.md).
+tools, as defined in
+[Extension controls through MCP](editor-and-authoring.md#extension-controls-through-mcp).
 (AUT-001)
 
 Where a person sees an image, an agent can request the same image and the
@@ -89,7 +125,7 @@ model requests of its own. Every tool and resource, including product knowledge
 an external service (for example fetching a package from a remote registry or
 deploying to a networked device). (AUT-001)
 
-## Capability Discovery
+## Capability discovery
 
 An agent can discover available resources, tools, supported feature versions,
 required inputs, optional inputs and defaults, result shapes, side effects,
@@ -119,7 +155,7 @@ in discovery and name the assembly or package they come from. A
 project-contributed tool never replaces a built-in tool or alters a built-in
 tool's name, description, or schema. (AUT-002, AUT-007)
 
-## Structured Inspection
+## Structured inspection
 
 An agent can inspect projects, assets, dependencies, scenes, objects,
 components, properties, prefab relationships, project settings, compilation,
@@ -157,7 +193,7 @@ and names its origin. No project content, log entry, or tool result can change
 an agent session's permission scopes, a review policy, project trust, or the
 held state of agent writes; only a person can. (AUT-002, AUT-007)
 
-## Structured Editing
+## Structured editing
 
 An agent can perform every object, component, asset, scene, prefab,
 settings, and build-configuration edit that a person can make. A request validates all
@@ -182,7 +218,7 @@ original result and applies nothing again. After a timeout or lost connection,
 an agent session can query the outcome of a request by its identifier and
 receives one of: applied, not applied, or still running. (AUT-002)
 
-## Play and Test Control
+## Play and test control
 
 An agent can enter and exit play mode, pause, advance frames, start declared
 scenarios (TST-002), run project tests (TST-003), inject input from every
@@ -239,7 +275,7 @@ answer, are recorded in the invocation's result. A dialog with no supplied
 answer in a headless session returns the no-person-present outcome rather than
 waiting. (AUT-002)
 
-## Human-Agent Shared Context
+## Human-agent shared context
 
 With the read-project scope, an agent can inspect current selection, open scene
 set, active scene, play state, current target, relevant editor focus, and
@@ -253,7 +289,7 @@ a conflict rather than silently applying an edit to an unintended target.
 When the developer holds agent writes (EDT-008), write requests return a held
 outcome that names who held them, and nothing changes; inspection continues.
 
-## Headless and Concurrent Agent Sessions
+## Headless and concurrent agent sessions
 
 ### Sessions and project state
 
@@ -272,8 +308,9 @@ This is the only definition of these terms in the specification:
 
 On one machine, one editor process holds the state of a project location. Agent
 sessions, command-line invocations, and the person using the visual editor act
-on that one state as separate actors, unless an invocation requests isolated
-state. An MCP client or command-line invocation that targets a project location
+on that one state as separate actors. An invocation that requests isolated
+state gets an isolated play session or the isolated proposal environment
+(EDT-008), each in its own worker, and acts on that instead. An MCP client or command-line invocation that targets a project location
 attaches to the editor already holding it, or starts a headless editor. A
 process that cannot attach reports that the project is in use and names the
 process holding it. Opening the visual editor on a project in a headless session
@@ -320,8 +357,8 @@ Multiple agent sessions and people can work on one project at the same time.
 
 * Each agent session can start its own play sessions. A play session started by
   one agent session is isolated from other agent sessions' play sessions and
-  from the editor's play mode: runtime state, input, time, and random state are
-  not shared, and stopping one does not stop another.
+  from the editor's play mode: runtime state, input, time, random state, player
+  preferences, and persistent data are not shared, and stopping one does not stop another.
 * Writes to shared project state are checked against the revision the agent
   session last observed. A write based on a stale revision returns a conflict
   naming the newer change and its actor, and changes nothing.
@@ -357,8 +394,9 @@ managed stack, and can be interrupted. A crash in project code or in a native
 plugin ends only the affected play session or operation and is reported with
 crash evidence as defined by DIA-003 in
 [Diagnostics, profiling, and playtesting](diagnostics-profiling-playtesting.md).
-Project code runs outside the editor process, so the editor, its MCP
-interface, and the other agent sessions and play sessions continue. (AUT-004)
+Project code runs in workers
+([Editor and authoring](editor-and-authoring.md#architecture)), so the editor,
+its MCP interface, and the other agent sessions and play sessions continue. (AUT-004)
 
 ### Lifecycle, limits, and cancellation
 
@@ -373,7 +411,7 @@ exceed a limit fails with a distinct outcome naming the limit. Any running
 operation can be cancelled; the cancellation result states whether any state
 changed and what remains.
 
-## Agent Code Workflow
+## Agent code workflow
 
 An agent can author and fix project code through MCP alone. (AUT-005)
 
@@ -410,7 +448,7 @@ An agent can author and fix project code through MCP alone. (AUT-005)
   behavior, and repeat, with each step's result reporting which compilation the
   play session is running.
 
-## Product Knowledge
+## Product knowledge
 
 unitas exposes its own documentation to agents as MCP resources. (AUT-006)
 
@@ -434,7 +472,7 @@ for another version is never served as current. People read the same content in
 the visual editor and in published documentation. Searching the knowledge
 resources returns the same results to agents and people.
 
-## Permission Scopes, Grants, and Confirmations
+## Permission scopes, grants, and confirmations
 
 ### Project trust
 
@@ -533,7 +571,8 @@ The following actions are person-only:
 * confirming a request at the confirmation boundary;
 * marking files, folders, asset fields, and settings as secret;
 * enabling network transports and product telemetry;
-* accepting toolchain license terms.
+* accepting toolchain license terms;
+* uploading a build to a store or distribution channel.
 
 Agents can discover and request each person-only action; the request is
 recorded (AUT-008) and presented to a person.
@@ -565,7 +604,7 @@ Defaults are: review policy require approval; HTTP transport origin list
 loopback only; no standing grants; no crash-report destinations. Every other
 default is declared per release in product knowledge (AUT-006).
 
-## Audit Log and Provenance
+## Audit log and provenance
 
 Every request an agent session makes is recorded in a per-project audit log
 held in unitas-owned state (SER-005) outside project content. Each record has the time,
@@ -580,7 +619,7 @@ provenance of accepted agent changes—which agent session made each change, und
 which request, and who accepted it—remains queryable in the audit log and is
 never written into project files or source control.
 
-## Failure and Safety Behavior
+## Failure and safety behavior
 
 Automation failure reports what was requested, what was validated, whether any
 state changed, affected identities, recoverability, and current state. Timeout,
@@ -593,126 +632,126 @@ outcomes.
 Destructive actions identify their scope. Undoable operations advertise the
 undo boundary.
 
-## Acceptance Stories
+## Acceptance outcomes
 
-* For a sample project, every acceptance outcome of the
-  [editor](editor-and-authoring.md) is reproduced by an agent through MCP
-  alone, with the same results; an outcome that concerns visual presentation
-  is established through the captures and identity maps of
-  [Visual evidence](#visual-evidence). (AUT-001, AUT-002)
-* Every command in the editor's command palette is discoverable as an MCP tool
-  with the same identifier and availability. (AUT-001, AUT-002)
-* With the machine's network disabled, an agent using a generic MCP client opens
-  a project, reads product knowledge, edits a scene, and runs tests, and unitas
-  makes no model or network requests. (AUT-001, AUT-006)
-* Human and automation compatibility reports agree for the same project state.
-  (AUT-001)
-* An agent finds a scene object by stable identity, changes a property,
-  and a developer immediately sees and can undo that exact edit. (AUT-002,
-  AUT-003)
-* A multi-object edit reports partial validation without claiming all objects
-  changed. (AUT-002)
-* An agent searches tools by category and origin, receives summaries, reads one
-  tool's full schema, and is notified when a recompilation adds a project
-  `[MenuItem]` tool marked as project-contributed with its assembly. (AUT-002)
-* A request repeated with the same request identifier after a lost connection
-  returns the original result, and an outcome query by that identifier reports
-  it as applied. (AUT-002)
-* A query whose result exceeds the declared limit returns a summary and ranged
-  resource links; a cursor read after the scene changed reports the change.
-  (AUT-002)
-* An agent starts a gameplay scenario at a fixed frame delta with a seeded
-  `UnityEngine.Random`, supplies declared input, reads runtime state, and
-  returns evidence tied to the exact project and play session with those
-  conditions recorded. (AUT-002)
-* A game view capture with an identity map resolves a clicked pixel to the UI
-  element drawn there, and its annotated overlay leaves the unannotated capture
-  unchanged. (AUT-002)
-* A log message from project code containing instructions to grant permissions
-  is returned marked as untrusted content and changes no scope, policy, trust,
-  or held state. (AUT-002, AUT-007)
-* A stale request reports a conflict and does not overwrite a newer human edit.
-  (AUT-003)
-* With no visual editor and no display, an agent opens a project, edits a
-  scene, enters play mode, captures a game view image, and runs a build.
-  (AUT-004)
-* Two agent sessions each run a play session on the same project; input sent to
-  one play session does not reach the other, and stopping one leaves the other
-  running. (AUT-004)
-* Two agent sessions edit the same property from the same observed revision; the
-  second receives a conflict naming the first agent session's change. (AUT-003,
-  AUT-004)
-* An agent session subscribed to a scene receives notifications for another
-  agent session's edits, each naming the actor and revision. (AUT-004)
-* A detached build continues after the agent session's connection drops; on
-  reconnecting with the same authorization, the agent session reads its progress
-  and result. Cancelling a running test run returns a result stating what
-  changed and what remains. (AUT-004)
-* A play session whose script loops forever is reported as hung with its managed
-  stack and is interrupted; a native-plugin crash in another play session ends
-  only that play session with crash evidence, while the editor and other agent
-  sessions continue. (AUT-004)
-* The HTTP transport rejects a request from an unlisted origin, and revoking a
-  credential ends the agent sessions it authorized. (AUT-004)
-* An agent adds a `MonoBehaviour` with a compile error, receives the error with
-  its identifier, file, line, and column, fixes it, attaches the component to a
-  prefab, finds that usage by searching for the script, runs the project's
-  tests, and enters play mode on the new code without a manual refresh.
-  (AUT-005)
-* An agent reads the API reference entry for a Partially supported member and
-  receives its named exclusions, matching the running unitas version.
-  (AUT-006)
-* An agent resolves a diagnostic identifier to its explanation, and a person
-  reads the same explanation in the editor. (AUT-006)
-* A new agent session can read the project but receives a permission outcome
-  naming the edit-content scope when it edits a scene; after a person grants
-  that scope, the same request succeeds. (AUT-007)
-* Granting edit-scripts and execute-project-code together shows that the agent
-  can run arbitrary code with the account's privileges. (AUT-007)
-* An agent's deployment request returns confirmation-required, and the agent
-  session's own confirmation does not satisfy it; a person's confirmation does.
-  (AUT-007)
-* A settings field marked secret is shown as withheld in inspection, diffs, and
-  logs. (AUT-007)
-* In an untrusted project, an agent's request to enter play mode is refused with
-  the untrusted-project outcome, and its request for trust does not grant it.
-  (AUT-007)
-* A denied platform or filesystem operation exposes no sensitive content and is
-  distinct from a product error. (AUT-007)
-* After an agent session's reads, a refused edit, and an accepted change, the
-  exported audit log lists each with its time, identity, scope, and outcome; the
-  agent session's request to delete an audit record is refused; and the accepted
-  change's provenance appears in no project file. (AUT-008)
-* A person credential cannot be obtained or listed through MCP, and a request
-  arriving over standard input/output that tries to confirm a deployment is not
-  treated as a person's. (AUT-007)
-* An agent session requests project trust through MCP; the request is recorded
-  and shown to a person, and trust is granted only through the visual editor or
-  an interactive terminal. (AUT-001, AUT-007)
-* A per-project configuration change that sets the review policy to apply
-  immediately, arriving by a source-control pull, has no effect until a person
-  confirms it. (AUT-007)
-* A new project uses the require-approval review policy, and its HTTP transport
-  accepts only loopback origins. (AUT-007)
-* Project code run by an agent session that makes an HTTP request needs the
-  execute-project-code scope, not the external-network scope, while a package
-  fetch requested by the agent session needs the external-network scope and
-  confirmation. (AUT-007)
-* A secret value printed to the log by project code appears redacted in the log
-  entry returned to the agent session. (AUT-007)
-* While a headless session holds a project, a command-line invocation on the
-  same project location attaches to the shared project state as a separate
-  actor, and an invocation that cannot attach reports the holder. (AUT-004)
-* A play session started with no run conditions advances frames as fast as they
-  complete, limited by `Application.targetFrameRate`. (AUT-002)
-* An audio capture of the main listener over two seconds returns samples at the
-  output rate with channel layout, start DSP time, and the contributing audio
-  sources. (AUT-002)
-* An editor-method invocation in a headless session supplied with an answer for
-  a dialog title chooses that button and records the dialog and answer; a
-  dialog with no answer returns the no-person-present outcome. (AUT-002)
-* An agent reads the fields a project's custom inspector draws for a component,
-  changes one through the inspector's control, and the change appears in the
-  agent session's change set. (AUT-001, RUN-010)
-* During an XR play session, an agent injects a controller pose and a trigger
-  press, and captures the left-eye render view. (AUT-002, XR-001)
+1. For a sample project, every acceptance outcome of the
+   [editor](editor-and-authoring.md) is reproduced by an agent through MCP
+   alone, with the same results; an outcome that concerns visual presentation
+   is established through the captures and identity maps of
+   [Visual evidence](#visual-evidence). (AUT-001, AUT-002)
+2. Every command in the editor's command palette is discoverable as an MCP tool
+   with the same identifier and availability. (AUT-001, AUT-002)
+3. With the machine's network disabled, an agent using a generic MCP client opens
+   a project, reads product knowledge, edits a scene, and runs tests, and unitas
+   makes no model or network requests. (AUT-001, AUT-006)
+4. Human and automation compatibility reports agree for the same project state.
+   (AUT-001)
+5. An agent finds a scene object by stable identity, changes a property,
+   and a developer immediately sees and can undo that exact edit. (AUT-002,
+   AUT-003)
+6. A multi-object edit reports partial validation without claiming all objects
+   changed. (AUT-002)
+7. An agent searches tools by category and origin, receives summaries, reads one
+   tool's full schema, and is notified when a recompilation adds a project
+   `[MenuItem]` tool marked as project-contributed with its assembly. (AUT-002)
+8. A request repeated with the same request identifier after a lost connection
+   returns the original result, and an outcome query by that identifier reports
+   it as applied. (AUT-002)
+9. A query whose result exceeds the declared limit returns a summary and ranged
+   resource links; a cursor read after the scene changed reports the change.
+   (AUT-002)
+10. An agent starts a gameplay scenario at a fixed frame delta with a seeded
+    `UnityEngine.Random`, supplies declared input, reads runtime state, and
+    returns evidence tied to the exact project and play session with those
+    conditions recorded. (AUT-002)
+11. A game view capture with an identity map resolves a clicked pixel to the UI
+    element drawn there, and its annotated overlay leaves the unannotated capture
+    unchanged. (AUT-002)
+12. A log message from project code containing instructions to grant permissions
+    is returned marked as untrusted content and changes no scope, policy, trust,
+    or held state. (AUT-002, AUT-007)
+13. A stale request reports a conflict and does not overwrite a newer human edit.
+    (AUT-003)
+14. With no visual editor and no display, an agent opens a project, edits a
+    scene, enters play mode, captures a game view image, and runs a build.
+    (AUT-004)
+15. Two agent sessions each run a play session on the same project; input sent to
+    one play session does not reach the other, and stopping one leaves the other
+    running. (AUT-004)
+16. Two agent sessions edit the same property from the same observed revision; the
+    second receives a conflict naming the first agent session's change. (AUT-003,
+    AUT-004)
+17. An agent session subscribed to a scene receives notifications for another
+    agent session's edits, each naming the actor and revision. (AUT-004)
+18. A detached build continues after the agent session's connection drops; on
+    reconnecting with the same authorization, the agent session reads its progress
+    and result. Cancelling a running test run returns a result stating what
+    changed and what remains. (AUT-004)
+19. A play session whose script loops forever is reported as hung with its managed
+    stack and is interrupted; a native-plugin crash in another play session ends
+    only that play session with crash evidence, while the editor and other agent
+    sessions continue. (AUT-004)
+20. The HTTP transport rejects a request from an unlisted origin, and revoking a
+    credential ends the agent sessions it authorized. (AUT-004)
+21. An agent adds a `MonoBehaviour` with a compile error, receives the error with
+    its identifier, file, line, and column, fixes it, attaches the component to a
+    prefab, finds that usage by searching for the script, runs the project's
+    tests, and enters play mode on the new code without a manual refresh.
+    (AUT-005)
+22. An agent reads the API reference entry for a Partially supported member and
+    receives its named exclusions, matching the running unitas version.
+    (AUT-006)
+23. An agent resolves a diagnostic identifier to its explanation, and a person
+    reads the same explanation in the editor. (AUT-006)
+24. A new agent session can read the project but receives a permission outcome
+    naming the edit-content scope when it edits a scene; after a person grants
+    that scope, the same request succeeds. (AUT-007)
+25. Granting edit-scripts and execute-project-code together shows that the agent
+    can run arbitrary code with the account's privileges. (AUT-007)
+26. An agent's deployment request returns confirmation-required, and the agent
+    session's own confirmation does not satisfy it; a person's confirmation does.
+    (AUT-007)
+27. A settings field marked secret is shown as withheld in inspection, diffs, and
+    logs. (AUT-007)
+28. In an untrusted project, an agent's request to enter play mode is refused with
+    the untrusted-project outcome, and its request for trust does not grant it.
+    (AUT-007)
+29. A denied platform or filesystem operation exposes no sensitive content and is
+    distinct from a product error. (AUT-007)
+30. After an agent session's reads, a refused edit, and an accepted change, the
+    exported audit log lists each with its time, identity, scope, and outcome; the
+    agent session's request to delete an audit record is refused; and the accepted
+    change's provenance appears in no project file. (AUT-008)
+31. A person credential cannot be obtained or listed through MCP, and a request
+    arriving over standard input/output that tries to confirm a deployment is not
+    treated as a person's. (AUT-007)
+32. An agent session requests project trust through MCP; the request is recorded
+    and shown to a person, and trust is granted only through the visual editor or
+    an interactive terminal. (AUT-001, AUT-007)
+33. A per-project configuration change that sets the review policy to apply
+    immediately, arriving by a source-control pull, has no effect until a person
+    confirms it. (AUT-007)
+34. A new project uses the require-approval review policy, and its HTTP transport
+    accepts only loopback origins. (AUT-007)
+35. Project code run by an agent session that makes an HTTP request needs the
+    execute-project-code scope, not the external-network scope, while a package
+    fetch requested by the agent session needs the external-network scope and
+    confirmation. (AUT-007)
+36. A secret value printed to the log by project code appears redacted in the log
+    entry returned to the agent session. (AUT-007)
+37. While a headless session holds a project, a command-line invocation on the
+    same project location attaches to the shared project state as a separate
+    actor, and an invocation that cannot attach reports the holder. (AUT-004)
+38. A play session started with no run conditions advances frames as fast as they
+    complete, limited by `Application.targetFrameRate`. (AUT-002)
+39. An audio capture of the main listener over two seconds returns samples at the
+    output rate with channel layout, start DSP time, and the contributing audio
+    sources. (AUT-002)
+40. An editor-method invocation in a headless session supplied with an answer for
+    a dialog title chooses that button and records the dialog and answer; a
+    dialog with no answer returns the no-person-present outcome. (AUT-002)
+41. An agent reads the fields a project's custom inspector draws for a component,
+    changes one through the inspector's control, and the change appears in the
+    agent session's change set. (AUT-001, RUN-010)
+42. During an XR play session, an agent injects a controller pose and a trigger
+    press, and captures the left-eye render view. (AUT-002, XR-001)

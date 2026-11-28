@@ -1,4 +1,4 @@
-# Diagnostics, Profiling, and Playtesting Product Specification
+# Diagnostics, Profiling, and Playtesting
 
 ## Scope
 
@@ -23,6 +23,51 @@ Each feature this document owns has the tier recorded in the
   Unity 2022.3 LTS meaning.
 * Semantic: TST-003. Project tests written for the Unity Test Framework behave
   as they do under Unity 2022.3 LTS in ordinary use.
+
+## Architecture
+
+Diagnostics, profiling, and verification combine instrumentation inside every layer of
+[Engine architecture](architecture.md) with tools in the editor instance
+([Editor and authoring](editor-and-authoring.md#architecture)).
+
+* **Diagnostic records.** Every layer reports problems as structured records (identifier,
+  severity, category, and the identities of the content involved) through one diagnostics
+  channel in the core; script logging and unhandled exceptions enter the same channel.
+  Producers append to per-thread buffers without locks. The editor instance collects, groups,
+  and indexes records; players write them to their log and their player connection.
+* **Instrumentation.** Profiler markers are part of the core and of every subsystem: scripts,
+  render threads, the audio device thread, physics and navigation jobs, loading, and I/O. In
+  the editor, headless sessions, and development players they are always compiled in; with no
+  capture running a marker costs one predictable check and allocates nothing. While capturing,
+  each thread appends timestamped events to its own ring buffer, drained off the main thread.
+  Release players contain no recording path. GPU timings come from render graph passes where
+  the backend exposes timestamps; memory views come from per-subsystem and per-asset allocator
+  accounting, not from sampling.
+* **Player connection.** Workers and development players expose one connection to the editor
+  carrying logs, profiler streams, debug-draw capture (workers only), runtime inspection, input
+  injection, test results, and debugging. It is not MCP; agents reach it only through the editor.
+* **Debug drawing.** `Debug.DrawLine`, `Debug.DrawRay`, and gizmo calls append primitives to a
+  per-frame debug-draw buffer in the instance that runs them; the scene and game views draw
+  that buffer, and structured capture reads the same buffer. Built players have no buffer.
+* **Debugging.** The editor instance hosts the Debug Adapter Protocol endpoint and forwards to
+  the hosted .NET runtime's managed debugging interface in the targeted worker or development
+  player. A breakpoint stops only that instance's frame loop; the editor and other play
+  sessions keep running.
+* **Crash capture.** A crash handler installed before any project code runs writes its report
+  from preallocated memory, so startup crashes report too. Builds emit symbols keyed by build
+  identifier; symbolication runs in the editor.
+* **Capture and comparison.** Visual evidence and visual validation use the same render
+  pipeline offscreen; audio evidence copies the mixer output on the device thread into a
+  lock-free buffer. Comparison runs in the editor instance off its main thread.
+* **Scenarios, replay, and tests.** The scenario runner lives in the editor instance and drives
+  play sessions through the same commands and runtime access as MCP. Input recording and
+  replay sit at the input subsystem's device-event boundary, so the game receives replayed
+  input on the device-input path while the session's evidence records it as replayed. Project
+  tests are project code and run in a worker or a test player; results return over the player
+  connection.
+* **Budgets.** Performance budgets are measured with this same instrumentation where it is
+  compiled in, and in release players with the frame and startup timing they record without
+  the profiler; no separate measurement build of the engine exists.
 
 ## Unified diagnostics
 
@@ -173,7 +218,9 @@ An attached client can:
   object is shown as destroyed (it compares equal to `null` through the
   `UnityEngine.Object` equality operator) while its managed fields remain readable.
 
-While a breakpoint holds execution, the frame loop does not advance. After
+While a breakpoint holds execution, the frame loop of the instance that
+stopped (the play session's worker or the player) does not advance; the
+editor, its MCP interface, and other play sessions keep running. After
 resuming, the next frame's `Time.deltaTime` is limited by
 `Time.maximumDeltaTime`.
 
@@ -216,7 +263,7 @@ Profiling runs in the editor, headless, and against connected development
 players. An agent can start and stop a capture and read it as structured data.
 
 A capture records project, build, target, device, quality settings, scene,
-time range, and whether collection changed performance materially. Captures from
+time range, and the measured collection overhead per frame. Captures from
 different contexts are not presented as directly equivalent without showing
 their differences.
 
@@ -413,7 +460,8 @@ cannot host a test player reports that run as Platform-limited.
 
 The project shows which scenes, gameplay flows, targets, devices, input schemes,
 display configurations, locales, accessibility modes, save migrations, network
-conditions, and major features have named playtest, scenario, or test evidence.
+conditions, and feature families in the [Feature catalog](feature-catalog.md)
+have named playtest, scenario, or test evidence.
 (TST-002)
 
 Coverage means a scenario or test ran under recorded conditions. It does not
@@ -426,7 +474,7 @@ The official samples, their acceptance scenarios, and their pass criteria are
 owned by SMP-001 in [Playable samples and benchmarks](sample-games/INDEX.md). Their
 scenarios are structured scenarios as defined in this document (TST-002).
 
-## Acceptance stories
+## Acceptance outcomes
 
 1. Selecting a grouped runtime exception shows its count, each occurrence's
    frame and object, and opens the configured external editor at the throwing

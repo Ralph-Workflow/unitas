@@ -8,7 +8,8 @@ behavior, platform integration, XR behavior, the supported networked-game
 experience, deployment to devices and development-player connections, content
 builds and post-release content updates, product licensing as it applies to
 shipped players, product installation, updates, and target toolchains, and the
-product's own data flows and privacy behavior.
+product's own data flows and privacy behavior. The browser delivery of PLT-001
+is detailed in [Web target](web-target.md).
 
 Every capability in this specification is available to authorized agents
 through structured automation and MCP as well as to people, under the rules
@@ -24,6 +25,99 @@ Native, BLD-003 Native, BLD-004 Native, BLD-005 Native, PLT-001 Native, XR-001
 Familiar, NET-001 Familiar, LIC-001 Native, PRD-001 Native, PRD-002 Native.
 Unity build settings, player settings, and package content are imported and
 honored as this specification defines; the behavior is unitas-defined.
+
+## Architecture
+
+This section applies [Engine architecture](architecture.md) to builds, players, and targets.
+
+### Players and the platform layer
+
+* There is one player per target and configuration: development, release, and dedicated
+  server. It holds the engine layers and the .NET host, contains no game, and runs the cooked
+  project bundle the build pairs it with. On targets that permit just-in-time compilation, the
+  player's code is identical for every project. On ahead-of-time targets, the build links the
+  project's compiled managed code with that same engine code. Engine-code stripping removes
+  whole modules the project does not use and never changes a module it keeps.
+* Each target implements the platform layer once: window and presentation surface, GPU
+  adapter, input devices, audio device, file system and storage, threads and timers, sockets,
+  permissions, and process lifecycle. Every capability query answers supported, denied, or
+  absent, and the `Application`, `Screen`, `SystemInfo`, and `Input` members report those
+  answers. Nothing above the platform layer branches on the target.
+* Window, focus, lifecycle, and device events enter queues that the PlayerLoop drains at its
+  defined phases on the main thread. The target's frame source (display refresh, the
+  browser's animation frame, or the XR runtime's frame wait) paces the loop and never runs
+  engine or script work outside it.
+* .NET is hosted in process on every target: the just-in-time runtime where the target
+  permits it, ahead-of-time code plus an interpreter for code generated at runtime where it
+  does not, and the .NET WebAssembly runtime in the browser. Bindings and managed behavior are
+  the same in every mode; only code generation differs.
+* A dedicated server player is the same player with no presentation surface, GPU device, or
+  audio device. Rendering and audio components keep their state and API values, no render
+  proxies or voices are derived from them, and an operation that needs output reaches the
+  absent device, which reports it.
+
+### Builds and content
+
+* A build is one editor command, whether started from the visual editor, the editor's MCP
+  interface, the command line, or `BuildPipeline.BuildPlayer`. It has three stages:
+  * **Cook:** target-specific artifacts (texture formats, shader forms, variant stripping)
+    come from the same content-hash cache the editor uses.
+  * **Compile:** scripts compile with the target's defines, are stripped, and on
+    ahead-of-time targets are compiled to native code.
+  * **Package:** cooked bundles, managed code, and the player are assembled into the target's
+    artifact. External toolchains (Gradle, Xcode, signing, notarization, and console SDK
+    tools) run as separate processes.
+* Each stage is keyed by the digests of its inputs, toolchain versions included. The build
+  manifest records those keys, so builds are reproducible, comparable, and resumable after
+  cancellation or failure. Independent work runs in parallel, and no stage blocks the
+  editor's main thread.
+* A content build runs the cook and package stages and writes bundles and catalogs instead
+  of a player. Unity-built bundles are converted to cooked form on first load, as the
+  [Engine architecture](architecture.md#content-pipeline) defines.
+* Headless and continuous-integration operation is the headless editor running the same
+  commands. The command line maps arguments to commands and results to output and exit
+  status; there is no separate build tool.
+
+### Devices and development players
+
+* Deployment is one device interface in the editor, with one adapter per target's device
+  tooling. Discovery, install, launch, and removal are commands on it.
+* A development player has one connection endpoint. It carries the profiler, log-stream,
+  debugger, and remote-control channels, authenticated by the build's pairing credential. In
+  the browser, where a page cannot listen for connections, the player opens the connection to
+  the editor. The editor is the only client; agents reach the player through the editor's MCP
+  interface. A release player contains no endpoint code at all, not a disabled one.
+
+### XR
+
+* The XR subsystem owns the session, runtime, tracking spaces, poses, and haptics, and
+  reaches the device through the OpenXR loader in the platform layer. The XR packages'
+  managed code runs as shipped. unitas provides the native provider that code calls, in place
+  of the package's native library. `XRDisplaySubsystem`, `XRInputSubsystem`, and the XR Plugin
+  Management loaders are bindings over this subsystem.
+* Interaction profiles and hand joints become Input System devices through the input
+  subsystem. Render views (poses, fields of view, and the runtime's swapchain images) go to
+  the render graph's stereo path. The XR subsystem never draws.
+* On an XR target, the runtime's frame wait paces the PlayerLoop. Each frame publishes the
+  runtime's predicted display time; simulation reads poses predicted for that time, and
+  submission re-reads head and eye poses as late as the runtime allows. Session state changes
+  become lifecycle messages at loop phases.
+* The editor, headless sessions, and scenarios run the same subsystem against a simulated
+  runtime whose poses, views, and input the session declares. That runtime is always reported
+  as simulated.
+
+### Networking
+
+* Layers, bottom up: platform sockets (UDP and TCP on native targets, WebSocket and WebRTC
+  data channels in the browser), Unity Transport, a netcode package, then the game. Each layer
+  uses only the one below. The packages' managed code runs as shipped. unitas provides the
+  sockets, jobs, and engine APIs it calls.
+* Socket I/O is asynchronous and never blocks the main thread. Sends and receives are drained
+  at defined loop phases, and netcode reads time only from the time the loop publishes.
+* Server, host, client, and thin client are roles of the same player. Several instances,
+  headless or not, run on one machine with distinct identities. Every packet, message, and
+  replicated change is attributed to a connection and participant in diagnostics. The network
+  simulator tags what it alters, and release builds contain no simulator.
 
 ## Build configuration
 
@@ -41,6 +135,25 @@ with the setting and consequence identified.
 
 Development and release builds are visibly distinct. A release build never
 contains development-only access merely because an earlier build enabled it.
+
+### Build hosts
+
+Every desktop target builds on every supported host. A developer on macOS
+builds Windows and Linux players, a developer on Windows builds macOS and Linux
+players, and a developer on Linux builds Windows and macOS players, with either
+scripting backend, without a second machine or a virtual machine. The linkers,
+platform libraries, and other tools a cross-host build needs install with the
+target's support, from sources whose licenses permit that. Authenticode
+signing of Windows players runs on every host, and macOS notarization runs on
+every host through the notarization service with the developer's credentials.
+
+A target whose platform holder requires its own host tooling, such as Xcode for
+iOS, tvOS, and visionOS-class devices or a console vendor's SDK, states that
+requirement in the release's host-target matrix (CMP-005 in the
+[Compatibility contract](compatibility-contract.md)). On any other host, the
+build produces every artifact up to the step that needs that tooling, such as
+the generated Xcode project, and reports the remaining step and the host it
+needs. A build never claims a step that it did not run.
 
 ## Build results
 
@@ -95,8 +208,9 @@ inputs are unchanged and states which work it redid and why.
 A release player contains no automation, remote-control, debugger, or profiler
 endpoint. It embeds no absolute paths of the build host and no account names
 beyond those present in the project's own content. It loads native libraries
-only from its own installation locations. When a release build contains any
-development-only capability, the build result names that capability.
+only from its own installation locations. Beyond those endpoints, which a
+release player never contains, any other development-only capability in a
+release build is named in the build result.
 
 ## Native project generation
 
@@ -141,6 +255,29 @@ secrets themselves. A build never submits to a store implicitly, and a signed or
 packaged artifact is never presented as accepted by a store, platform holder,
 or notarization service unless that service reported acceptance.
 
+### PC storefronts and Steam
+
+Windows, macOS, and Linux players are produced in the folder layout that PC
+storefronts ingest, one folder per target and architecture, so that each folder
+can be uploaded as a Steam depot or the equivalent unit of another storefront
+without rearrangement. A game that uses the Steamworks API does so through its
+own Steamworks binding package and the Steamworks SDK's native libraries, which
+load as precompiled native plugins (RUN-001 in
+[Scripting runtime](scripting-runtime.md)). The Steam overlay, Steam Input,
+and the other client features that hook the game process work, because the
+player presents through the graphics APIs and process model those features
+support. A development build places the application identifier file the
+project declares next to the executable; a release build omits it.
+
+Uploading is a separate, explicit step. The editor runs the storefront's own
+upload tool, such as SteamPipe for Steam or the tool another storefront
+provides, with credentials the developer configured, and reports the
+storefront's result. Uploading is a person-only action
+([People and person-only actions](automation-and-mcp.md#people-and-person-only-actions)):
+an agent can prepare the build and the upload configuration and request the
+upload. The build result states which license governs the player and its
+obligations for the chosen storefront, as [Licensing](#licensing) defines.
+
 ## Headless command-line operation and continuous integration
 
 unitas runs every project operation from the command line on a machine with no
@@ -172,6 +309,10 @@ the corresponding operation or option defined in this section. These include
 because unitas needs no Unity license, and the output states that they were
 ignored. An argument that Unity 2022.3 LTS does not define is reported by
 name; it is never silently ignored.
+
+In the editor, `-nographics` removes the window and presentation surface.
+Offscreen rendering for captures, visual checkpoints, and tests remains, and a
+session with no GPU adapter, hardware or software, reports that.
 
 Every invocation produces machine-readable output that states each requested
 operation, its outcome, its diagnostics with locations, and the location of its
@@ -295,14 +436,27 @@ target on a host without the required Apple toolchain), a missing toolchain, or
 a missing user entitlement.
 Proprietary platform access is never implied by the existence of a target name.
 
+Targets without a section of their own follow the sections named here:
+embedded Linux follows the [Linux target](#linux-target); Linux-based handheld
+devices follow the Linux target as well; Android-based standalone XR headsets
+follow the [Android target](#android-target) and
+[XR and spatial behavior](#xr-and-spatial-behavior); visionOS-class devices
+follow the [iOS and tvOS targets](#ios-and-tvos-targets) and XR and spatial
+behavior; QNX follows [Console targets](#console-targets) for SDK and
+entitlement rules and reports its packaging, graphics API, lifecycle, and file
+locations in the build result.
+
 ## Dedicated server players
 
 Windows, Linux, and macOS dedicated server players build from the Dedicated
 Server target and run with no rendering or audio output. A project migrated
 from Unity 2020.3 LTS with the Server Build option enabled opens with the
-Dedicated Server target selected. A server build defines `UNITY_SERVER`, applies server-build
-asset stripping, and runs with `-batchmode -nographics`. Graphics and audio API
-use in a server player is reported as Platform-limited, naming the API.
+Dedicated Server target selected. A server build defines `UNITY_SERVER` and
+applies server-build asset stripping. A server player behaves as if launched
+with `-batchmode -nographics`, whether or not those arguments are given.
+Rendering and audio components keep their serialized state and API values.
+Only operations that need a GPU or audio device, such as drawing, readback, and
+playback, are reported as Platform-limited, once per API, naming it.
 
 ## Player lifecycle
 
@@ -323,830 +477,12 @@ feature except where an editor-only capability is explicitly identified.
 
 ## Web target
 
-The Web target is Unity 2022.3 LTS's WebGL build target. It produces a browser
-bundle: a WebAssembly player, its loader, its data, and a page that hosts it.
-A project that Unity 2022.3 LTS builds for WebGL builds for the Web target with
-its WebGL Player Settings, Build Settings, templates, and plug-ins honored. The
-`UNITY_WEBGL` define is set, and `Application.platform` returns
-`RuntimePlatform.WebGLPlayer`.
-
-Behavior that Unity 2022.3 LTS offers on WebGL is the baseline. Behavior that
-Unity 2022.3 LTS lacks there, such as WebGPU, managed threads, WebAssembly SIMD,
-and script debugging, is a unitas extension, and the build result names each
-extension a build uses. A limitation of Unity's WebGL player is never carried
-over as a limitation of the Web target. Only a capability that the browser,
-the operating system, or the device does not offer is reported as
-Platform-limited, naming the browser, the version, and the missing capability.
-
-The browser player contains no MCP interface. An agent reaches a running
-browser player only through the editor's connection to a development player
-(BLD-004).
-
-### Session and page lifecycle
-
-A browser player reports, to the page and to diagnostics:
-
-* loading progress and each startup phase;
-* successful startup;
-* a missing browser capability, naming it;
-* storage availability and persistence;
-* whether audio is permitted, and that the next gesture enables it;
-* focus changes, visibility changes, resizing, and fullscreen changes;
-* unrecoverable startup and runtime errors, with their cause.
-
-Browser security and permission restrictions are visible to the game and to
-diagnostics. A permission the person denies returns an explicit status, never
-apparent success.
-
-Page refresh and navigation away end the player session. Data the game wrote to
-persistent storage before that point remains available to the next session.
-During page hide and unload, the player delivers `OnApplicationPause(true)` and
-`OnApplicationQuit` to the extent the browser runs page code at that time, and
-it finishes pending persistent writes as SAV-001 in
-[Accessibility, localization, and persistence](accessibility-localization-persistence.md)
-defines. A page restored from the browser's back-forward cache resumes the same
-session and delivers `OnApplicationFocus` and `OnApplicationPause(false)`.
-
-Offline state and its changes are reported to the game, through
-`Application.internetReachability`, and to diagnostics.
-
-`Application.Quit` stops the player, releases its memory, and leaves the page
-open, as in Unity. The page's `Quit` call does the same (see
-[Loader and page API](#loader-and-page-api)).
-
-### Graphics APIs and selection
-
-WebGL 2 is the Unity 2022.3 LTS baseline graphics API for the Web target.
-WebGPU is a unitas extension. The WebGL target's Graphics APIs list in Player
-Settings includes both.
-
-* With Auto Graphics API on, the player tries WebGPU first and WebGL 2 second.
-* With a manual list, the player tries the listed APIs in their order and
-  never uses an API that the list omits.
-* The player falls back to the next API when the browser does not offer the
-  API, when the browser refuses an adapter or device, when the adapter lacks a
-  feature or limit the build requires, or when device creation fails. The
-  startup report names the API tried, the reason it was not used, and the API
-  selected.
-* The WebGL Power Preference Player setting (Default, Low Power, and High
-  Performance) is passed to the browser's adapter and context requests.
-* `SystemInfo.graphicsDeviceType` returns `OpenGLES3` under WebGL 2, as in
-  Unity. `SystemInfo.graphicsDeviceVersion` and `graphicsDeviceName` name the
-  active API, its version, and the adapter. Under WebGPU, these values identify
-  WebGPU, which is reported as a unitas extension.
-* When neither API is available, startup fails before the engine loads its
-  data, and the page receives an error that names the missing API. This is a
-  real browser absence. It covers a browser with WebGL disabled and a GPU the
-  browser blocks.
-
-### Render pipelines and features on the web
-
-Projects authored for the Built-in Render Pipeline and URP 14.x render on both
-WebGPU and WebGL 2. HDRP 14.x and project-defined scriptable render pipelines
-render on both as well, which is a unitas extension: Unity 2022.3 LTS does not
-offer them on WebGL. The pipeline rules are owned by REN-006 in
-[Rendering and animation](rendering-and-animation.md).
-
-On both APIs, every rendering feature in that specification is available,
-following its graphics API rule: a feature that the API lacks but the device
-can perform is provided by other means.
-
-* **Built-in Render Pipeline:** the forward, deferred, and legacy vertex-lit
-  paths, realtime and baked lighting, shadows, Linear and Gamma color space,
-  MSAA, HDR, GPU instancing, and Built-in post-processing render on both APIs.
-* **URP 14.x:** the Forward, Forward+, and Deferred paths, camera stacking,
-  the 2D Renderer, render scale, HDR, MSAA, decals, SSAO, renderer features,
-  and the SRP Batcher render on both APIs.
-* **Compute-dependent features:** `ComputeShader` dispatch, Visual Effect
-  Graph, GPU culling, GPU skinning, and indirect drawing run natively on
-  WebGPU. On WebGL 2, which has no compute stage, they run through an
-  equivalent path with the same results, so no feature disappears on WebGL 2.
-  `SystemInfo.supportsComputeShaders` returns true on both APIs. A per-target
-  setting keeps Unity's WebGL value of false for projects that choose a
-  fallback path from it. Any quality difference between the two APIs, such as
-  a lower particle capacity, is reported per feature and asset.
-* **Hardware ray tracing:** browsers offer no ray-tracing access, so ray-traced
-  effects are Platform-limited on both APIs. The report names the effect and
-  what renders instead.
-
-Each feature's provision on the active API (direct, provided by other means,
-or Platform-limited) is inspectable as REN-006 defines.
-
-### Capability detection
-
-At startup the player detects and reports:
-
-* the graphics API, adapter, limits, optional features, and compressed texture
-  formats;
-* cross-origin isolation, thread availability, and the worker count;
-* WebAssembly SIMD, exception handling, and 64-bit memory support;
-* whether the page is a secure context;
-* storage quota, persistence, and whether storage is session-only;
-* audio state, gamepad access, fullscreen, pointer lock, keyboard lock, and
-  clipboard access;
-* the device pixel ratio, touch support, and device memory and processor count
-  where the browser reports them.
-
-`SystemInfo` members (`maxTextureSize`, `SupportsTextureFormat`,
-`SupportsRenderTextureFormat`, `processorCount`, `systemMemorySize`,
-`operatingSystem`, `deviceType`, and the rest) return values derived from this
-detection. A value the browser hides is reported as unknown in diagnostics, and
-the member returns Unity's documented fallback for it. The full capability
-report is available in development diagnostics and through the editor's
-connection to a development player.
-
-### Lost graphics context
-
-When the browser loses the WebGL 2 context or the WebGPU device, the player
-stops rendering and keeps running game logic. When the browser restores the
-context or provides a new device, the player re-creates every GPU resource and
-resumes rendering on the next frame. Render texture contents are lost, as Unity
-documents for device loss: `RenderTexture.IsCreated` returns false until the
-texture is used or created again. Every other texture, mesh, buffer, and shader
-renders as before.
-
-If the browser does not restore the context, or re-creation fails, the player
-reports an unrecoverable graphics error to the page and to diagnostics, naming
-the cause. It stops rendering without freezing the page. Each loss and
-restoration is recorded with its time and duration.
-
-### Texture compression
-
-The Web target supports ASTC, ETC2, and DXT (BC) texture compression, chosen per
-browser and device.
-
-* The Player Settings Texture Compression format and the Build Settings
-  Texture Compression override (Use Player Settings, DXT, ETC2, and ASTC) are
-  honored, along with per-texture format overrides for the WebGL target.
-* **Multi-format builds:** a build option includes texture data in several
-  formats in one build. At startup the loader detects the formats the device
-  supports and downloads only the data for the best one, in the order the
-  project sets. The default order is ASTC, then DXT, then ETC2.
-* **Runtime selection:** a texture whose format the device cannot sample is
-  decompressed at load to an uncompressed format that holds every channel. The
-  player reports the texture, the format, and the extra memory.
-* **Supercompressed textures:** Crunch-compressed textures, and KTX2 textures
-  with Basis Universal supercompression from a package that CMP-002 lists,
-  transcode at load to the best format the device offers.
-* **Reporting:** the build result lists each texture's format per included
-  format set. At runtime the player reports the format set selected, each
-  transcoded or decompressed texture, and the memory it uses.
-
-### WebAssembly player
-
-Managed code on the Web target runs with ahead-of-time compilation (BLD-003).
-Every managed-code guarantee in
-[Scripting backends, ahead-of-time compilation, and code stripping](#scripting-backends-ahead-of-time-compilation-and-code-stripping)
-holds in the browser.
-
-#### Code size and stripping
-
-* The managed stripping level, `link.xml`, and the preservation attributes
-  work as defined above. Strip Engine Code removes engine modules the project
-  does not use, and the build result lists the modules kept and the reason
-  each one is kept.
-* The Build Settings Code Optimization choices (Shorter Build Time, Runtime
-  Speed, Runtime Speed with LTO, Disk Size, and Disk Size with LTO) and the
-  IL2CPP Code Generation setting are honored. The size report states the
-  effect of the choice used on code size, measured against the build's
-  previous Code Optimization choice when one exists.
-* The browser compiles the module while it downloads, and instantiates it as
-  soon as compilation completes. Data download continues in parallel.
-
-#### Memory
-
-* The Initial Memory Size and Maximum Memory Size settings, and Memory Growth
-  Mode (None, Linear, and Geometric) with its linear step, geometric step, and
-  geometric cap, are honored.
-* With growth mode None, the heap stays at its initial size.
-* Heaps above 4 GB are a unitas extension, available in browsers that offer
-  64-bit WebAssembly memory. Elsewhere, a Maximum Memory Size above the
-  browser's limit is reported at build time and at startup, naming the limit.
-* The current heap size, the managed heap, and the heap high-water mark are
-  reported in development diagnostics and through the profiler (PRF-001).
-
-#### Out of memory
-
-When an allocation cannot be satisfied, the player reports out of memory to the
-page and to diagnostics. The report states the requested size, the current
-heap size, the configured maximum, the browser's limit, and the high-water
-mark. Development builds add the largest managed and native allocations. The
-page stays responsive and shows the report through the template. A managed
-allocation failure raises `OutOfMemoryException` in managed code first, as on
-desktop, so a game that catches it can recover.
-
-#### Threads
-
-Browser threads behave as RUN-004 in [Scripting runtime](scripting-runtime.md)
-defines.
-
-* **Cross-origin isolated page:** explicitly created threads, the thread pool,
-  `Task.Run` work, timers, blocking waits, and the job system run on worker
-  threads in parallel. Native plug-in code and engine work use them as well.
-* **Page not isolated:** the player still starts. The startup report states
-  that browser threading is unavailable and names the missing response
-  headers. Thread creation and blocking waits fail with Unity's browser
-  behavior, jobs run on the main thread with the same results, and the lack of
-  parallelism is reported as a performance property.
-* **Unity behavior kept:** the per-target setting that keeps Unity's browser
-  threading behavior is honored, and the build result states which behavior
-  the build uses.
-
-The headers that isolation requires are listed in
-[Hosting and server headers](#hosting-and-server-headers).
-
-#### SIMD
-
-WebAssembly SIMD is a unitas extension, on by default. Managed code, engine
-code, and Burst-compiled code (RUN-011 in
-[Scripting runtime](scripting-runtime.md)) use SIMD instructions where the
-browser offers them. When a browser in the release's declared support matrix
-lacks SIMD, the build includes a module without SIMD and the loader selects
-it. The startup report states which module runs. A build setting turns SIMD
-off.
-
-#### Exceptions
-
-The Enable Exceptions setting (None, Explicitly Thrown Exceptions Only, Full
-Without Stacktrace, and Full With Stacktrace) selects diagnostic detail, not
-correctness.
-
-* Under every value, managed exceptions are thrown and caught as on desktop.
-  This includes the null-reference, array-bounds, cast, and arithmetic
-  exceptions that the runtime detects.
-* Full With Stacktrace fills `Exception.StackTrace` with managed frames in
-  release builds. The other values leave it empty in release builds.
-  Development builds always include managed frames.
-* The size report states the code size of the value used.
-* WebAssembly Arithmetic Exceptions keeps its Unity meaning. Throw, the
-  default, raises `DivideByZeroException` and `OverflowException` as on
-  desktop. Ignore produces the value the WebAssembly operation returns, and
-  the build result reports Ignore as a difference from desktop behavior.
-
-#### Debug symbols and stack traces
-
-* The Debug Symbols setting (Off, External, and Embedded) is honored. External
-  writes a separate symbols file that the page does not download.
-* Every build produces source maps and symbol files matched to its build
-  identifier (DIA-003 in
-  [Diagnostics, profiling, and playtesting](diagnostics-profiling-playtesting.md)).
-* In development builds, and in release builds with Embedded symbols, browser
-  console stack traces show managed type, method, file, and line.
-* For release builds with External or Off, a stack trace that a crash report
-  or the console captured is symbolicated through the editor, the command line,
-  and the editor's MCP interface.
-
-### Build output and templates
-
-A Web build writes a folder that holds the page (`index.html`), a `Build` folder
-with the loader, framework, code, and data files, `StreamingAssets`, the
-template's `TemplateData`, the third-party notices (LIC-001), and a header
-manifest. The header manifest lists every file with the response headers it
-requires. The build also writes server configuration for Apache, nginx, and IIS
-that applies those headers.
-
-WebGL templates:
-
-* **Built-in templates:** the Default template shows the product name, a
-  loading bar, a fullscreen button, and the warning banner, with no Unity
-  branding. The Minimal template shows only the canvas. The Progressive Web App
-  template adds a web app manifest and offline support.
-* **Project templates:** every folder in `Assets/WebGLTemplates` with an
-  `index.html` is a selectable template. Its `thumbnail.png` appears in the
-  template picker, and its other files are copied to the build.
-* **Selection:** `PlayerSettings.WebGL.template` values in the
-  `APPLICATION:<name>` and `PROJECT:<name>` forms select the template, as in
-  Unity.
-* **Template variables:** the built-in variables (`COMPANY_NAME`,
-  `PRODUCT_NAME`, `PRODUCT_VERSION`, `WIDTH`, `HEIGHT`, `BACKGROUND_COLOR`,
-  `SPLASH_SCREEN_STYLE`, `UNITY_VERSION`, `DEVELOPMENT_PLAYER`,
-  `DECOMPRESSION_FALLBACK`, `LOADER_FILENAME`, `FRAMEWORK_FILENAME`,
-  `CODE_FILENAME`, `DATA_FILENAME`, `MEMORY_FILENAME`, `SYMBOLS_FILENAME`, and
-  `BACKGROUND_FILENAME`) expand in `{{{ }}}` tags, and JavaScript expressions in
-  tags and `#if`, `#else`, and `#endif` directives evaluate as in Unity.
-  `UNITY_VERSION` expands to the value `Application.unityVersion` returns.
-* **Custom variables:** any other variable a template uses appears as a custom
-  template variable in Player Settings, and its value is stored with the
-  project's Player Settings.
-* **Template errors:** a template with an unknown directive, an unbalanced
-  `#if`, or an expression that fails to evaluate is reported in the build
-  result, naming the file, the line, and the cause. It is never silently
-  ignored.
-
-### Loader and page API
-
-The page starts the player with `createUnityInstance(canvas, config,
-onProgress)`, as in Unity.
-
-* **Config:** `dataUrl`, `frameworkUrl`, `codeUrl`, `memoryUrl`, `symbolsUrl`,
-  `streamingAssetsUrl`, `companyName`, `productName`, `productVersion`,
-  `devicePixelRatio`, `matchWebGLToCanvasSize`, `webglContextAttributes`,
-  `cacheControl`, and `showBanner` keep their Unity meaning. An unknown config
-  key is reported in the console in development builds.
-* **Progress:** `onProgress` receives values from 0 to 1 that never decrease.
-  It reaches 1 when the first scene is ready.
-* **Result:** the returned promise resolves to the instance once the player has
-  started. It rejects with a message that names the cause on any startup
-  failure, including an unsupported browser, a missing graphics API, a file
-  that failed to download or decompress, and out of memory.
-* **Instance:** `SetFullscreen(1)` and `SetFullscreen(0)` enter and leave
-  fullscreen, subject to the gesture rule below. `SendMessage(objectName,
-  methodName, value)` calls a method on a named GameObject, as in Unity.
-  `Quit()` returns a promise that resolves once the player has stopped and
-  released its memory. After `Quit()`, the same canvas can host a new
-  instance.
-* **Warnings:** `showBanner` receives warnings and errors with their severity.
-  The Default template displays them.
-
-### Compression, caching, and file names
-
-* **Compression Format:** Brotli, Gzip, and Disabled are honored. Brotli
-  produces the smallest transfer.
-* **Decompression Fallback:** with the fallback on, the loader decompresses
-  files that arrive without a matching `Content-Encoding` header. Development
-  builds warn that the header is missing and state the startup cost. With the
-  fallback off, a compressed file that arrives without the header fails
-  startup with an error that names the file and the header the server must
-  send.
-* **Brotli over plain HTTP:** browsers accept Brotli content encoding only on
-  secure origins. A Brotli build served over plain HTTP without the fallback is
-  reported with that cause.
-* **Data Caching:** with Data Caching on, downloaded build files are stored in
-  the browser's IndexedDB cache, and later visits load them from the cache.
-  `cacheControl` decides per URL whether a file is revalidated, treated as
-  immutable, or not cached. A cache the browser has evicted or that is
-  corrupt is detected and downloaded again.
-* **Name Files As Hashes:** file names become digests of their content, so a
-  host can mark them immutable and a new build never collides with a cached
-  file from an earlier build.
-
-### Remote content and Addressables
-
-Addressables content and AssetBundles for the Web target build and load as
-defined in
-[Content builds and post-release content updates](#content-builds-and-post-release-content-updates)
-and RUN-006.
-
-* Remote load paths that point at a CDN load catalogs and bundles from it. The
-  `Caching` API stores downloaded bundles in IndexedDB.
-* A bundle request that the browser blocks for cross-origin reasons is
-  reported, naming the URL, the CDN's missing response header, and the
-  cross-origin rule.
-* On a cross-origin isolated page, content from another origin must carry a
-  cross-origin resource policy or CORS headers. A missing header is reported
-  in the same way.
-* Download size queries, dependency downloads, and catalog update checks work
-  as on other targets.
-
-### Hosting and server headers
-
-The header manifest states every header the build needs. Development builds
-check the headers they receive at startup and report each missing or wrong
-header, naming the file and the expected value.
-
-| Header | Files | Value |
-|---|---|---|
-| `Content-Encoding` | Brotli files (`.br`) | `br` |
-| `Content-Encoding` | Gzip files (`.gz`) | `gzip` |
-| `Content-Type` | `.wasm` | `application/wasm` |
-| `Content-Type` | `.js` | `application/javascript` |
-| `Content-Type` | `.data` and bundles | `application/octet-stream` |
-| `Content-Type` | `.symbols.json` | `application/json` |
-| `Cross-Origin-Opener-Policy` | the page | `same-origin` |
-| `Cross-Origin-Embedder-Policy` | the page | `require-corp` or `credentialless` |
-| `Cross-Origin-Resource-Policy` | files from another origin | `cross-origin` |
-
-* With Decompression Fallback on, compressed files use the `.unityweb`
-  extension. Serving them with the `Content-Encoding` of the build's
-  compression format skips decompression in the loader.
-* Without `application/wasm`, the browser cannot compile while downloading.
-  The player still starts, and development builds report the slower startup
-  and name the header.
-* Without the two cross-origin isolation headers on the page, the player runs
-  without browser threads, as described in [Threads](#threads).
-
-#### Local development server
-
-The editor serves Web builds from a local development server that sends every
-header in the manifest, including the cross-origin isolation headers and
-`Content-Encoding`. Build And Run uses it.
-
-* The server picks a free port and reports the URL.
-* Serving to other devices on the local network, for testing on phones and
-  tablets, is opt-in. It serves over HTTPS with a development certificate,
-  because WebGPU, browser threads, and the clipboard require a secure context
-  on any host other than the local machine. Trusting that certificate on a
-  device is the person's decision.
-* The server runs in the headless editor as well. Agents start, inspect, and
-  stop it through the editor's MCP interface under the deploy scope (AUT-007).
-
-#### Embedding and game portals
-
-* **Iframes:** a build embedded in an iframe works when the embedding page
-  grants the permissions the game uses: fullscreen, autoplay, gamepad,
-  clipboard, pointer lock, and cross-origin isolation. The player reports each
-  permission the embedding page's policy denies. Keyboard input reaches the
-  player once the person clicks the frame.
-* **Portals:** a build option produces output for portals that host the game
-  on their own domain, accept a single archive, and do not let the developer
-  set response headers. That output uses relative paths only, uses the
-  decompression fallback, and needs no server configuration. The build result
-  states which features depend on headers the portal may not send, such as
-  browser threads.
-* **Portal SDKs:** a portal's JavaScript SDK is reached through JavaScript
-  interop.
-
-### JavaScript interop
-
-* **Plug-ins:** `.jslib` files in the project and its packages are included in
-  Web builds as RUN-007 in [Scripting runtime](scripting-runtime.md) defines.
-  Their `mergeInto(LibraryManager.library, ...)` functions, `$`-prefixed
-  dependencies, `__deps` entries, and `autoAddDeps` resolve as in Unity.
-  `.jspre` files run before the player starts, in a stable order that the
-  build result lists.
-* **Calling JavaScript from C#:** `[DllImport("__Internal")]` declarations call
-  jslib functions with `int`, `float`, `double`, `bool`, string, and array
-  arguments, and return numbers, booleans, and strings.
-* **Calling C# from JavaScript:** `SendMessage` from a jslib or the page calls
-  a method with no argument, a string, or a number. Managed callbacks passed as
-  function pointers and marked `[MonoPInvokeCallback]` are called from
-  JavaScript through the `makeDynCall` and `dynCall` forms that Unity 2022.3
-  LTS documents.
-* **Marshalling:** strings convert with `UTF8ToString`, `stringToUTF8`, and
-  `lengthBytesUTF8`. A string returned to C# is allocated with `_malloc`.
-  Arrays pass as a pointer and a length and are read through the `HEAP8`,
-  `HEAPU8`, `HEAP16`, `HEAPU16`, `HEAP32`, `HEAPU32`, `HEAPF32`, and `HEAPF64`
-  views. These views stay valid after the heap grows and when memory is shared
-  between threads.
-* **Module:** `Module` is reachable from jslib code and, as the instance's
-  `Module`, from the page.
-* **Threads:** a jslib function called from a managed background thread runs on
-  the page's main thread, where the page's document is reachable, and the
-  calling thread waits for its result.
-
-Errors in each direction:
-
-* A JavaScript exception thrown in a jslib function raises an exception in the
-  calling C# code. The exception names the jslib function and carries the
-  JavaScript message and stack. The player keeps running.
-* A `DllImport` that names no included jslib function fails the build, naming
-  the declaration and the missing function.
-* `SendMessage` to an object or method that does not exist logs an error that
-  names both, as in Unity.
-* An exception thrown by the C# method that `SendMessage` called is logged with
-  its managed stack and does not stop the player.
-* An exception thrown by a managed callback that JavaScript called reaches the
-  JavaScript caller as an error that names the managed exception type and
-  message.
-
-### Canvas, display, and fullscreen
-
-* **Canvas size:** the player renders at the canvas's CSS size multiplied by
-  the device pixel ratio. `config.devicePixelRatio` overrides the ratio, and a
-  project setting caps it, for performance on high-density screens.
-  `Screen.width`, `Screen.height`, and `Screen.dpi` report the result.
-* **Resizing:** resizing the canvas or the window changes `Screen.width` and
-  `Screen.height` from the next frame. With `matchWebGLToCanvasSize` off,
-  `Screen.SetResolution` sets the render resolution and the browser scales it
-  to the canvas.
-* **Fullscreen:** `Screen.fullScreen`, `Screen.fullScreenMode`, and
-  `SetFullscreen` request fullscreen. Browsers grant fullscreen only during a
-  user gesture, so a request made from game code applies at the next click,
-  touch, or key press on the canvas, as in Unity. Until then, the request is
-  reported as pending. Leaving fullscreen with Escape or a browser control
-  updates `Screen.fullScreen`. A browser that offers no element fullscreen,
-  such as Safari on iPhone, reports fullscreen as Platform-limited.
-* **Pointer lock:** `Cursor.lockState` follows the same gesture rule.
-  `WebGLInput.stickyCursorLock` keeps its Unity meaning. A lock request that
-  the browser refuses, for example right after the person pressed Escape, is
-  reported and retried at the next gesture.
-* **Cursor:** `Cursor.SetCursor` and `Cursor.visible` apply to the canvas.
-
-### Keyboard and focus
-
-* `WebGLInput.captureAllKeyboardInput` keeps its Unity meaning. When it is
-  true, the player receives keyboard input from the whole page. When it is
-  false, the player receives keys only while the canvas has focus, so HTML
-  elements on the page receive their own input.
-* Clicking the canvas gives it focus. Focus loss delivers
-  `OnApplicationFocus(false)`, and keys held at that moment are released.
-* Browsers reserve some shortcuts, such as closing a tab. These never reach the
-  player, and they are listed in product knowledge (AUT-006). In fullscreen, in
-  browsers that offer keyboard lock, a project setting captures Escape and
-  other system keys.
-
-### Gamepads, touch, sensors, and mobile browsers
-
-* **Gamepads:** gamepads come from the browser's Gamepad API for the legacy
-  Input Manager (INP-001) and the Input System (INP-002), with device
-  recognition as UI, audio, and input defines. A gamepad appears once the
-  person presses one of its buttons, as browsers require. Rumble works where
-  the browser offers vibration for that gamepad. Light bars and other HID
-  outputs work through the browser's HID access where the browser offers it
-  and the person grants it. Elsewhere they are reported as Platform-limited.
-* **Touch:** multi-touch reaches `Input.touches` and the Input System
-  `Touchscreen`, including touch cancellation when the browser takes over a
-  gesture. Templates stop page scrolling and zooming on the canvas.
-  `Input.mousePresent` and `Input.touchSupported` reflect the device.
-* **Sensors:** accelerometer, gyroscope, and attitude data come from the
-  browser's motion and orientation events. On browsers that require
-  permission, such as Safari on iOS, the first sensor use asks for it at the
-  next gesture, and a denial returns an explicit status.
-* **Orientation and safe area:** `Screen.orientation` reports the current
-  orientation. An orientation lock applies where the browser allows it, such
-  as fullscreen in Chrome on Android, and is reported as Platform-limited
-  elsewhere. `Screen.safeArea` reflects the browser's safe-area insets.
-* **Vibration:** `Handheld.Vibrate` works where the browser offers vibration,
-  and returns an explicit status elsewhere.
-* **Mobile browsers:** Safari on iOS and iPadOS and Chrome on Android are
-  supported browsers. On these devices the player applies the mobile memory
-  limit the browser enforces. It reports the limit at startup and keeps the
-  out-of-memory report above. Browsers on iOS and iPadOS that use Safari's
-  engine behave as Safari.
-
-### Text input and clipboard
-
-* **Virtual keyboard:** on touch devices, focusing a uGUI, TextMeshPro, UI
-  Toolkit, or IMGUI text field opens the browser's on-screen keyboard. The
-  keyboard follows the field's content type, multiline setting, and secure
-  setting where the browser allows. Text, selection, composition, submission,
-  and cancellation flow back to the field. `TouchScreenKeyboard` behaves as UI,
-  audio, and input defines, and `WebGLInput.mobileKeyboardSupport` keeps its
-  Unity meaning.
-* **IME:** composition works on desktop browsers as UI, audio, and input
-  defines.
-* **Clipboard:** clipboard access behaves as UI-001 in
-  [UI, audio, and input](ui-audio-input.md) defines for the browser target.
-  Writing happens within the gesture that triggered the copy, where the
-  browser requires one.
-
-### Visibility and background tabs
-
-* Hiding the page, by switching tabs or minimizing, delivers
-  `OnApplicationFocus(false)` and, with Run In Background off,
-  `OnApplicationPause(true)`. Showing it again delivers the reverse.
-* With Run In Background on, the player keeps running in a hidden tab at the
-  rate the browser allows. Browsers throttle hidden tabs and may stop their
-  frames entirely. The player reports the throttling.
-* Returning from a throttled or stopped state never produces a burst of
-  catch-up frames. `Time.deltaTime` is bounded by `Time.maximumDeltaTime`,
-  fixed updates are bounded as Unity defines, and game time continues from
-  where it stopped without a jump. `Time.realtimeSinceStartup` reports real
-  elapsed time.
-* Audio follows the pause state. Network connections stay open while the
-  browser allows.
-
-### Audio and video on the web
-
-Audio plays through the browser's Web Audio output. Every AUD-001 behavior in
-[UI, audio, and input](ui-audio-input.md) applies: clip load types
-(Decompress On Load, Compressed In Memory, and Streaming), mixer groups,
-snapshots and effects, filters, `OnAudioFilterRead`, spatial audio, and
-`GetSpectrumData` and `GetOutputData`. These are unitas extensions where Unity
-2022.3 LTS's WebGL player lacks them.
-
-* **Autoplay unlock:** browsers start audio only after a user gesture. Until
-  the first click, touch, or key press on the page, audio is reported as not
-  permitted, and sources that play are tracked as playing silently. The first
-  gesture enables audio, and sources continue from their current time. On
-  Safari for iOS, the unlock uses the gesture that the browser accepts for
-  audio, including a touch ending.
-* **Suspension:** a context that the browser suspends later resumes after the
-  next gesture. The game can observe whether audio is currently permitted.
-* **Device mute:** the iOS ring/silent switch affects browser audio as the
-  operating system decides. The player reports that state where the browser
-  exposes it.
-* **Compressed audio:** every encoding AUD-001 lists decodes in every supported
-  browser, including encodings the browser's own decoder lacks.
-* **Latency:** the output latency the browser reports is shown in audio
-  inspection and diagnostics. Where the browser reports none, the latency is
-  reported as unknown.
-* **Microphone:** microphone capture behaves as UI, audio, and input defines
-  for the browser target.
-
-Video follows MED-001.
-
-* `VideoPlayer` plays `VideoClip` assets and URL sources on the Web target.
-  Unity 2022.3 LTS's WebGL player plays only URLs, so `VideoClip` playback is
-  a unitas extension.
-* Every codec and container MED-001 lists plays in every supported browser,
-  including codecs the browser's own decoder lacks. The decoding path in use
-  is reported as a performance property.
-* A cross-origin video URL whose server sends no CORS headers cannot be read
-  into a texture in a browser. It is reported as Platform-limited, naming the
-  URL and the missing header.
-* Video with sound starts under the same autoplay rule as audio.
-
-### Storage
-
-* **PlayerPrefs:** `PlayerPrefs` is stored in the page origin's IndexedDB
-  storage, with no fixed size limit, as SAV-001 defines. Reads and writes in
-  game code are synchronous, as in Unity. `PlayerPrefs.Save` returns after the
-  preferences are durable.
-* **Files:** `Application.persistentDataPath` returns the path form Unity
-  2022.3 LTS returns for WebGL, scoped to the page's origin. Files under it use
-  `System.IO` synchronously. A closed file is copied to IndexedDB
-  automatically and reported as pending until the copy completes, as SAV-001
-  defines.
-* **Quota:** the player reports the quota and usage the browser grants. A
-  write that exceeds the quota fails in the calling code with the .NET
-  exception for a full disk, naming the path, never with apparent success.
-* **Persistence:** a project setting asks the browser to make storage
-  persistent. Whether the browser granted that is observable. Storage that the
-  browser may evict is reported as best-effort.
-* **Private browsing:** where private browsing makes storage session-only or
-  smaller, the player reports storage as session-only at startup, and writes
-  behave as above within that storage.
-* **Origin scope:** builds served from different origins never share
-  storage.
-
-### Networking on the web
-
-* **Web requests:** `UnityWebRequest` runs over the browser's fetch and
-  `XMLHttpRequest` APIs, with the RUN-009 behaviors in
-  [Scripting runtime](scripting-runtime.md). Upload and download progress,
-  streaming download handlers, timeouts, and `Abort` work. A request blocked
-  by CORS returns `ConnectionError`, and diagnostics name the URL and the
-  missing response header. An HTTP request from an HTTPS page is reported as
-  mixed content. Forbidden headers are reported as RUN-009 defines.
-* **WebSocket:** `ClientWebSocket` and the Unity Transport WebSocket interface
-  connect to WebSocket servers, as RUN-009 and
-  [Unity Transport](#unity-transport) define. A `ws://` URL from an HTTPS page
-  is reported as mixed content.
-* **WebRTC:** a game that opens WebRTC data channels, through JavaScript
-  interop or a package that CMP-002 lists, receives their messages in managed
-  code in order. Connection state changes are reported.
-* **No raw sockets:** browsers give pages no raw TCP or UDP access. This is a
-  real browser absence, and socket use is reported as RUN-009 defines.
-
-### Browser support matrix
-
-Each release declares, under CMP-005 in the
-[Compatibility contract](compatibility-contract.md), the minimum browser
-versions for the Web target. The matrix covers at least:
-
-| Browser | Platforms | Versions |
-|---|---|---|
-| Chrome | Windows, macOS, Linux, ChromeOS, Android | current stable and previous major |
-| Edge | Windows, macOS | current stable and previous major |
-| Firefox | Windows, macOS, Linux, Android | current stable, previous major, and current Extended Support Release |
-| Safari | macOS, iOS, iPadOS | current major and previous major |
-
-For each browser and platform, the matrix states WebGPU, browser threads,
-SIMD, 64-bit memory, compressed texture formats, audio, gamepad, fullscreen,
-pointer lock, clipboard, and storage persistence.
-
-On a browser below the declared minimum, the loader does not start the player.
-The page receives an error that names the browser, its version, and the
-minimum, and the Default template shows it. A project setting lets the player
-start anyway, with a warning banner. A browser that meets the minimum but lacks
-an optional capability, such as WebGPU or threads, starts with the fallback
-defined above and is not treated as unsupported.
-
-### Web performance and optimization
-
-The Web target is optimized as far as the browser allows. The outcomes below
-are measurable, and the reference-project measurements are published with
-each release.
-
-#### Rendering
-
-When WebGL 2 is active, rendering uses a path designed for WebGL 2's
-constraints, never a slow generic fallback.
-
-* **Batching and instancing:** on the reference projects, draw-call and batch
-  counts under WebGL 2 and WebGPU equal those of the same project's Android
-  OpenGL ES 3 player.
-* **Shader warm-up:** shader programs and pipelines that the build's shader
-  variant collections and its first scene need are compiled at load, and the
-  startup report states the warm-up time. `ShaderVariantCollection.WarmUp` and
-  `Shader.WarmupAllShaders` are honored.
-* **Compilation hitches:** on the reference projects, no frame during gameplay
-  stalls longer than 4 ms for shader or pipeline compilation. Development
-  builds report each variant that was first compiled during gameplay, naming
-  the shader, pass, and keywords.
-* **Texture uploads:** no texture upload stalls a frame for more than 2 ms.
-* **Supercompressed textures:** these transcode to the best format the device
-  offers, as described in [Texture compression](#texture-compression).
-* **Compute-dependent features:** these run on both APIs, as described in
-  [Render pipelines and features on the web](#render-pipelines-and-features-on-the-web).
-
-#### WebAssembly
-
-* **Code Optimization:** each choice has a measured effect on code size and
-  frame time, stated in the size report.
-* **Streaming:** the module compiles and instantiates while data downloads.
-* **SIMD:** used where the browser offers it.
-* **Garbage collection:** with incremental garbage collection, which is on by
-  default and honors `GarbageCollector.GCMode`, main-thread collection pauses
-  are 2 ms or less at the 99th percentile on the reference projects.
-* **Memory:** during steady-state play after load, the heap does not grow. In a
-  replayed session (TST-002) that loops the same gameplay, the heap size after
-  the last loop equals the size after the first loop.
-* **High-water mark:** the heap high-water mark is reported in development
-  diagnostics, in the profiler, and in out-of-memory reports.
-
-#### Startup and size
-
-* **Progressive loading:** a build option splits build data by scene and by
-  Addressables group. The first interactive frame waits only for the content
-  the first scene needs. Later scenes download in build order after the first
-  frame. A load of a scene that has not arrived waits for its content, and
-  `LoadSceneAsync` progress includes that download. The wait is reported in
-  development diagnostics.
-* **Startup report:** the startup report states the time spent in download,
-  compilation, instantiation, engine start, first scene load, and shader
-  warm-up, and the time to the first interactive frame.
-* **Size report:** every Web build produces a download-size report. It breaks
-  the transfer into code (the WebAssembly module and framework), data
-  (scenes, assets, and resources), streaming assets, and Addressables
-  content. It lists sizes before and after compression, per assembly, per
-  engine module, and per asset, with the largest contributors first. It also
-  lists the change from the previous build of the same target.
-
-#### Engine web budgets
-
-These are engine budgets, declared and measured alongside the PRF-002 budgets
-in
-[Diagnostics, profiling, and playtesting](diagnostics-profiling-playtesting.md)
-under PRF-002's measurement and regression rules. A measurement beyond a
-budget is a visible regression.
-
-* The Roll-a-Ball-style sample's compressed transfer is no more than 15 MB.
-* Its first interactive frame arrives within 3 s on a cold cache over a
-  50 Mbps connection, and within 1 s on a warm cache, on the reference desktop.
-* It runs at 60 fps at 1080p on the reference integrated-GPU laptop in Chrome,
-  Edge, Firefox, and Safari.
-* It runs at 60 fps on the reference mid-range phone in Chrome on Android and
-  Safari on iOS.
-* The 2D platformer sample's heap stays under 256 MB.
-
-#### Project budgets
-
-A project declares its own web budgets: compressed transfer size, initial
-download size, heap size, and time to first interactive frame. Each build
-result and each headless browser test run reports every project budget as met
-or exceeded. A project setting makes an exceeded budget fail the build.
-Project budgets are separate from the engine budgets of PRF-002.
-
-#### Frame pacing
-
-* Frames are driven by the browser's animation frame callback. With
-  `Application.targetFrameRate` at -1, the player presents on every display
-  refresh, including on high-refresh displays. A positive value paces frames
-  below the refresh rate, as REN-007 in
-  [Rendering and animation](rendering-and-animation.md) defines.
-* Background-tab throttling is handled as described in
-  [Visibility and background tabs](#visibility-and-background-tabs).
-* The device pixel ratio cap and resolution scale settings (URP render scale
-  and dynamic resolution) are available for performance, and their effect is
-  shown in the profiler.
-
-#### Web build profile
-
-The editor has a web build profile view. For a Web build, it reports size per
-assembly, engine module, and asset, flags the largest contributors, and
-recommends stripping, Code Optimization, compression, and texture format
-settings with their estimated savings. Agents use it as an editor command
-through the editor's MCP interface (AUT-002). The browser player itself
-carries no such interface.
-
-### Web diagnostics
-
-* **Console forwarding:** `Debug.Log`, `Debug.LogWarning`, `Debug.LogError`,
-  and exceptions reach the browser console with matching severity. Browser
-  console messages, including graphics API errors and page script errors,
-  reach the editor's device log stream (DIA-003) when the editor is connected.
-* **Development builds:** Autoconnect Profiler, Deep Profiling Support, and
-  Show Diagnostics Overlay are honored. A development browser player connects
-  to the editor's profiler (PRF-001) and to script debugging (DIA-002) with
-  breakpoints and stepping, under the pairing rules of
-  [Deployment, device connection, and development players](#deployment-device-connection-and-development-players).
-  Script debugging is a unitas extension.
-* **Crash and exception reports:** unhandled managed exceptions, WebAssembly
-  traps, out-of-memory failures, and unrecoverable graphics errors produce
-  DIA-003 reports. Each report carries the build identifier, the browser and
-  its version, the operating system, the graphics API and adapter, and mapped
-  stacks. Reports go only to a destination the project configures, and the
-  page's error path receives each one.
-
-### Automated browser testing
-
-The headless editor and the command line (BLD-002) run project tests (TST-003)
-and structured scenarios (TST-002) in a Web build inside browsers that the
-editor launches and controls with no display. The Unity test-platform argument
-for WebGL selects this mode.
-
-* The invocation selects one or more installed browsers (Chromium-based,
-  Firefox, and WebKit-based) and whether the page is cross-origin isolated.
-* The editor serves the build with its development server and collects test
-  results, logs, console output, crash reports, startup reports, and project
-  budget results into the same machine-readable output and `-testResults` file
-  as other test runs.
-* Each result records the browser, its version, the graphics API, and whether
-  rendering ran on a GPU or a software rasterizer.
-* A requested browser that is not installed is reported as a missing toolchain
-  with its distinct exit status.
+The Web target, the browser delivery of PLT-001, is detailed in
+[Web target](web-target.md). PLT-001 remains owned by this specification. The
+Web target document owns no catalog feature; its acceptance outcomes
+demonstrate PLT-001 together with the features they name, and every rule of
+this specification applies to the Web target unless that document states what
+the browser changes.
 
 ## Windows target
 
@@ -1165,10 +501,14 @@ Windows Platform (UWP) player.
   launcher packaging is done by the developer's tools, outside the build.
 * **Signing:** Authenticode signing is reported as defined in
   [Signing, notarization, and store packaging](#signing-notarization-and-store-packaging).
-* **Graphics APIs:** Direct3D 11 (the default), Direct3D 12, Vulkan, and
-  OpenGL Core, in the order of the project's Graphics APIs list, with fallback
-  to the next API when one fails to start. The startup report names the API
-  chosen and the reason any earlier one was skipped. Direct3D 12 ray tracing is
+* **Graphics APIs:** the project's Graphics APIs list (Direct3D 11, the
+  default, Direct3D 12, Vulkan, and OpenGL Core) is honored in its order, with
+  fallback to the next entry when one fails to start. Each entry is served by a
+  render-graph backend: Direct3D 12, Vulkan, and OpenGL Core by their own
+  backends, and Direct3D 11 by the Direct3D 12 backend at Direct3D 11-class
+  feature levels. `SystemInfo.graphicsDeviceType` returns the type of the
+  requested entry, and the startup report names the requested entry, the
+  backend that serves it, and the reason any earlier entry was skipped. Direct3D 12 ray tracing is
   available on hardware that offers it.
 * **Lifecycle:** minimizing delivers focus and pause messages unless Run In
   Background is on. Closing the window calls `Application.wantsToQuit`, then
@@ -1455,6 +795,10 @@ identity, and the public types and members of those packages keep their Unity
 defines, and every known difference from Unity is listed in the API reference
 owned by AUT-006 in [Automation and MCP](automation-and-mcp.md).
 
+The managed code of each listed XR package runs as shipped. unitas provides the
+engine APIs and native subsystems that code calls, including an OpenXR provider
+that takes the place of the package's native provider library.
+
 XR exposes tracked head and controller poses, tracking state, declared actions,
 device capabilities, render views, recentering, interaction, the haptics each
 device offers, and focus state.
@@ -1493,12 +837,18 @@ active OpenXR runtime.
   devices and controls that the profile defines (INP-002). The runtime's
   current binding for each hand is observable. Haptic impulses sent to a
   controller reach the runtime with their amplitude, duration, and frequency.
-* **Render modes and spaces:** multi-pass and single-pass instanced rendering,
-  depth submission, and the runtime's preferred view configuration render
-  every eye view. The tracking origin mode (device, floor, or unbounded where
+* **Views and spaces:** the runtime's preferred view configuration defines the
+  render views, which are drawn as the Stereo rendering section of
+  [Rendering and animation](rendering-and-animation.md) defines, with depth
+  submitted where the runtime accepts it. The tracking origin mode (device, floor, or unbounded where
   the runtime offers it) and `XRInputSubsystem.TryRecenter` behave as the
   device reports them. Play area boundary points are readable when the runtime
   provides them.
+* **Frame timing:** rendered views use head and eye poses predicted for the
+  frame's display time that the runtime reports. Each late or missed frame is
+  counted and reported per session with its duration. The refresh rates the
+  runtime offers are listed, the project's choice among them is applied, and
+  the active rate is observable.
 * **Failures:** no active runtime, a runtime that refuses to create a session,
   and a runtime that does not offer a required view configuration each
   produce a distinct initialization failure that names the runtime and the
@@ -1529,6 +879,31 @@ Hands on any device whose runtime exposes hand tracking.
   subsystem is not started; projects that offer controller input continue
   with controllers.
 
+### AR Foundation
+
+As a developer of an augmented-reality app, I use AR Foundation with the Apple
+ARKit and Google ARCore providers within the version lines CMP-002 lists, on
+devices that expose AR tracking.
+
+* **Session:** `ARSession` reports its state (unsupported, checking
+  availability, needs install, ready, session initializing, and session
+  tracking) and the reason tracking is limited. Installing or updating the
+  device's AR services is offered where the provider supports it.
+* **Trackables:** planes, point clouds, anchors, tracked images, tracked
+  faces, and environment probes are added, updated, and removed through their
+  managers with the provider's tracking state, and raycasts against planes,
+  feature points, and depth return hits with their trackable and pose.
+* **Camera and environment:** the camera background renders through the
+  render graph in every listed render pipeline, and light estimation and
+  occlusion values are reported where the provider offers them.
+* **Capabilities:** each subsystem descriptor states what the device and
+  provider support. A manager whose subsystem the device lacks is reported as
+  Platform-limited, naming the device, provider, and feature, and the rest of
+  the session continues.
+* **Editor and headless:** sessions in the editor and in headless play
+  sessions run against a simulated environment whose trackables the session
+  declares, and that environment is always reported as simulated.
+
 ## Networking behavior
 
 Networked play is provided through Netcode for GameObjects, Netcode for
@@ -1537,6 +912,31 @@ within the version lines that CMP-002 lists. Netcode content imports with its
 identity, and the API shape below keeps its Unity 2022.3 LTS names and
 signatures; the behavior is the behavior this section defines, and every known
 difference from Unity is listed in the AUT-006 API reference.
+
+The managed code of each listed networking package runs as shipped. unitas
+provides the sockets, jobs, and engine APIs that code calls.
+
+When a supported networking package and version is declared for the project, a
+game can represent sessions, connections, player identity, ownership, messages,
+synchronized state, remote actions, timeouts, disconnection, reconnection, late
+joining, and incompatible versions.
+
+As a player, I receive distinct outcomes for successful connection, refused
+connection, unreachable endpoint, full session, authentication failure, version
+mismatch, timeout, host departure, and deliberate disconnection.
+
+As a developer, I can associate logs, objects, state changes, traffic, and
+errors with the correct participant. Multiple local test instances, including
+headless instances, retain distinct identity. Simulated latency, jitter, loss,
+duplication, and reordering, including those that the Unity Transport
+simulator applies, are visibly marked as test conditions.
+
+Network success is separate from local gameplay success. A locally correct
+action is not reported as synchronized until the remote observation that the
+scenario or test declares occurs. Conflicts, authority rejection, and stale
+state are explicit.
+
+### Netcode for GameObjects
 
 * **`NetworkManager` start modes and connection approval:** `StartHost` runs a
   server and a local client in one instance, `StartServer` runs a server with
@@ -1578,25 +978,6 @@ difference from Unity is listed in the AUT-006 API reference.
 * **Unity Transport:** the configured address and port select the endpoint, and
   the transport's connection and disconnect timeouts produce the timeout
   outcome.
-
-When a supported networking package and version is declared for the project, a
-game can represent sessions, connections, player identity, ownership, messages,
-synchronized state, remote actions, timeouts, disconnection, reconnection, late
-joining, and incompatible versions.
-
-As a player, I receive distinct outcomes for successful connection, refused
-connection, unreachable endpoint, full session, authentication failure, version
-mismatch, timeout, host departure, and deliberate disconnection.
-
-As a developer, I can associate logs, objects, state changes, traffic, and
-errors with the correct participant. Multiple local test instances, including
-headless instances, retain distinct identity. Simulated latency, jitter, loss,
-duplication, and reordering, including those that the Unity Transport
-simulator applies, are visibly marked as test conditions.
-
-Network success is separate from local gameplay success. A locally correct
-action is not reported as synchronized until the declared remote observation
-occurs. Conflicts, authority rejection, and stale state are explicit.
 
 ### Netcode for Entities
 
@@ -1688,13 +1069,26 @@ product distinguishes unavailable integration, user cancellation, offline
 state, permission denial, authentication expiration, rate limits, service
 failure, and incompatible account state.
 
+* **Outcomes:** every service call returns one of those outcomes, distinct from
+  each other and from success, and the outcome is attributed in diagnostics to
+  the service, the call, and the participant that made it.
+* **Offline:** a game that loses connectivity receives the offline outcome for
+  every pending and new call, keeps running, and receives a connectivity
+  change when it returns.
+* **Inspection:** for each service a project uses, the editor and automation
+  show whether the integration is configured for the target and whether the
+  project holds credentials for it, without revealing them.
+
 A project request never creates a claim that the developer owns a service,
 license, signing identity, or platform entitlement.
 
-Input, Addressables content delivery, localization, networking, and XR
-capabilities that originate in separately versioned Unity packages are reported
-against the specific package and version line listed in CMP-002. Project use of
-one version is not evidence that every version or provider behaves identically.
+The Unity Gaming Services SDKs (`com.unity.services.*`, including
+Authentication, Lobby, Relay, Cloud Save, and Analytics) in the version lines
+CMP-002 lists run as shipped. With a service account and credentials
+configured for the project, their calls reach the services. Without them,
+calls return the services' own unavailable errors, which are reported as the
+unavailable-integration outcome. Their data flows follow
+[Product data flows, telemetry, and privacy](#product-data-flows-telemetry-and-privacy).
 
 ## Deployment, device connection, and development players
 
@@ -1735,7 +1129,12 @@ the unitas version, the target, and the bundles and catalog it produced.
 A unitas player loads AssetBundles and Addressables content built by Unity
 2022.3 LTS and by the earlier Unity releases whose projects unitas migrates
 (SER-005 in [Serialization and prefabs](serialization-and-prefabs.md)), for
-the player's target, as well as content built by unitas. A shipped Unity game
+the player's target, as well as content built by unitas. A Unity-built bundle
+is converted to cooked form when it is first loaded, by the same importer code
+the editor uses for that format, including its shader translation, as the
+[Engine architecture](architecture.md#content-pipeline) defines. The result is
+cached on the device by the bundle's content hash, and later loads read only
+the cooked result. A shipped Unity game
 can therefore move to a unitas player and keep its existing content delivery:
 
 * **Bundle archives:** uncompressed, LZ4, LZ4HC, and LZMA bundle archives load
@@ -1749,10 +1148,10 @@ can therefore move to a unitas player and keep its existing content delivery:
   the player's script types by assembly, namespace, and class name. A script
   type absent from the player leaves a missing-script record, as SER-004
   defines.
-* **Shaders and materials:** shaders in Unity-built bundles render through the
-  same translation that REN-006 in
+* **Shaders and materials:** shaders in Unity-built bundles are translated,
+  during that conversion, by the same translation that REN-006 in
   [Rendering and animation](rendering-and-animation.md) applies to project
-  shaders. Each variant that the bundle carries is available, and a variant
+  shaders at import. Each variant that the bundle carries is available, and a variant
   the bundle stripped is reported by shader and keyword set.
 * **Manifests, dependencies, and catalogs:** `AssetBundleManifest` content,
   bundle dependencies, and Addressables content catalogs in the forms that
@@ -1840,6 +1239,28 @@ installation usable. An offline installation package installs every selected
 component without network access, and an unreachable update service never
 prevents use of an installed version.
 
+### Getting unitas
+
+* **Installers:** each release ships signed installers for every supported host
+  operating system: an Authenticode-signed Windows installer, a signed and
+  notarized macOS installer, and Linux packages, plus archives that run
+  without installation. The same releases are published through each host's
+  common package managers.
+* **Launcher:** a launcher application lists the developer's projects with the
+  unitas version each uses, installs and removes unitas versions and the
+  support for each build target, opens each project with its version, creates
+  projects from templates, and configures licenses. Every launcher operation
+  is also a command-line operation, for continuous integration.
+* **Source:** the complete source of every release is public under the GPLv3,
+  with each release tagged. Building from that source with the documented
+  toolchain produces an installation that behaves identically to the released
+  one, and release binaries are reproducible from their tagged source.
+* **Continuous integration:** each release publishes container images of the
+  headless editor for Linux hosts, with target support preinstalled per image.
+* **Licenses:** a commercial license, where a developer holds one, is
+  configured in the launcher, the editor, or the command line, and governs as
+  [Licensing](#licensing) defines.
+
 Target toolchains, including the Android SDK, NDK, and JDK, Xcode on macOS
 hosts, the browser build toolchain, and the .NET toolchain, are located when
 already installed or acquired with the user's consent. Each located toolchain
@@ -1852,8 +1273,8 @@ accept those terms.
 
 ## Product data flows, telemetry, and privacy
 
-A player contains no telemetry, analytics, or network connection that the game
-itself did not request. The editor, including its MCP interface, and the command line
+A player contains no telemetry, analytics, or network connection that neither
+the game nor the build's development options requested. The editor, including its MCP interface, and the command line
 send project content only to MCP clients and external tools that a person authorized
 (AUT-004, AUT-007 in [Automation and MCP](automation-and-mcp.md)) and to
 devices and services that a person directed, such as deployment targets,
@@ -1864,7 +1285,7 @@ and its destination, and neither ever blocks offline use. Apple target builds
 include a privacy manifest that covers the required-reason APIs used by the
 included unitas components.
 
-## Acceptance stories
+## Acceptance outcomes
 
 1. A configured project produces the expected artifact for each declared target
    or a precise target-specific incompatibility report, and the build result
@@ -1893,17 +1314,22 @@ included unitas components.
    a stripped member raises an exception naming the member and the
    preservation mechanisms; preserving it with `link.xml` removes the
    exception. (BLD-003)
-8. A built player launches the configured scene and handles focus, pause,
-   permissions, and shutdown correctly on its platform. (PLT-001)
+8. A built player launches the configured scene and delivers focus, pause,
+   permission, and shutdown messages in the order its target's section
+   defines. (PLT-001)
 9. Mobile and browser lifecycle changes, including backgrounding, page refresh,
-   storage quota exhaustion, and lost graphics or audio context, preserve or
-   reject game state in a defined, inspectable way. (PLT-001)
+   storage quota exhaustion, and lost graphics or audio context, each report
+   the state change with the data preserved or the reason it was rejected.
+   (PLT-001)
 10. A target without the required host toolchain or user entitlement reports
     Externally unavailable with the specific cause rather than an engine
     failure. (PLT-001, PRD-001)
-11. XR play distinguishes real hardware state, tracking loss, input capability,
-    and performance from desktop approximation. (XR-001)
-12. A multiplayer sample using Netcode for GameObjects distinguishes connection,
+11. An XR play session reports whether it runs on a device or a simulated
+    runtime, reports tracking loss and recovery, lists each input capability
+    the device offers, and counts late and missed frames; a simulated session is
+    never reported as device evidence. (XR-001)
+12. The [multiplayer arena sample](sample-games/11-multiplayer-arena.md),
+    which uses Netcode for GameObjects, distinguishes connection,
     synchronization, gameplay, and service failures and identifies the affected
     participant across local and headless instances. (NET-001)
 13. A GPLv3 build's result records that the player is conveyed under the GPLv3,
@@ -1934,15 +1360,16 @@ included unitas components.
     after the fix reuses unchanged completed work and states what it redid.
     (BLD-001)
 20. A release player contains no automation, debugger, or profiler endpoint and
-    no build-host absolute paths, and a release build that contains a
-    development-only capability names it in the build result. (BLD-001)
+    no build-host absolute paths, and any other development-only capability in
+    a release build is named in the build result. (BLD-001)
 21. A headless invocation without the PRJ-008 trust argument refuses to run a
     project's static editor method, and a project build started through
     `BuildPipeline.BuildPlayer` produces the same build result as a command-line
     build. (BLD-002, PRJ-008, RUN-010)
-22. A Linux dedicated server player runs with `-batchmode -nographics`, defines
-    `UNITY_SERVER`, and reports a graphics API call as Platform-limited.
-    (PLT-001)
+22. A Linux dedicated server player, launched without arguments, behaves as if
+    launched with `-batchmode -nographics`, defines `UNITY_SERVER`, keeps a
+    renderer's material and bounds readable, and reports its first draw call as
+    Platform-limited once. (PLT-001)
 23. A target listed in the release's licensing table as conflicting with GPLv3
     distribution states that distribution requires the commercial license.
     (LIC-001)
@@ -1958,8 +1385,8 @@ included unitas components.
     unitas player with the same values and references; content built for an
     incompatible player version or for another target is reported by bundle
     name and reason and is not loaded partially. (BLD-005, RUN-006)
-26. A player built from a project that makes no network requests opens no
-    network connection, the editor and its MCP interface send project content only to
+26. A release player built from a project that makes no network requests opens
+    no network connection, the editor and its MCP interface send project content only to
     authorized MCP clients and to destinations a person directed, unitas crash
     reporting stays off until a person enables it, and an iOS
     build includes a privacy manifest for the included unitas components.
@@ -2000,13 +1427,13 @@ included unitas components.
     delivers every reliable message once and in order, its logs mark the
     simulated conditions as test conditions, and the release build contains no
     active simulator stage; a browser player connects to the same server over
-    WebSocket. (NET-001, PLT-001)
+    WebSocket, as the [Web target](web-target.md) defines. (NET-001, PLT-001)
 34. A Windows x86 build, an Android ARMv7 build, a tvOS build, and a Universal
     Windows Platform build each produce their target's artifact, and a console
     target on a host with the platform holder's SDK installed builds and
     deploys to a development kit. (PLT-001, BLD-001, BLD-004)
-35. A macOS dedicated server player runs with `-batchmode -nographics` and
-    defines `UNITY_SERVER`. (PLT-001)
+35. A macOS dedicated server player behaves as if launched with
+    `-batchmode -nographics` and defines `UNITY_SERVER`. (PLT-001)
 36. An iOS player and a browser player each deserialize a save file with
     `XmlSerializer` and with `BinaryFormatter` into a generic container type
     created through `MakeGenericType`, and produce the same objects and the
@@ -2023,187 +1450,88 @@ included unitas components.
     the stripping exception naming the member, the stripping level, and the
     preservation mechanisms, and it is the only ahead-of-time failure the
     build or player reports. (BLD-003)
-39. A Web build with Auto Graphics API on runs on WebGPU in a browser that
-    offers it. In a browser without WebGPU, and in one whose adapter lacks a
-    required feature, the same build runs on WebGL 2, and the startup report
-    names the API tried, the reason it was skipped, and the API selected. A
-    build whose Graphics APIs list holds only WebGL 2 never uses WebGPU.
-    (PLT-001, BLD-001)
-40. A Web build served with the cross-origin isolation headers runs a thread
-    that blocks on its result and an `IJobParallelFor` on workers with the
-    same results as a desktop build. Served without the headers, it starts,
-    reports that browser threading is unavailable and names the missing
-    headers, and runs the jobs on the main thread with the same results.
-    (PLT-001, RUN-004, RUN-011)
-41. A Brotli build with Decompression Fallback off starts when served with
-    `Content-Encoding: br`, and fails without the header with an error naming
-    the file and the header. The same project with the fallback on starts
-    without the header, and its development build warns about the missing
-    header. A build served without `application/wasm` starts, and its
-    development build names that header. (PLT-001, BLD-001)
-42. A jslib function called through `[DllImport("__Internal")]` receives a
-    string and a float array, returns a string that C# reads intact, and calls
-    a `[MonoPInvokeCallback]` method with a number. A `SendMessage` from the
-    page reaches a named GameObject. A JavaScript exception in the jslib
-    function raises a C# exception that names the function and carries the
-    JavaScript message, and the player keeps running. (PLT-001, RUN-007)
-43. A browser game saves with `PlayerPrefs.Save` and writes a file under
-    `Application.persistentDataPath`. After the file reports synchronized, the
-    page is reloaded, and both values load in the new session. A write beyond
-    the storage quota fails in the calling code. In private browsing, storage
-    is reported as session-only at startup. (PLT-001, SAV-001)
-44. On Safari for iOS, a game that starts music before any touch reports
-    audio as not permitted. The first touch enables audio, the music
-    continues from its current time, and a context that the browser suspends
-    later resumes after the next touch. (PLT-001, AUD-001)
-45. When the WebGL 2 context is lost and restored during play, game logic keeps
-    running, rendering resumes on the next frame with every texture and mesh
-    intact, and render textures report `IsCreated` false until used again.
-    When the browser does not restore the context, the page receives an
-    unrecoverable graphics error naming the cause, and the page stays
-    responsive. The same holds for a lost WebGPU device. (PLT-001, REN-006)
-46. A project template in `Assets/WebGLTemplates` uses `PRODUCT_NAME`,
-    `PRODUCT_VERSION`, `DATA_FILENAME`, a `#if DECOMPRESSION_FALLBACK` block,
-    and a custom variable. The built page contains the expanded values, the
-    custom variable appears in Player Settings with its stored value, and a
-    template with an unbalanced `#if` is reported by file and line.
-    (PLT-001, BLD-001)
-47. A Web build's size report breaks the transfer into code, data, streaming
-    assets, and Addressables content, before and after compression, per
-    assembly, engine module, and asset, with the largest contributors first.
-    Changing Code Optimization from Runtime Speed to Disk Size with LTO shows
-    the measured code-size change. A project budget the build exceeds is
-    reported, and fails the build when the project setting asks for that.
-    (PLT-001, BLD-001, BLD-003)
-48. A command-line invocation with no display runs a project's play-mode
-    tests and a structured scenario in a Web build in a Chromium-based
-    browser and in Firefox, both controlled by the editor. Results, console
-    output, and startup reports for each browser land in the `-testResults`
-    file and the machine-readable output. A requested browser that is not
-    installed exits with the missing-toolchain status. (BLD-002, TST-002,
-    TST-003)
-49. A multi-format Web build with ASTC, DXT, and ETC2 data downloads only
-    ASTC data on a phone that offers ASTC and only DXT data on a desktop that
-    offers DXT. A texture in a format the device cannot sample is decompressed
-    at load and reported with its extra memory. (PLT-001, REN-002)
-50. A browser game that allocates beyond its Maximum Memory Size receives
-    `OutOfMemoryException`, and when it does not catch it, the page shows an
-    out-of-memory report with the requested size, the heap size, the
-    configured maximum, and the high-water mark, and stays responsive.
-    (PLT-001, DIA-003)
-51. In a Web build embedded in an iframe, a fullscreen request and a cursor
-    lock request made from game code apply at the next click on the canvas. In
-    an iframe whose policy denies fullscreen, the player reports the denied
-    permission. Escape leaves fullscreen and releases the cursor, and
-    `Screen.fullScreen` and `Cursor.lockState` report it. (PLT-001)
-52. On the reference projects under WebGL 2, the startup report states the
-    shader warm-up time, no gameplay frame stalls longer than 4 ms for shader
-    or pipeline compilation or longer than 2 ms for a texture upload, and the
-    draw-call counts equal those of the Android OpenGL ES 3 player.
-    (PLT-001, PRF-002)
-53. A 30-minute replayed session of the 2D platformer in a browser shows
-    main-thread garbage-collection pauses of 2 ms or less at the 99th
-    percentile, the same heap size after the last loop as after the first,
-    a heap that stays under 256 MB, and a reported heap high-water mark.
-    (PLT-001, PRF-002, TST-002)
-54. The Roll-a-Ball-style sample built for the Web target transfers no more
-    than 15 MB compressed, shows its first interactive frame within 3 s on a
-    cold cache over a 50 Mbps connection and within 1 s on a warm cache on the
-    reference desktop, runs at 60 fps at 1080p on the reference
-    integrated-GPU laptop in Chrome, Edge, Firefox, and Safari, and runs at
-    60 fps on the reference mid-range phone in Chrome on Android and Safari on
-    iOS. A measurement beyond any of these budgets is published as a
-    regression. (PLT-001, PRF-002)
-55. A URP project with a Visual Effect Graph effect, GPU culling, and a
-    project `ComputeShader` renders on WebGL 2 in a browser without WebGPU.
-    Each feature runs with the same results as on WebGPU, and any quality
-    difference is reported by feature and asset. (PLT-001, REN-004, REN-006)
-56. A Web build split by scene shows its first interactive frame before its
-    later scenes have downloaded, and loading a later scene with
-    `LoadSceneAsync` reports progress that includes its download. (PLT-001,
-    RUN-005, RUN-006)
-57. An agent requests the web build profile through the editor's MCP
-    interface and receives size per assembly, engine module, and asset, the
-    largest contributors, and recommended stripping, compression, and texture
-    format settings. The browser player built afterward contains no MCP
-    interface. (PLT-001, AUT-002)
-58. A browser game running at `targetFrameRate` -1 presents on every refresh
-    of a 120 Hz display. After its tab is hidden for one minute and shown
-    again, `Time.deltaTime` on the first frame is no larger than
-    `Time.maximumDeltaTime`, no burst of catch-up frames occurs, and
-    `OnApplicationFocus` and `OnApplicationPause` were delivered.
-    (PLT-001, REN-007)
-59. A browser game's `UnityWebRequest` to a server that sends no CORS headers
-    returns `ConnectionError`, and diagnostics name the URL and the missing
-    header. A `ClientWebSocket` connects to a WebSocket server, and a raw
-    socket fails with the platform-not-supported exception. Addressables
-    content loads from a CDN on a cross-origin isolated page, and a bundle
-    without a cross-origin resource policy is reported by URL. (PLT-001,
-    RUN-009, BLD-005)
-60. The editor's local development server serves a Web build with every
-    header in its manifest, and a phone on the local network opens the
-    build over HTTPS with browser threads available. A browser below the
-    declared minimum version receives an error naming the browser, its
-    version, and the minimum. (PLT-001, BLD-004)
-61. A development browser player connects to the editor's profiler and
-    debugger with its pairing credential. A breakpoint in a C# method stops
-    the player and the debugger steps through it. An unhandled exception
-    produces a crash report with the build identifier, browser, graphics API,
-    and a stack mapped to C# source lines. (PLT-001, BLD-004, DIA-002,
-    DIA-003)
-62. A Windows x86-64 build whose Graphics APIs list is Direct3D 12 then
-    Direct3D 11 runs on Direct3D 12, falls back to Direct3D 11 on a device
-    where Direct3D 12 fails, and names the reason. Its `PlayerPrefs` are in the
+39. A Windows x86-64 build whose Graphics APIs list is Direct3D 12 then
+    Direct3D 11 runs on Direct3D 12. On a device where Direct3D 12 fails to
+    start, it runs its Direct3D 11 entry on the Direct3D 12 backend at a
+    Direct3D 11-class feature level, and the startup report names the entry,
+    the backend, and the reason. Its `PlayerPrefs` are in the
     registry and its `persistentDataPath` is under `AppData\LocalLow`, as in
     Unity. A standalone ARM64 build runs natively and is reported as a unitas
     extension. (PLT-001, BLD-001)
-63. A UWP build produces a Visual Studio solution whose manifest declares the
+40. A UWP build produces a Visual Studio solution whose manifest declares the
     capabilities set in Publishing Settings. Suspending the app delivers
     `OnApplicationPause(true)` within Windows's deadline, and a use of an
     undeclared capability returns the platform's denial. (PLT-001, BLD-001)
-64. A universal macOS build runs natively on Apple Silicon and on Intel. With
+41. A universal macOS build runs natively on Apple Silicon and on Intel. With
     the hardened runtime and a distribution identity, it reports its
     entitlements and notarization state. With Mac App Store Validation on,
     the sandboxed app writes saves inside its container and a network access
     that the entitlements do not allow is denied. (PLT-001, BLD-001)
-65. A macOS player in Fullscreen Window mode on a display with a camera
+42. A macOS player in Fullscreen Window mode on a display with a camera
     housing reports a `Screen.safeArea` that excludes it, and Command-Q calls
     `Application.wantsToQuit` before `OnApplicationQuit`. (PLT-001, REN-007)
-66. A Linux x86-64 build runs under a native Wayland session and under X11, and
+43. A Linux x86-64 build runs under a native Wayland session and under X11, and
     its startup report names the display server. Its Vulkan device fails on a
     test machine and it falls back to OpenGL Core with the reason named. An
     AArch64 build runs natively and is reported as a unitas extension.
     (PLT-001, BLD-001)
-67. A Linux build deployed to a Steam Deck over the local network runs at the
+44. A Linux build deployed to a Steam Deck over the local network runs at the
     device's resolution with its built-in controls and touch screen, survives
     suspend and resume with `OnApplicationPause`, and stores its saves under
     `~/.config/unity3d/<company>/<product>`. (PLT-001, BLD-004)
-68. An Android app bundle with ARM64 and ARMv7 reports whether it meets Google
+45. An Android app bundle with ARM64 and ARMv7 reports whether it meets Google
     Play's target API level, 64-bit, and 16 KB page-size requirements, and a
     build from a release that does not meet the target API level reports
     store submission blocked while a local APK still builds. The same project
     exports a Gradle project. (PLT-001, BLD-001)
-69. An Android player on a device where Vulkan fails falls back to OpenGL ES 3
+46. An Android player on a device where Vulkan fails falls back to OpenGL ES 3
     and names the device and cause. A trim-memory notification raises
     `Application.lowMemory`. On Android TV, the remote's D-pad navigates the
     game's UI, and on a ChromeOS device the x86-64 player receives mouse and
     keyboard input as desktop input. (PLT-001, INP-002)
-70. An iOS build produces an Xcode project that builds for a device and for
+47. An iOS build produces an Xcode project that builds for a device and for
     the simulator. It reports whether it meets the App Store's Xcode, SDK,
     privacy manifest, usage description, and launch screen requirements, and
     a missing microphone usage description is reported before submission.
     (PLT-001, BLD-001, PRD-002)
-71. An iOS player with Behavior In Background set to Suspend delivers
+48. An iOS player with Behavior In Background set to Suspend delivers
     `OnApplicationPause(true)` when backgrounded and resumes with its state. A
     memory warning raises `Application.lowMemory`. A tvOS player reads the
     Siri Remote as a gamepad and honors `UnityEngine.tvOS.Remote` settings.
     (PLT-001, INP-002)
-72. On a host without a console platform holder's SDK, each console target is
+49. On a host without a console platform holder's SDK, each console target is
     Externally unavailable with the missing SDK or entitlement named, and no
     console capability is implied. (PLT-001, BLD-001)
-73. On a host with a console platform holder's SDK and the user's
+50. On a host with a console platform holder's SDK and the user's
     entitlement, a console build deploys to a development kit, delivers
     suspend and resume as lifecycle messages, is never presented as
     certified, and states that distribution requires the commercial
     license. Its console-specific settings do not appear in diagnostics that
     leave the machine. (PLT-001, BLD-004, LIC-001)
+51. An AR Foundation app on a device with ARKit or ARCore reports
+    its session state, detects a horizontal plane, places an anchor with a
+    raycast against it, and keeps the anchor after tracking is limited and
+    recovered; on a device without image tracking, the image manager is
+    reported as Platform-limited and the session continues. (XR-001)
+52. A game using Unity Gaming Services Authentication and Cloud Save
+    with no service credentials configured receives the unavailable-integration
+    outcome for each call and keeps running; with network access removed while
+    a save is pending, it receives the offline outcome and a connectivity
+    change when access returns. (NET-001, PRD-002)
+53. On a macOS host, a developer builds the same project as a Windows x86-64
+    player with each scripting backend, Authenticode-signed with the
+    developer's certificate. The player runs on Windows with the same scenario
+    results as a player built on a Windows host, and the build results of the
+    two hosts differ only in their host fields. (BLD-001, BLD-003, PLT-001)
+54. A Windows, macOS, and Linux build of one project each produces one folder
+    per target and architecture that uploads as a Steam depot without
+    rearrangement. A game using a Steamworks binding package initializes the
+    Steam client API, unlocks an achievement, and shows the Steam overlay in a
+    development build. An agent's upload request waits for a person, and the
+    person's approved upload reports SteamPipe's result. (BLD-001, PLT-001,
+    AUT-007)
+55. The launcher installs a unitas version with Windows, macOS, and Linux
+    target support, opens a project with that version, and a second version
+    installs beside it; an installation built from the release's tagged source
+    produces a player identical to the one the released installation produces
+    for the same project. (PRD-001)

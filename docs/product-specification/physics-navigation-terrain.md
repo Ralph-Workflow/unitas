@@ -1,4 +1,4 @@
-# Physics, Navigation, and Terrain Product Specification
+# Physics, Navigation, and Terrain
 
 ## Scope
 
@@ -28,6 +28,53 @@ Every difference from Unity 2022.3 LTS in a Familiar feature is listed in the
 API reference (AUT-006 in [Automation and MCP](automation-and-mcp.md)) and in
 project compatibility reports. Tiers are defined in the
 [Compatibility contract](compatibility-contract.md).
+
+## Architecture
+
+The domain is four subsystems below scripting, layered as in
+[Engine architecture](architecture.md): 3D physics, 2D physics, navigation, and terrain. Each
+derives its state from the one authoritative world through change tracking, registers its work
+into the PlayerLoop, and keeps no second copy of scene state.
+
+* **Solver worlds.** 3D and 2D physics each run on a mature, established solver. Every
+  `PhysicsScene` and `PhysicsScene2D`, default or local, is one solver world; 2D and 3D worlds
+  share nothing. Bodies, colliders, joints, articulations, wheels, and cloth are solver objects
+  derived from their components. Collision meshes, hulls, and heightfields come from cooked
+  import artifacts; runtime cooking (`Physics.BakeMesh`, tilemap and composite colliders) uses
+  the same cooker.
+* **Step.** A step runs where the simulation mode places it (fixed update, Update, or inside
+  `Simulate`) as sync in, solve, sync out, dispatch. Sync in applies the component, activation,
+  layer, and transform changes recorded since the last step; sync out writes dynamic poses to
+  the world and marks them changed. Their cost follows changed and awake content, never the
+  count of sleeping or static colliders. Interpolation writes only presented transforms.
+* **Parallelism.** Solver work runs as jobs on the engine job system; no solver owns threads.
+  Contact modification callbacks run on those jobs during the solve; collision and trigger
+  messages, `Physics.ContactEvent`, and joint breaks are gathered during the step and
+  dispatched on the main thread after it. Enhanced determinism selects a configuration whose
+  results depend only on inputs and target, never on job scheduling.
+* **Queries.** Queries read a consistent snapshot: the last step's result plus the changes the
+  auto-sync-transforms rule has flushed. Batch queries run as jobs against that snapshot; no
+  query observes a half-applied step. Character controllers and wheels use the same queries.
+* **Navigation.** A build snapshots its source geometry on the main thread, then voxelizes and
+  tiles it as jobs with per-tile progress and cancellation; a finished build replaces the
+  previous data atomically at a frame boundary, and a failed or cancelled one leaves it in
+  place. Carving and `UpdateNavMesh` rebuild only affected tiles; edit-time builds use the same
+  builder. Agent update (path following, steering, avoidance) runs as jobs in navigation's
+  PlayerLoop phases; path requests resolve across frames, which is the pending state the API
+  reports, and script queries read the same data the agents use.
+* **Terrain.** `TerrainData` exists once in the asset system, shared by every terrain and
+  collider that uses it. The terrain subsystem derives from it render proxies (height and
+  control textures, level-of-detail patches, instanced detail and tree batches, billboards) for
+  the render graph and a solver heightfield with tree colliders. An edit marks changed regions,
+  and only those are re-derived before the next render and physics sync; `SetHeightsDelayLOD`
+  defers the level-of-detail rebuild to `SyncHeightmap`. Terrain loads asynchronously with its
+  scene, and drawing cost follows visible patches and instances, not terrain size.
+* **Origin shifts** are one world operation between frames: every subsystem offsets its derived
+  state (solver origins, navigation data, terrain, render and audio proxies) without
+  re-deriving it.
+* **Everywhere.** Edit mode, play mode, headless sessions, and every player run these
+  subsystems unchanged; editor visualization reads their state as debug-draw data, and
+  automation advances simulation only through `Simulate` and play control.
 
 ## Three-dimensional physics
 
@@ -73,12 +120,14 @@ The `Rigidbody` scripting surface behaves as in Unity, including:
 Colliders expose shape, center, orientation where applicable, trigger state,
 enabled state, material, contact offset, layer participation, and owning body.
 Changing object activation, collider enablement, hierarchy, scale, or body role
-updates its physical participation at a defined simulation boundary.
+updates its physical participation at the next simulation step, or before the
+next query when auto sync transforms is on.
 
 Physics materials produce observable friction and restitution behavior,
-including their friction and bounce combine modes. Invalid combinations
-identify the affected collider or body and do not silently simulate as an
-unrelated shape.
+including their friction and bounce combine modes. A material value outside
+the range Unity 2022.3 LTS accepts, such as negative friction or bounciness
+outside 0 to 1, is clamped as Unity clamps it and is reported naming the
+material and the affected collider or body.
 
 ### Mesh colliders
 
@@ -157,7 +206,9 @@ disabled MonoBehaviours on those objects, as in Unity.
 No event is reported for a pair excluded by its effective collision rules.
 Destroying or disabling an object during a callback leaves subsequent event
 eligibility and recipients defined and inspectable; callback ordering is
-guaranteed only where the compatible API contract defines it.
+guaranteed only where Unity 2022.3 LTS documents an order (Behavioral
+Equivalence in the [Compatibility contract](compatibility-contract.md));
+elsewhere the order is unspecified.
 
 ## Spatial queries
 
@@ -172,7 +223,10 @@ Queries define behavior for zero-length direction, starts inside a collider,
 ties, disabled or inactive content, backfaces, non-uniform scale, and invalid
 inputs. Multi-result APIs expose qualifying results within their declared
 capacity; capacity-limited forms report the returned count. Query result
-ordering is guaranteed only when the compatible API contract defines it.
+ordering is guaranteed only where Unity 2022.3 LTS documents an order
+(Behavioral Equivalence in the
+[Compatibility contract](compatibility-contract.md)); elsewhere the order is
+unspecified.
 
 ## Joints and constraints
 
@@ -439,8 +493,9 @@ explicit path state.
 over the same data.
 
 Navigation visualization shows navigable regions, areas, links, obstacles,
-agent footprints, and current paths. The same navigation data produces
-matching navigation meaning in editor play and built players.
+agent footprints, and current paths. The same navigation data produces the
+same path states, path corners, and query results, within floating-point
+variation, in editor play and built players.
 
 ## Terrain and environment
 
@@ -449,7 +504,7 @@ matching navigation meaning in editor play and built players.
 As a world designer, I can create and edit terrain height, holes, surface
 layers, trees, detail objects, and grass. I can inspect bounds, world size,
 height and surface resolution, material, collider state, vegetation density,
-and runtime cost.
+resident memory, load time, draw count, and collider count.
 
 Terrain editing supports selections and undo. Neighboring terrains connect by
 grouping and auto-connect settings and meet without gaps when their edge
@@ -474,8 +529,8 @@ Scripts read and change terrain through `TerrainData.GetHeights`/`SetHeights`,
 including binary storage, is owned by SER-005 in
 [Serialization and prefabs](serialization-and-prefabs.md).
 
-Large terrain content communicates its loading, memory, rendering, and physics
-cost. Missing layers or vegetation assets remain identifiable and do not
+Each terrain reports its resident memory, load time, draw count, and collider
+count in the inspector and the profiler (PRF-001). Missing layers or vegetation assets remain identifiable and do not
 silently substitute unrelated content.
 
 ### Terrain rendering and trees
@@ -521,7 +576,8 @@ the next play session.
   A project that moves its content toward the origin by script keeps working
   as it does in Unity.
 * **unitas large world** keeps rendering, physics, animation, navigation,
-  particles, trails, and audio as precise far from the origin as near it,
+  particles, trails, and audio far from the origin within the same
+  frame-to-frame position and contact error as an identical run at the origin,
   for worlds at least 10,000,000 units across. unitas shifts the world origin
   to follow a focus object, the main camera by default, when the focus moves
   more than a configurable distance from the current origin. A shift moves
@@ -550,14 +606,15 @@ navigation regions, navigation build state, paths, terrain bounds, and costly
 content. A diagnostic links to the responsible object, component, layer rule,
 terrain region, or setting.
 
-## Acceptance stories
+## Acceptance outcomes
 
 1. A dynamic box dropped onto a static floor receives `OnCollisionEnter` once,
    `OnCollisionStay` while resting, falls asleep after its velocity stays below
    the sleep threshold, wakes when a force is applied, and receives
    `OnCollisionExit` when lifted off, in editor play and in a supported
-   player; positions agree within the floating-point variation the
-   Compatibility contract allows, not bit-identically. (PHY-001)
+   player; the sequence of collision, sleep, and wake events is identical, and
+   positions agree within the per-axis position tolerance that product
+   knowledge (AUT-006) declares for the release, not bit-identically. (PHY-001)
 2. Removing a layer pair from the collision matrix stops collision and trigger
    callbacks between those layers and their hits in default-mask queries; with
    auto sync transforms off, a moved collider is not visible to queries until
@@ -617,7 +674,7 @@ terrain region, or setting.
     the physics settings, the same simulation run twice on one target yields
     identical results. (PHY-001)
 19. With the unitas large world setting, a vehicle driven 5,000,000 units from
-    the origin shows no positional jitter, its wheel contacts stay as precise
-    as near the origin, and a script subscribed to the origin-shift
+    the origin has frame-to-frame position and wheel-contact error within the
+    tolerance of an identical run at the origin, and a script subscribed to the origin-shift
     notification receives each offset; with the Unity single precision
     setting, the same project has no origin shifts. (ENV-001, PHY-004)

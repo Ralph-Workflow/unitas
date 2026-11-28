@@ -15,8 +15,7 @@ and serialization forms and generated caches (SER-005) are owned by
 [Serialization and prefabs](serialization-and-prefabs.md). This document
 relies on those contracts and does not restate them.
 
-These are desired end-state requirements, not claims about currently shipped
-capability. The behavioral baseline is the documented, observable behavior of
+The behavioral baseline is the documented, observable behavior of
 Unity 2022.3 LTS, as defined in the
 [Compatibility contract](compatibility-contract.md). Package behavior is
 covered only for the package families and version lines listed in the
@@ -38,6 +37,53 @@ package changes, and settings changes, is available to authorized agents
 through automation as defined in [Automation and MCP](automation-and-mcp.md).
 Granting project trust and fetch consent are person-only actions (AUT-007):
 agents can request them but cannot grant them.
+
+## Architecture
+
+* **Project model.** The editor process owns the project model: a file
+  watcher over `Assets/`, `Packages/`, and `ProjectSettings/`, the asset
+  registry mapping each path to its GUID and to the local identifiers of its
+  objects, the resolved package set, and the settings store. The model exists
+  before trust and contains no project code. Workers and players never scan
+  source folders; they ask the model or read cooked data.
+* **Identity as the key.** GUID and local identifier are the one key for an
+  object in the registry, in the dependency graph, in every cooked artifact,
+  in content built for players, and in diagnostics and automation results.
+  Compact runtime handles are derived from that key at cook time and map back
+  to it; paths are attributes of an identity, never a key.
+* **Dependency graph.** One graph records static references read from
+  serialized data, dependencies importers declare (including on other
+  artifacts, settings, and the target), script and package edges, and
+  `Resources`, AssetBundle, and Addressables membership. Change propagation,
+  reverse-dependency queries, build inclusion, and cook ordering all read
+  this graph; nothing re-walks the project to answer them.
+* **Import key and cache.** Every import result is addressed by a content
+  hash of its inputs: source bytes, `.meta` importer settings, importer
+  identity and version, postprocessor versions, the target and the settings
+  the importer declares it reads, and the hashes of its declared
+  dependencies. Artifacts are immutable and deterministic in that key and
+  live in a per-user cache outside the project tree. A target switch, a
+  reopen, a restart after a crash, or a second checkout of the same content
+  is a cache hit wherever the key is unchanged.
+* **Scheduling.** A changed file or setting invalidates only the keys that
+  depend on it. The scheduler imports invalidated assets in dependency order
+  and in parallel on import workers, raises the priority of assets a person
+  or agent is waiting on, and publishes each result atomically when it
+  completes, so a cancelled or failed import never replaces a valid result.
+  Opening and importing never block the editor's main thread.
+* **Importers.** Built-in importers use mature decoders and run in import
+  workers, so a decoder failure fails one asset and the import continues.
+  Project-supplied importers and postprocessors run in the worker that hosts
+  project code and only in a trusted project. Shader import hands shaders to
+  the rendering subsystem's compiler toolchain at this stage.
+* **Packages.** Resolution runs in the project model, fetches only with
+  consent, and stores fetched package content in a per-user content-addressed
+  store; resolved packages appear as read-only roots of the asset registry.
+* **Sameness.** The visual editor and headless sessions use the same model,
+  cache, and scheduler. Play sessions and builds consume only cooked
+  artifacts from that cache, and a build packs the target's artifacts without
+  importing differently, so content behaves the same in editor play and in
+  the player.
 
 ## Project opening
 
@@ -120,8 +166,14 @@ of Unity 2022.3 LTS.
   upgrade path reads. Its readable content remains inspectable.
 * A partially readable project remains inspectable while unreadable items retain
   specific errors.
-* Case-only renames, Unicode names, long paths, read-only files, broken symbolic
-  links, and platform-specific filename conflicts have explicit outcomes.
+* A case-only rename is a rename that keeps the asset's GUID.
+* A long or Unicode path opens, or is reported naming the path and the host's
+  limit.
+* A broken symbolic link is reported missing, naming its target.
+* A read-only file is inspectable, and an edit to it reports that it was not
+  committed.
+* A filename conflict on the host, such as two names that differ only in case
+  on a case-insensitive file system, is reported naming both files.
 * Several unitas sessions on one project, including editors and headless
   sessions, follow the concurrency rules owned by AUT-004 in
   [Automation and MCP](automation-and-mcp.md).
@@ -231,7 +283,8 @@ both direct and transitive, before and after an edit.
 ## Import state and feedback
 
 Every source asset has one of these observable states: not yet evaluated,
-processing, ready, ready with limitations, failed, missing, blocked by a
+processing, ready, ready with limitations, failed, missing, externally
+unavailable (a required external application is absent), blocked by a
 dependency, or blocked by trust. A user can inspect when its result last
 changed and why.
 
@@ -239,6 +292,8 @@ Reimport updates the selected asset and the dependents whose observable result
 can change. Unrelated assets retain their current state. A cancelled import does
 not replace a previously valid result with an incomplete result. Retrying a
 failed import preserves the prior diagnostic history for the current session.
+Changing the active build target imports again only the assets whose result
+depends on the target, and returning to a target reuses its earlier results.
 
 A long import, such as a first open or a reimport of many assets, continues
 past individual asset failures, reports each failure, and ends as a partial
@@ -374,8 +429,8 @@ The user can tell whether audio is immediately available, progressively
 available, or unavailable during play. Every channel layout from mono to 7.1
 imports. Corrupt frames, truncated data, and inaudible clips are explicit. A
 compression format that the selected target cannot decode in hardware is
-decoded in software on that target, and the import result states the
-decoding cost.
+decoded in software on that target, and the import result states that the
+target decodes the format in software.
 Preview failure is distinct from runtime incompatibility.
 
 ## Text and other recognized asset families
@@ -492,15 +547,17 @@ Unity-readable form. Each family below links its effect to the owning feature:
 * Audio: speaker mode, DSP buffer size, sample rate, and default volume
   (AUD-001 in [UI, audio, and input](ui-audio-input.md)).
 * Navigation areas and agent types (NAV-001).
-* Editor settings: asset serialization mode (SER-005), version control mode,
+* Editor settings: asset serialization mode (SER-005),
   Enter Play Mode Options (RUN-003), and line endings for new scripts.
-* Script Execution Order (RUN-003), stored where Unity stores it.
 * Preset Manager default presets, applied to newly created components,
   assets, and import settings as Unity applies them.
 * Package Manager settings: scoped registries and pre-release package
   visibility.
 * Version control settings.
 * Build scene list (BLD-001; RUN-005).
+
+Script Execution Order (RUN-003) is stored in each script's `.meta` file, as
+Unity stores it, and is edited with the project settings.
 
 ### Required behavior
 

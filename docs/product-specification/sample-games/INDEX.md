@@ -1,6 +1,6 @@
 # Playable Samples and Compatibility Benchmarks
 
-## Product Outcome
+## Scope
 
 unitas includes complete playable games and focused compatibility projects that
 demonstrate the engine's declared behavior. A sample is not accepted because it
@@ -9,10 +9,16 @@ scenarios that succeed in editor play mode, headless through MCP, and on
 declared player targets. Agent authoring benchmarks show that an agent can
 change a sample through MCP alone.
 
-Compatibility tiers of the features this specification owns, as recorded in
+The samples and benchmarks are evidence, not an agenda. No sample is more
+important than another, and no engine behavior is more important because a
+sample uses it.
+
+### Compatibility tiers
+
+The features this specification owns are in the Native tier, as recorded in
 the [Feature catalog](../feature-catalog.md) and defined in the
-[Compatibility contract](../compatibility-contract.md): SMP-001 Native, CMP-001
-Native. The playable samples are original unitas games; their acceptance is
+[Compatibility contract](../compatibility-contract.md): SMP-001 and CMP-001.
+The playable samples are original unitas games; their acceptance is
 defined by their own scenarios and unitas-approved references, not by
 comparison with output from Unity. Only the compatibility benchmarks compare
 with Unity 2022.3 LTS, and only for Exact-tier and Semantic-tier behavior.
@@ -22,7 +28,7 @@ feature coverage, supported targets, accessibility information, known
 limitations, and repeatable acceptance scenarios. Samples use redistributable
 content with clear licensing.
 
-## Sample-Level Requirements
+## Sample-level requirements
 
 Each playable sample includes:
 
@@ -39,15 +45,15 @@ Each playable sample includes:
 * Performance expectations stated separately for representative target classes.
 * A compatibility report that identifies every feature the sample exercises.
 * A saved or reproducible state for reaching important test situations quickly.
-* Keyboard accessibility and at least one additional suitable input mode where
-  the target supports it.
+* Keyboard accessibility on every target that has a keyboard, and at least one
+  additional input mode suited to each target.
 
 Sample performance expectations are project-declared expectations as defined
 under Performance validation (TST-002) in
 [Diagnostics, profiling, and playtesting](../diagnostics-profiling-playtesting.md);
 they are distinct from, and never presented as, the engine budgets of PRF-002.
 
-## Headless and Agent Execution
+## Headless and agent execution
 
 Every acceptance scenario of every sample and benchmark runs in two ways: by a
 person in the editor or a player, and headless through MCP by an authorized
@@ -72,16 +78,19 @@ editor collects their results.
 Every scenario result records the sample revision, the unitas version, the
 target, and whether it ran headless.
 
-## The Sample Suite
+## The sample suite
 
 The suite is the set of games below. Each game has its own detailed
-requirement and feature document in this directory. That document owns the
-game's design, content, required engine behavior, scenarios, and acceptance
-outcomes. The engine is complete only when every game in the suite is
-complete. The order is the order in which the suite is proven. Every game is
-required, and no game is optional because of its position.
+requirement and feature document in this directory, which owns the game's
+design, content, required engine behavior, scenarios, and acceptance outcomes.
+The numbers identify the games. They are not a priority, a schedule, or a
+proving order, and every game is required with equal weight. The suite is
+evidence that declared features work together in real games; it is not the
+scope of the engine. Completing the suite is necessary for engine
+completeness, not sufficient: the engine is complete only when every owning
+specification's behavior holds.
 
-| Order | Game | Document | Principal feature families |
+| No. | Game | Document | Principal feature families |
 |---|---|---|---|
 | 1 | Roll-a-Ball-style arena ("Marble Rush") | [01-roll-a-ball.md](01-roll-a-ball.md) | RUN-001, RUN-003, RUN-004, PHY-001, INP-001, INP-002, REN-002, REN-004, UI-001, AUD-001, SAV-001, BLD-001 |
 | 2 | Two-dimensional platformer | [02-2d-platformer.md](02-2d-platformer.md) | REN-005, PHY-002, ANI-001, SAV-001, INP-002, UI-001 |
@@ -106,15 +115,23 @@ on-disk formats (scenes, prefabs, `.meta` files, `ProjectSettings/`,
 `Packages/manifest.json`, and C# scripts) so that Unity 2022.3 LTS can open
 them, and they use only redistributable content with recorded licences.
 
-## Sample Document Structure
+Content families that no game in the suite exercises are required with the
+same weight as those it does. These include the High Definition Render
+Pipeline, custom scriptable render pipelines, the URP Deferred path, Entities
+and Entities Graphics, Netcode for Entities, Visual Effect Graph, Visual
+Scripting, Enlighten realtime global illumination, and AssetBundles built by
+Unity. Their evidence is the acceptance outcomes of their owning
+specifications and the compatibility benchmarks.
+
+## Sample document structure
 
 Every game document uses these sections, in this order:
 
 1. **Overview.** The player's goal, session length, tone, and the claim that
    the game is original unitas content.
 2. **Targets and input modes.** The declared player targets, the render
-   pipelines used (Built-in, URP with version line), and every supported
-   input mode.
+   pipelines used (Built-in, URP, HDRP, or a custom scriptable render
+   pipeline, with version line), and every supported input mode.
 3. **Game design.** The core loop, a controls table for every input mode,
    areas or levels, objectives, scoring or progression, the complete start,
    play, pause, completion, failure, restart, and exit flow, and the
@@ -161,14 +178,16 @@ Every game document uses these sections, in this order:
 14. **Acceptance outcomes.** Bullets, each naming the catalog identifiers it
     demonstrates.
 
-## Feature Coverage of the Suite
+## Feature coverage of the suite
 
 Every catalog identifier maps to at least one game in the suite, through that
 game's Feature coverage table, or to a benchmark below. The table below is
 the suite-level index of that mapping. Each game document's own coverage table
-is authoritative for that game.
+is authoritative for that game. This table is derived from the game documents'
+Feature coverage tables; when they differ, the game document holds and this
+table is corrected.
 
-| ID | Games (by suite order) | Workflows and benchmarks |
+| ID | Games (by number) | Workflows and benchmarks |
 |---|---|---|
 | PRJ-001 | 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12 | — |
 | PRJ-002 | — | W1 |
@@ -262,7 +281,7 @@ is authoritative for that game.
 | AUT-007 | 10 | W2 |
 | AUT-008 | — | W8 |
 
-## Development Workflows on the Suite
+## Development workflows on the suite
 
 The games are also the projects on which people and agents prove the
 development workflow. Each workflow below runs on the named game projects, in
@@ -315,7 +334,7 @@ any other scenario.
   visual editor is also performed through MCP, with the same result.
   (AUT-001)
 
-## Compatibility Benchmark Projects
+## Compatibility benchmark projects
 
 Focused benchmark projects isolate behavior whose correctness is difficult to
 infer from a complete game. Benchmarks of Exact-tier and Semantic-tier behavior
@@ -353,7 +372,7 @@ redistribution. Otherwise, the benchmark records acquisition prerequisites and
 expected behavior without copying protected content. An original unitas sample
 and an unmodified upstream compatibility benchmark remain explicitly distinct.
 
-## Agent Authoring Benchmark
+## Agent authoring benchmark
 
 The Agent Authoring Benchmark demonstrates that an authorized agent using only
 MCP can make a specified gameplay change to a sample and carry it through
@@ -368,13 +387,13 @@ Each benchmark run starts from:
   [Automation and MCP](../automation-and-mcp.md), with no other access to the
   project and no human edits during the run.
 
-The reference change request for the Roll-a-Ball-style sample is: add a new
-pickup type that awards a different score value, has a distinct material and
-collection sound, appears at specified positions in the arena, and shows a
-score-feedback message in the UI when collected, together with a test that
-checks the awarded score. Every other playable sample has at least one change
-request of comparable scope, such as a new hazard in the two-dimensional
-platformer or a new interactable in the first-person interaction sample.
+Every playable sample defines at least one change request in its Agent
+authoring change requests section. Examples are a new pickup type in the
+Roll-a-Ball-style sample that awards a different score value, has a distinct
+material and collection sound, appears at specified positions, shows a
+score-feedback message, and comes with a test of the awarded score; a new
+hazard in the two-dimensional platformer; and a new interactable in the
+first-person interaction sample.
 
 During the run the agent inspects the project, creates or edits scripts,
 assets, prefabs, and scene content, requests compilation and resolves its
@@ -401,24 +420,6 @@ A run succeeds only when every criterion is observed:
 * accepting the change set keeps the change, and rejecting it returns the
   project to its starting content.
 
-Status of the benchmark: `make verify-benchmark` runs the agent session
-against a copy of the sample, creates and imports the change request's distinct
-material and binary collection sound through the `assets.import` MCP command,
-and demonstrates the criteria it observes in editor play mode: the project
-compiles with no errors, the test the agent added and the project's existing
-tests pass, the change request's acceptance scenario passes, the scenarios that
-passed at the starting revision still pass, the change set holds only the
-changes the change request allows, and rejecting the change set returns the
-copied project to its starting content. Two criteria are not observed by that
-run and are recorded as not demonstrated rather than as passed: the acceptance
-scenario is not run in a player on a declared target, because the run exercises
-the sample in editor play mode and builds no player; and the changed project is
-not opened in Unity 2022.3 LTS, because that editor is not present in the
-environment the run executes in. The criteria above are unchanged: a run
-succeeds only when every criterion is observed. A capability the agent needs
-and the product does not provide is reported as a parity failure of AUT-001
-naming the capability.
-
 The run result records the sample revision, the change request, the unitas
 version, the agent client as it identified itself, elapsed time, the number of
 MCP requests, the diagnostics encountered, and the number of human
@@ -428,54 +429,52 @@ result, or produced misleading diagnostics, and as an agent failure when the
 product behaved as specified. A missing MCP capability is reported as a parity
 failure of AUT-001 naming the capability.
 
-## Acceptance Outcomes
+## Acceptance outcomes
 
-* The sample suite is complete only when every game in the suite table meets
-  every acceptance outcome of its own document on each of its declared
-  targets. No game is optional, and the first game's completion is not
-  completion of the suite. (SMP-001)
-* The third-party package benchmark compiles and runs each listed package,
-  and reports each incompatibility with the package, version, and member.
-  (CMP-001, CMP-003)
-
-* A new user can open, play, understand, alter, and build every sample for its
-  declared targets. (SMP-001, BLD-001)
-* Each feature claim in a sample maps to a catalog identifier and an observed
-  scenario outcome. (SMP-001)
-* Every acceptance scenario of every sample produces the same outcome and
-  checkpoint evidence when a person runs it in the editor and when an agent runs
-  it headless through MCP. (SMP-001, AUT-004, TST-002)
-* A sample's performance report presents its project-declared expectations
-  separately from the PRF-002 engine budgets and never labels them as engine
-  budgets. (SMP-001, TST-002, PRF-002)
-* A failing sample identifies the first failed behavior without erasing later
-  evidence. (SMP-001, TST-002)
-* Visual appeal never substitutes for behavioral coverage, and broad feature
-  count never substitutes for a complete playable loop. (SMP-001)
-* An agent using only MCP completes the Roll-a-Ball-style pickup change request,
-  with compilation, tests, the new scenario, and all prior scenarios passing,
-  and the developer accepts its change set; rejecting the same change set
-  returns the project to its starting content. (SMP-001, AUT-005, TST-003,
-  EDT-008)
-* A failed Agent Authoring Benchmark run is classified as a product failure or
-  an agent failure, and a missing MCP capability is reported by name. (SMP-001,
-  AUT-001)
-* A compatibility benchmark that unitas fails keeps its expectation unchanged,
-  reports the incompatibility with its evidence, and records the unitas version
-  and, for an Exact-tier or Semantic-tier benchmark, the Unity 2022.3 LTS
-  release it was compared against. (CMP-001, CMP-004)
-* A Semantic-tier benchmark of coroutine and lifecycle order compares unitas
-  with Unity 2022.3 LTS observations, while a Familiar-tier benchmark of UI
-  layout passes against its unitas-approved reference even where its layout
-  differs from Unity's, and that difference is listed. (CMP-001, RUN-003,
-  UI-001)
-* A sample's visual checkpoint is judged against its unitas-approved reference
-  image, and no sample acceptance scenario requires output identical to Unity.
-  (SMP-001, TST-002)
-* An upstream Unity project whose license does not permit redistribution is
-  represented by acquisition prerequisites and expected behavior without copied
-  content. (CMP-001)
-* For each release, every generally available feature family in that release's
-  feature catalog maps to at least one named sample scenario on a declared
-  supported target; focused benchmarks cover boundary and failure behavior.
-  (SMP-001, CMP-001, CMP-004)
+1. The sample suite is complete only when every game in the suite table meets
+   every acceptance outcome of its own document on each of its declared
+   targets. (SMP-001)
+2. The third-party package benchmark compiles and runs each listed package,
+   and reports each incompatibility with the package, version, and member.
+   (CMP-001, CMP-003)
+3. A new user can open, play, understand, alter, and build every sample for its
+   declared targets. (SMP-001, BLD-001)
+4. Each feature claim in a sample maps to a catalog identifier and an observed
+   scenario outcome. (SMP-001)
+5. Every acceptance scenario of every sample produces the same outcome and
+   checkpoint evidence when a person runs it in the editor and when an agent runs
+   it headless through MCP. (SMP-001, AUT-004, TST-002)
+6. A sample's performance report presents its project-declared expectations
+   separately from the PRF-002 engine budgets and never labels them as engine
+   budgets. (SMP-001, TST-002, PRF-002)
+7. A failing sample identifies the first failed behavior without erasing later
+   evidence. (SMP-001, TST-002)
+8. Visual appeal never substitutes for behavioral coverage, and broad feature
+   count never substitutes for a complete playable loop. (SMP-001)
+9. For every playable sample, an agent using only MCP completes each of that
+   sample's change requests, with compilation, tests, the new scenario, and all
+   prior scenarios passing, and the developer accepts its change set; rejecting
+   the same change set returns the project to its starting content. (SMP-001,
+   AUT-005, TST-003, EDT-008)
+10. A failed Agent Authoring Benchmark run is classified as a product failure or
+    an agent failure, and a missing MCP capability is reported by name. (SMP-001,
+    AUT-001)
+11. A compatibility benchmark that unitas fails keeps its expectation unchanged,
+    reports the incompatibility with its evidence, and records the unitas version
+    and, for an Exact-tier or Semantic-tier benchmark, the Unity 2022.3 LTS
+    release it was compared against. (CMP-001, CMP-004)
+12. A Semantic-tier benchmark of coroutine and lifecycle order compares unitas
+    with Unity 2022.3 LTS observations, while a Familiar-tier benchmark of UI
+    layout passes against its unitas-approved reference even where its layout
+    differs from Unity's, and that difference is listed. (CMP-001, RUN-003,
+    UI-001)
+13. A sample's visual checkpoint is judged against its unitas-approved reference
+    image, and no sample acceptance scenario requires output identical to Unity.
+    (SMP-001, TST-002)
+14. An upstream Unity project whose license does not permit redistribution is
+    represented by acquisition prerequisites and expected behavior without copied
+    content. (CMP-001)
+15. For each release, every generally available feature family in that release's
+    feature catalog maps to at least one named scenario of a sample, a
+    development workflow, or a benchmark on a declared supported target; focused benchmarks cover boundary and failure behavior.
+    (SMP-001, CMP-001, CMP-004)
