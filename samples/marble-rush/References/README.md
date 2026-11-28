@@ -166,7 +166,7 @@ material, a collect-burst frame and a landing-dust frame — and approved none.
 The measurement basis, so the next attempt does not redo it:
 
 - **Collect burst does not rasterize in the capture.** A trial scenario drove
-the ball into `Pickup_1` (burst triggered at frame 8, log `[roll-a-ball]
+the ball into `Pickup_1` (burst triggered at frame 8, log `[marble-rush]
 collect burst triggered pickup=Pickup_1`) and captured frames 6, 8, 12, 28
 and 58 from `Main Camera`. The frame-8 and frame-12 captures differ only in
 17 pixels of HUD timer text (`x` 25-28, `y` 6-10); the region around the
