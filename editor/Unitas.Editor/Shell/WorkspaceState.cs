@@ -12,7 +12,8 @@ namespace Unitas.Editor.Shell
         string Name,
         long ParentFileId,
         IReadOnlyList<long> ChildFileIds,
-        IReadOnlyList<long> ComponentFileIds);
+        IReadOnlyList<long> ComponentFileIds,
+        bool Active);
 
     public sealed record WorkspacePropertyEntry(string Name, string Path, string Value);
 
@@ -68,6 +69,16 @@ namespace Unitas.Editor.Shell
         public string TitleText { get; set; } = "unitas Editor";
 
         public string PlayStateText { get; set; } = "Play: Stopped";
+
+        public string SearchQuery { get; private set; } = string.Empty;
+
+        public int ResultCount { get; private set; }
+
+        public int PageIndex { get; private set; }
+
+        public int PageCount { get; private set; } = 1;
+
+        public string SaveStatus { get; private set; } = "clean";
 
         public void InitializeProject(McpHost host, string sessionId, string projectPath)
         {
@@ -259,11 +270,47 @@ namespace Unitas.Editor.Shell
                     sessionId,
                     "scene.set_active",
                     new JsonObject { ["fileId"] = fileId, ["active"] = !SelectedObjectActive });
+                MarkDirty();
                 RefreshFromOpenScene(host, sessionId);
             }
             catch (McpError)
             {
             }
+        }
+
+        public void SetSearchQuery(string query)
+        {
+            SearchQuery = query ?? string.Empty;
+            PageIndex = 0;
+            RebuildFormattedTexts();
+        }
+
+        public void PageBy(int delta)
+        {
+            PageIndex = Math.Clamp(PageIndex + delta, 0, Math.Max(0, PageCount - 1));
+            RebuildFormattedTexts();
+        }
+
+        public void SaveScene(McpHost host, string sessionId)
+        {
+            ArgumentNullException.ThrowIfNull(host);
+            ArgumentNullException.ThrowIfNull(sessionId);
+            try
+            {
+                host.CallTool(sessionId, "scene.save", new JsonObject());
+                SaveStatus = "saved";
+            }
+            catch (McpError error)
+            {
+                SaveStatus = "error: " + error.Message;
+            }
+
+            RebuildFormattedTexts();
+        }
+
+        public void MarkDirty()
+        {
+            SaveStatus = "dirty";
         }
 
         public void HandlePlayCommand(McpHost host, string sessionId, string command, JsonObject? arguments)
@@ -288,6 +335,11 @@ namespace Unitas.Editor.Shell
                 ["playMode"] = PlayState,
                 ["hierarchyCount"] = hierarchyEntries.Count,
                 ["componentCount"] = inspectorComponents.Count,
+                ["searchQuery"] = SearchQuery,
+                ["resultCount"] = ResultCount,
+                ["pageIndex"] = PageIndex,
+                ["pageCount"] = PageCount,
+                ["saveStatus"] = SaveStatus,
             };
         }
 
@@ -318,6 +370,7 @@ namespace Unitas.Editor.Shell
                     sessionId,
                     "scene.set_property",
                     new JsonObject { ["fileId"] = componentFileId, ["path"] = propertyPath, ["value"] = nextValue });
+                MarkDirty();
                 RefreshFromOpenScene(host, sessionId);
                 SelectedPropertyIndex = preservedIndex;
                 RebuildFormattedTexts();
@@ -392,20 +445,36 @@ namespace Unitas.Editor.Shell
         private void RebuildHierarchyRows()
         {
             hierarchyRows.Clear();
-            bool truncated = hierarchyEntries.Count > MaxHierarchyRows;
-            int shown = truncated ? MaxHierarchyRows - 1 : hierarchyEntries.Count;
-            for (int i = 0; i < shown; i++)
+            List<WorkspaceHierarchyEntry> filtered = FilterHierarchyEntries();
+            ResultCount = filtered.Count;
+            PageCount = Math.Max(1, (filtered.Count + MaxHierarchyRows - 1) / MaxHierarchyRows);
+            PageIndex = Math.Clamp(PageIndex, 0, PageCount - 1);
+            int start = PageIndex * MaxHierarchyRows;
+            int end = Math.Min(start + MaxHierarchyRows, filtered.Count);
+            for (int i = start; i < end; i++)
             {
-                WorkspaceHierarchyEntry entry = hierarchyEntries[i];
+                WorkspaceHierarchyEntry entry = filtered[i];
                 string idText = entry.FileId.ToString(CultureInfo.InvariantCulture);
                 bool selected = string.Equals(idText, SelectedObjectId, StringComparison.Ordinal);
                 hierarchyRows.Add((selected ? "> " : "  ") + entry.Name + " (" + idText + ")");
             }
+        }
 
-            if (truncated)
+        private List<WorkspaceHierarchyEntry> FilterHierarchyEntries()
+        {
+            List<WorkspaceHierarchyEntry> filtered = new List<WorkspaceHierarchyEntry>();
+            string query = SearchQuery.Trim();
+            foreach (WorkspaceHierarchyEntry entry in hierarchyEntries)
             {
-                hierarchyRows.Add("...");
+                if (query.Length == 0
+                    || entry.Name.Contains(query, StringComparison.OrdinalIgnoreCase)
+                    || string.Equals(query, entry.Active ? "active" : "inactive", StringComparison.OrdinalIgnoreCase))
+                {
+                    filtered.Add(entry);
+                }
             }
+
+            return filtered;
         }
 
         private void RebuildInspectorRows()
@@ -523,7 +592,8 @@ namespace Unitas.Editor.Shell
                             obj["name"]?.GetValue<string>() ?? "GameObject",
                             obj["parentFileId"]?.GetValue<long>() ?? 0L,
                             ReadLongArray(obj["children"] as JsonArray),
-                            ReadLongArray(obj["componentFileIds"] as JsonArray)));
+                            ReadLongArray(obj["componentFileIds"] as JsonArray),
+                            obj["active"]?.GetValue<bool>() ?? true));
                     }
                 }
             }

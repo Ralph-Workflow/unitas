@@ -15,7 +15,7 @@ use crate::trail::{trail_renderer_component, TrailRendererBinding};
 use crate::unity_yaml::{self, Document, Node, Stream, YamlError};
 
 use self::scene_audio::collect_audio;
-use self::scene_navigation::{collect_navigation, is_nav_mesh_surface};
+use self::scene_navigation::{collect_navigation, is_nav_mesh_surface, NavigationInputs};
 use self::scene_physics::{
     collect_physics, collect_physics_2d, is_character_controller, AssembledScenePhysics,
 };
@@ -940,18 +940,16 @@ fn assemble_documents(
         index,
         material_properties,
     )?;
-    set.navigation = collect_navigation(
+    set.navigation = collect_navigation(&NavigationInputs {
         stream,
-        &set.game_objects,
-        &scene_navigation::NavigationWorld {
-            graph,
-            transforms: &set.transforms,
-            instance_roots: &instance_roots,
-            physics: &set.physics,
-            render: &set.render,
-            index,
-        },
-    )?;
+        graph,
+        game_objects: &set.game_objects,
+        transforms: &set.transforms,
+        instance_roots: &instance_roots,
+        physics: &set.physics,
+        render: &set.render,
+        index,
+    })?;
     set.ui = collect_ui(stream, &set.game_objects, &instance_roots, index);
     let (particles, trails) =
         collect_particles_and_trails(stream, &set.game_objects, &instance_roots);

@@ -167,9 +167,10 @@ pub(super) fn is_nav_mesh_surface(body: &Node) -> bool {
     name_matches || field_count >= 2
 }
 
-/// Borrowed scene state the navigation collector needs beyond the YAML stream.
-pub(super) struct NavigationWorld<'a> {
+pub(super) struct NavigationInputs<'a> {
+    pub stream: &'a Stream,
     pub graph: &'a SceneGraph,
+    pub game_objects: &'a GameObjectRecords,
     pub transforms: &'a HashMap<i64, EntityId>,
     pub instance_roots: &'a HashSet<i64>,
     pub physics: &'a [PhysicsBinding],
@@ -178,18 +179,19 @@ pub(super) struct NavigationWorld<'a> {
 }
 
 pub(super) fn collect_navigation(
-    stream: &Stream,
-    game_objects: &GameObjectRecords,
-    world: &NavigationWorld<'_>,
+    inputs: &NavigationInputs<'_>,
 ) -> Result<NavigationBinding, SceneError> {
-    let NavigationWorld {
+    let NavigationInputs {
+        stream,
         graph,
+        game_objects,
         transforms,
         instance_roots,
         physics,
         render,
         index,
-    } = *world;
+    } = inputs;
+    let index = *index;
     let mut binding = NavigationBinding::default();
     let mesh_filters = collect_standalone_mesh_filters(stream, game_objects, instance_roots, index);
     for doc in &stream.documents {

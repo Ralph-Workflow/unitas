@@ -230,6 +230,17 @@ pub struct ImportSessionReport {
 }
 
 impl ImportSessionReport {
+    pub fn empty() -> Self {
+        ImportSessionReport {
+            records: Vec::new(),
+            imported: 0,
+            reused: 0,
+            failed: 0,
+            succeeded: 0,
+            partial_success: false,
+        }
+    }
+
     pub fn record(&self, path: &Path) -> Option<&ImportRecord> {
         self.records.iter().find(|record| record.path == path)
     }

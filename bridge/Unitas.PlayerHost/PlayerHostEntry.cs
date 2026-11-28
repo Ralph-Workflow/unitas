@@ -79,5 +79,45 @@ namespace Unitas.PlayerHost
         {
             return InjectInput(kind, code, pressed, x, y);
         }
+
+        /// Writes the filtered log entries as UTF-8 JSON into the caller buffer.
+        /// A null or undersized buffer copies nothing: the call reports
+        /// BufferTooSmall and the required byte count through written, so the
+        /// caller can size the buffer and call again.
+        public static int CollectLogs(
+            int severity,
+            long afterFrame,
+            int limit,
+            IntPtr buffer,
+            int capacity,
+            IntPtr written)
+        {
+            if (written == IntPtr.Zero || limit <= 0)
+            {
+                return (int)PlayerHostStage.InvalidArgument;
+            }
+
+            byte[] payload = PlayerHostCore.CollectLogsJson(severity, afterFrame, limit);
+            Marshal.WriteInt32(written, payload.Length);
+            if (buffer == IntPtr.Zero || capacity < payload.Length)
+            {
+                return (int)PlayerHostStage.BufferTooSmall;
+            }
+
+            Marshal.Copy(payload, 0, buffer, payload.Length);
+            return (int)PlayerHostStage.Ok;
+        }
+
+        [UnmanagedCallersOnly]
+        public static int UnitasPlayerCollectLogs(
+            int severity,
+            long afterFrame,
+            int limit,
+            IntPtr buffer,
+            int capacity,
+            IntPtr written)
+        {
+            return CollectLogs(severity, afterFrame, limit, buffer, capacity, written);
+        }
     }
 }

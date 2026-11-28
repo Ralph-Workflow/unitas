@@ -1,7 +1,10 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Text.Json.Nodes;
+using Unitas.Bridge.Playtest;
 using Unitas.Editor.Mcp;
+using UnityEngine;
 
 namespace Unitas.Editor.Tests.Play
 {
@@ -431,6 +434,9 @@ namespace Unitas.Editor.Tests.Play
             Check.That(
                 "live_worker_capture: objects list is non-empty",
                 objects.Count > 0);
+            Check.That(
+                "live_worker_capture: capture without outputPath returns no outputPath field",
+                captureContent["outputPath"] == null);
 
             int resolvedX = -1;
             int resolvedY = -1;
@@ -504,6 +510,13 @@ namespace Unitas.Editor.Tests.Play
                 "live_worker_capture: pixel query resolves expected object name",
                 expectedObjectName,
                 pixelCaptureContent["resolvedObjectName"]!.GetValue<string>());
+            CaptureWithOutputPathWritesParseableBmp(
+                host,
+                sessionId,
+                playSessionId,
+                captureWidth,
+                captureHeight,
+                base64Image);
 
             host.CallTool(
                 sessionId,
@@ -512,6 +525,64 @@ namespace Unitas.Editor.Tests.Play
                 {
                     ["playSessionId"] = playSessionId,
                 });
+        }
+
+        private static void CaptureWithOutputPathWritesParseableBmp(
+            McpHost host,
+            string sessionId,
+            string playSessionId,
+            int captureWidth,
+            int captureHeight,
+            string inMemoryBase64Image)
+        {
+            string outputPath = Path.Combine(
+                Path.GetTempPath(),
+                "unitas-capture-" + Guid.NewGuid().ToString("N") + ".bmp");
+            try
+            {
+                JsonObject fileCaptureEnvelope = (JsonObject)host.CallTool(
+                    sessionId,
+                    "capture",
+                    new JsonObject
+                    {
+                        ["playSessionId"] = playSessionId,
+                        ["width"] = captureWidth,
+                        ["height"] = captureHeight,
+                        ["id_map"] = true,
+                        ["outputPath"] = outputPath,
+                    });
+                JsonObject fileCaptureContent = (JsonObject)fileCaptureEnvelope["content"]!;
+                Check.Equal(
+                    "live_worker_capture: capture with outputPath notes the written path",
+                    outputPath,
+                    fileCaptureContent["outputPath"]!.GetValue<string>());
+                Check.Equal(
+                    "live_worker_capture: capture with outputPath returns the same in-memory image payload",
+                    inMemoryBase64Image,
+                    fileCaptureContent["image"]!.GetValue<string>());
+                Check.That(
+                    "live_worker_capture: capture with outputPath writes the file",
+                    File.Exists(outputPath));
+                BmpImage written = BmpImage.Load(outputPath);
+                Check.Equal(
+                    "live_worker_capture: written BMP width matches requested width",
+                    captureWidth,
+                    written.Width);
+                Check.Equal(
+                    "live_worker_capture: written BMP height matches requested height",
+                    captureHeight,
+                    written.Height);
+                Check.That(
+                    "live_worker_capture: written BMP has non-black pixels",
+                    written.CountPixelsDifferentFrom(new Color(0f, 0f, 0f)) > 0);
+            }
+            finally
+            {
+                if (File.Exists(outputPath))
+                {
+                    File.Delete(outputPath);
+                }
+            }
         }
 
         public static void RuntimeDisposalStopsThePlayWorker()

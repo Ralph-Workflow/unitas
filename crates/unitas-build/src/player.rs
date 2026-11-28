@@ -129,6 +129,9 @@ pub enum PlayerStartupError {
     ScriptHostShutdownFailed {
         stage: i32,
     },
+    ScriptHostLogsFailed {
+        detail: String,
+    },
 }
 
 impl fmt::Display for PlayerStartupError {
@@ -194,6 +197,9 @@ impl fmt::Display for PlayerStartupError {
             }
             Self::ScriptHostShutdownFailed { stage } => {
                 write!(formatter, "the script host failed to shut down: stage {stage}")
+            }
+            Self::ScriptHostLogsFailed { detail } => {
+                write!(formatter, "the script host failed to collect logs: {detail}")
             }
         }
     }

@@ -1,4 +1,5 @@
 using System;
+using System.IO;
 using System.Text.Json.Nodes;
 using Unitas.Editor.Mcp;
 using Unitas.Editor.Shell;
@@ -7,12 +8,15 @@ namespace Unitas.Editor.Tests
 {
     public static class ShellPlayTests
     {
+        private const string SampleSceneRelative = "samples/roll-a-ball/Assets/Scenes/RollABall.unity";
+
         public static void Run()
         {
             EnterPauseStepAndExitTransitionWorkspaceStateWithStubWorker();
             ToggleTransitionsBetweenStoppedPlayingAndPausedStates();
             ShellHostRoutesPlayCommandEventsThroughShellPlay();
             MissingScopeOrWorkerFailureTransitionsWorkspaceStateToError();
+            SearchSetCaptureRendersNonUniformSearchUiWhenAbiPresent();
         }
 
         private static void EnterPauseStepAndExitTransitionWorkspaceStateWithStubWorker()
@@ -169,6 +173,153 @@ namespace Unitas.Editor.Tests
                 "shell-play-error: worker failure on play.enter sets PlayState to error",
                 ShellPlay.StateError,
                 play.PlayState);
+        }
+
+        private static void SearchSetCaptureRendersNonUniformSearchUiWhenAbiPresent()
+        {
+            if (!NativeLibraryLoader.TryOpen(null, out NativeLibraryLoader? loader, out _)
+                || loader == null)
+            {
+                return;
+            }
+
+            string project = CreateSampleProjectCopy("search-capture");
+            string capturePath = Path.Combine(project, "shell-search-capture.bmp");
+            try
+            {
+                using McpHost host = NewHostWithSceneTools();
+                ShellHost shell = new ShellHost(host);
+                ShellRunOptions options = new ShellRunOptions
+                {
+                    TargetProjectPath = project,
+                    Headless = true,
+                    MaxFrames = 4,
+                    Width = 320,
+                    Height = 180,
+                    CaptureOut = capturePath,
+                };
+                options.Events.Add(ShellEvent.Init(project));
+                options.Events.Add(ShellEvent.SearchSet("pickup"));
+
+                JsonObject result;
+                try
+                {
+                    result = shell.Run(options);
+                }
+                catch (McpError.InvalidRequest error)
+                    when (error.Message.Contains("unitas_editor_run_shell export is not available", StringComparison.Ordinal))
+                {
+                    return;
+                }
+
+                Check.Equal("shell-search-capture: native run reports ok=true", true, result["ok"]?.GetValue<bool>() ?? false);
+                Check.Equal(
+                    "shell-search-capture: lastWorkspaceState carries the applied query",
+                    "pickup",
+                    result["lastWorkspaceState"]?["searchQuery"]?.GetValue<string>() ?? string.Empty);
+                Check.That(
+                    "shell-search-capture: lastWorkspaceState reports matching rows",
+                    (result["lastWorkspaceState"]?["resultCount"]?.GetValue<int>() ?? 0) > 0);
+                Check.That(
+                    "shell-search-capture: canvasTexts renders the search query in the search field",
+                    CanvasTextsContain(result, "pickup"));
+                Check.That(
+                    "shell-search-capture: BMP capture file written to disk",
+                    File.Exists(capturePath) && new FileInfo(capturePath).Length > 54);
+                Check.That(
+                    "shell-search-capture: capture BMP is non-uniform where the search UI renders",
+                    CountPixelsDifferingFromFirst(capturePath) > 100);
+            }
+            finally
+            {
+                DeleteDirectory(project);
+            }
+        }
+
+        private static bool CanvasTextsContain(JsonObject result, string expected)
+        {
+            if (result["canvasTexts"] is not JsonArray texts)
+            {
+                return false;
+            }
+
+            foreach (JsonNode? node in texts)
+            {
+                if (string.Equals(node?.GetValue<string>(), expected, StringComparison.Ordinal))
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        private static int CountPixelsDifferingFromFirst(string bmpPath)
+        {
+            byte[] bytes = File.ReadAllBytes(bmpPath);
+            const int HeaderLength = 54;
+            if (bytes.Length <= HeaderLength + 3)
+            {
+                return 0;
+            }
+
+            int differing = 0;
+            for (int offset = HeaderLength + 3; offset + 2 < bytes.Length; offset += 3)
+            {
+                if (bytes[offset] != bytes[HeaderLength]
+                    || bytes[offset + 1] != bytes[HeaderLength + 1]
+                    || bytes[offset + 2] != bytes[HeaderLength + 2])
+                {
+                    differing++;
+                }
+            }
+
+            return differing;
+        }
+
+        private static McpHost NewHostWithSceneTools()
+        {
+            McpHost host = new McpHost(new FixedClock(1_700_000_000_000L));
+            BuiltinDefaults.Register(host);
+            ChangeSetStore store = new ChangeSetStore(host);
+            SceneTools.Register(host, store);
+            return host;
+        }
+
+        private static string CreateSampleProjectCopy(string label)
+        {
+            string root = Path.Combine(
+                Path.GetTempPath(),
+                "unitas-shell-play-test-" + label + "-" + Guid.NewGuid().ToString("N"));
+            string scenes = Path.Combine(root, "Assets", "Scenes");
+            Directory.CreateDirectory(scenes);
+            File.Copy(ResolveSampleScenePath(), Path.Combine(scenes, "RollABall.unity"));
+            return root;
+        }
+
+        private static string ResolveSampleScenePath()
+        {
+            DirectoryInfo? directory = new DirectoryInfo(Directory.GetCurrentDirectory());
+            for (int depth = 0; depth < 12 && directory != null; depth++)
+            {
+                string candidate = Path.Combine(directory.FullName, SampleSceneRelative);
+                if (File.Exists(candidate))
+                {
+                    return candidate;
+                }
+
+                directory = directory.Parent;
+            }
+
+            throw new DirectoryNotFoundException("could not locate " + SampleSceneRelative);
+        }
+
+        private static void DeleteDirectory(string directory)
+        {
+            if (Directory.Exists(directory))
+            {
+                Directory.Delete(directory, true);
+            }
         }
 
         private sealed class StubWorker : IPlayWorker

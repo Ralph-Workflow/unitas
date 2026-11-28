@@ -69,6 +69,11 @@ enum Request {
         height: u32,
         id_map: bool,
     },
+    Logs {
+        severity: i32,
+        after_frame: i64,
+        limit: u32,
+    },
     Quality {
         level: i32,
     },
@@ -86,6 +91,8 @@ pub enum ProtocolError {
     InvalidStep,
     InvalidInputEvent,
     InvalidCapture,
+    InvalidLogs,
+    LogsFailed(String),
     InvalidQualityLevel,
     UnknownTool(String),
     NotPlaying,
@@ -103,6 +110,8 @@ impl ProtocolError {
             ProtocolError::InvalidStep => String::from("invalid step request"),
             ProtocolError::InvalidInputEvent => String::from("invalid input event"),
             ProtocolError::InvalidCapture => String::from("invalid capture request"),
+            ProtocolError::InvalidLogs => String::from("invalid logs request"),
+            ProtocolError::LogsFailed(message) => format!("logs failed: {message}"),
             ProtocolError::InvalidQualityLevel => String::from("invalid quality level"),
             ProtocolError::UnknownTool(name) => format!("unknown tool: {name}"),
             ProtocolError::NotPlaying => String::from("not playing"),
@@ -176,6 +185,11 @@ impl ControlSession {
                 height,
                 id_map,
             } => self.capture(*width, *height, *id_map),
+            Request::Logs {
+                severity,
+                after_frame,
+                limit,
+            } => self.logs(*severity, *after_frame, *limit),
             Request::Quality { level } => {
                 self.set_quality(*level)?;
                 Ok(json!({ "ok": true, "quality_level": *level }))
@@ -282,6 +296,16 @@ impl ControlSession {
             return Err(ProtocolError::NotPlaying);
         };
         Ok(capture_frame_json(&frame))
+    }
+
+    fn logs(&self, severity: i32, after_frame: i64, limit: u32) -> Result<Value, ProtocolError> {
+        let entries = match self.player.as_ref() {
+            Some(player) => player
+                .collect_logs(severity, after_frame, limit)
+                .map_err(|error| ProtocolError::LogsFailed(error.to_string()))?,
+            None => json!([]),
+        };
+        Ok(json!({ "ok": true, "entries": entries }))
     }
 
     fn set_quality(&mut self, level: i32) -> Result<(), ProtocolError> {
@@ -446,6 +470,7 @@ fn parse_request(line: &str) -> Result<Request, ProtocolError> {
         }
         "inject_input" => parse_inject_input_request(object),
         "capture" => parse_capture_request(object),
+        "logs" => parse_logs_request(object),
         "quality" => {
             let level = object
                 .get("level")
@@ -494,6 +519,42 @@ fn parse_capture_request(object: &Map<String, Value>) -> Result<Request, Protoco
         width,
         height,
         id_map,
+    })
+}
+
+const DEFAULT_LOG_LIMIT: u32 = 100;
+const MAX_LOG_LIMIT: u32 = 1000;
+
+fn parse_logs_request(object: &Map<String, Value>) -> Result<Request, ProtocolError> {
+    let severity = match object.get("severity") {
+        None => -1,
+        Some(Value::String(text)) => match text.as_str() {
+            "info" => 0,
+            "warning" => 1,
+            "error" => 2,
+            _ => return Err(ProtocolError::InvalidLogs),
+        },
+        Some(_) => return Err(ProtocolError::InvalidLogs),
+    };
+    let after_frame = match object.get("after_frame") {
+        None => -1,
+        Some(value) => {
+            let raw = value.as_u64().ok_or(ProtocolError::InvalidLogs)?;
+            i64::try_from(raw).map_err(|_| ProtocolError::InvalidLogs)?
+        }
+    };
+    let limit = match object.get("limit") {
+        None => DEFAULT_LOG_LIMIT,
+        Some(value) => {
+            let raw = value.as_u64().ok_or(ProtocolError::InvalidLogs)?;
+            let parsed = u32::try_from(raw).map_err(|_| ProtocolError::InvalidLogs)?;
+            parsed.clamp(1, MAX_LOG_LIMIT)
+        }
+    };
+    Ok(Request::Logs {
+        severity,
+        after_frame,
+        limit,
     })
 }
 
@@ -620,6 +681,51 @@ mod tests {
             parse_request("{\"cmd\":\"quality\",\"level\":1}"),
             Ok(Request::Quality { level: 1 })
         );
+        assert_eq!(
+            parse_request(
+                "{\"cmd\":\"logs\",\"severity\":\"warning\",\"after_frame\":3,\"limit\":5}"
+            ),
+            Ok(Request::Logs {
+                severity: 1,
+                after_frame: 3,
+                limit: 5
+            })
+        );
+        assert_eq!(
+            parse_request("{\"cmd\":\"logs\"}"),
+            Ok(Request::Logs {
+                severity: -1,
+                after_frame: -1,
+                limit: 100
+            })
+        );
+        assert_eq!(
+            parse_request("{\"cmd\":\"logs\",\"limit\":99999}"),
+            Ok(Request::Logs {
+                severity: -1,
+                after_frame: -1,
+                limit: 1000
+            })
+        );
+        assert_eq!(
+            parse_request("{\"cmd\":\"logs\",\"severity\":\"debug\"}"),
+            Err(ProtocolError::InvalidLogs)
+        );
+    }
+
+    #[test]
+    fn logs_without_a_script_host_returns_an_empty_entry_list() -> Result<(), String> {
+        let mut session = session(37)?;
+        let payload = session
+            .dispatch(&Request::Logs {
+                severity: -1,
+                after_frame: -1,
+                limit: 10,
+            })
+            .map_err(|error| error.outcome())?;
+        assert_eq!(payload["ok"], json!(true));
+        assert_eq!(payload["entries"], json!([]));
+        Ok(())
     }
 
     #[test]

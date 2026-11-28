@@ -15,6 +15,9 @@ namespace Unitas.Editor.Shell
         public const string TypeToggleProperty = "toggle_property";
         public const string TypeToggleActive = "toggle_active";
         public const string TypeCommand = "command";
+        public const string TypeSearchSet = "search.set";
+        public const string TypePage = "page";
+        public const string TypeSave = "save";
 
         public ShellEvent(
             string type,
@@ -23,7 +26,8 @@ namespace Unitas.Editor.Shell
             string? command = null,
             JsonObject? arguments = null,
             string? projectPath = null,
-            double? delta = null)
+            double? delta = null,
+            string? query = null)
         {
             ArgumentNullException.ThrowIfNull(type);
             Type = type;
@@ -33,6 +37,7 @@ namespace Unitas.Editor.Shell
             Arguments = arguments;
             ProjectPath = projectPath;
             Delta = delta;
+            Query = query;
         }
 
         public string Type { get; }
@@ -48,6 +53,8 @@ namespace Unitas.Editor.Shell
         public string? ProjectPath { get; }
 
         public double? Delta { get; }
+
+        public string? Query { get; }
 
         public static ShellEvent Init(string? projectPath = null)
         {
@@ -90,6 +97,21 @@ namespace Unitas.Editor.Shell
             return new ShellEvent(TypeToggleActive);
         }
 
+        public static ShellEvent SearchSet(string query)
+        {
+            return new ShellEvent(TypeSearchSet, query: query ?? string.Empty);
+        }
+
+        public static ShellEvent Page(int delta)
+        {
+            return new ShellEvent(TypePage, delta: delta);
+        }
+
+        public static ShellEvent Save()
+        {
+            return new ShellEvent(TypeSave);
+        }
+
         public static ShellEvent InvokeCommand(string command, JsonObject? arguments = null)
         {
             ArgumentNullException.ThrowIfNull(command);
@@ -125,7 +147,8 @@ namespace Unitas.Editor.Shell
             string? command = ReadString(obj, "command");
             string? projectPath = ReadString(obj, "projectPath");
             JsonObject? arguments = (obj["arguments"] as JsonObject)?.DeepClone() as JsonObject;
-            return new ShellEvent(type, targetId, index, command, arguments, projectPath, delta);
+            string? query = ReadString(obj, "query");
+            return new ShellEvent(type, targetId, index, command, arguments, projectPath, delta, query);
         }
 
         public JsonObject ToJsonObject()
@@ -163,6 +186,11 @@ namespace Unitas.Editor.Shell
             if (!string.IsNullOrEmpty(ProjectPath))
             {
                 obj["projectPath"] = ProjectPath;
+            }
+
+            if (Query != null)
+            {
+                obj["query"] = Query;
             }
 
             return obj;

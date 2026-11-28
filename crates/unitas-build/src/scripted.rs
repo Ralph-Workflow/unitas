@@ -18,12 +18,18 @@ type InitEntry = extern "C" fn(u64, *const u8, *const u8, *const u8) -> i32;
 type TickEntry = extern "C" fn(f64) -> i32;
 type ShutdownEntry = extern "C" fn() -> i32;
 type InjectInputEntry = extern "C" fn(u64, u64, u8, f64, f64) -> i32;
+type CollectLogsEntry = extern "C" fn(i32, i64, i32, *mut u8, i32, *mut i32) -> i32;
+
+// Matches PlayerHostStage.BufferTooSmall: the managed side reports the required
+// byte count through the written out-parameter instead of copying.
+const LOGS_BUFFER_TOO_SMALL: i32 = 9;
 
 struct ScriptHostEntries {
     init: InitEntry,
     tick: TickEntry,
     shutdown: ShutdownEntry,
     inject_input: InjectInputEntry,
+    collect_logs: CollectLogsEntry,
 }
 
 fn load_runtime_dylib(library_path: &Path) -> Result<RuntimeDylib, PlayerStartupError> {
@@ -85,11 +91,21 @@ fn load_script_host_entries(
         .map_err(|error| PlayerStartupError::ScriptHostBootFailed {
             message: error.to_string(),
         })?;
+    let collect_logs = host
+        .load_function::<CollectLogsEntry>(
+            assembly_path,
+            PLAYER_HOST_ENTRY_TYPE,
+            "UnitasPlayerCollectLogs",
+        )
+        .map_err(|error| PlayerStartupError::ScriptHostBootFailed {
+            message: error.to_string(),
+        })?;
     Ok(ScriptHostEntries {
         init,
         tick,
         shutdown,
         inject_input,
+        collect_logs,
     })
 }
 pub struct ScriptedPlayer {
@@ -98,6 +114,7 @@ pub struct ScriptedPlayer {
     tick: TickEntry,
     shutdown: ShutdownEntry,
     inject_input: InjectInputEntry,
+    collect_logs: CollectLogsEntry,
     persist_root: PathBuf,
 }
 
@@ -135,6 +152,7 @@ impl ScriptedPlayer {
             tick,
             shutdown,
             inject_input,
+            collect_logs,
         } = load_script_host_entries(&host, &assembly_path)?;
         let persist_root = prepare_persist_root()?;
         let bundle_root_argument = nul_terminated(&bundle_root)?;
@@ -159,6 +177,7 @@ impl ScriptedPlayer {
             tick,
             shutdown,
             inject_input,
+            collect_logs,
             persist_root,
         }))
     }
@@ -173,6 +192,50 @@ impl ScriptedPlayer {
 
     pub fn inject_input(&mut self, kind: u64, code: u64, pressed: bool, x: f64, y: f64) {
         let _ = (self.inject_input)(kind, code, u8::from(pressed), x, y);
+    }
+
+    pub fn collect_logs(
+        &self,
+        severity: i32,
+        after_frame: i64,
+        limit: u32,
+    ) -> Result<serde_json::Value, PlayerStartupError> {
+        let limit = i32::try_from(limit).unwrap_or(i32::MAX);
+        let mut needed: i32 = 0;
+        let stage = (self.collect_logs)(
+            severity,
+            after_frame,
+            limit,
+            std::ptr::null_mut(),
+            0,
+            &raw mut needed,
+        );
+        if stage != 0 && stage != LOGS_BUFFER_TOO_SMALL {
+            return Err(PlayerStartupError::ScriptHostLogsFailed {
+                detail: format!("stage {stage}"),
+            });
+        }
+        let mut buffer = vec![0_u8; usize::try_from(needed).unwrap_or(0)];
+        let mut written: i32 = 0;
+        let stage = (self.collect_logs)(
+            severity,
+            after_frame,
+            limit,
+            buffer.as_mut_ptr(),
+            needed,
+            &raw mut written,
+        );
+        if stage != 0 {
+            return Err(PlayerStartupError::ScriptHostLogsFailed {
+                detail: format!("stage {stage}"),
+            });
+        }
+        let length = usize::try_from(written).unwrap_or(0).min(buffer.len());
+        serde_json::from_slice(&buffer[..length]).map_err(|error| {
+            PlayerStartupError::ScriptHostLogsFailed {
+                detail: format!("malformed log payload: {error}"),
+            }
+        })
     }
 
     pub fn handle(&self) -> u64 {

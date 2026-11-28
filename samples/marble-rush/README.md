@@ -575,38 +575,46 @@ The steps this note owns are recorded here rather than left implicit:
   reference-approval record is `References/README.md` and the determinism
   fix that made the approval honest is recorded above.
 
-## Peripheral gaps found during discovery — tracked, not closed
+## Peripheral gaps found during discovery — tracked, now closed
 
-Two gaps outside the sample's own scenarios are recorded here, so that this
-file's green lane is not read as a claim that they are closed.
+Two gaps outside the sample's own scenarios were recorded here, so that this
+file's green lane was not read as a claim that they were closed. Both are now
+closed; each note below states exactly what is proven.
 
-- **No standalone runtime-log read tool for agents.** The editor's MCP
-  registry registers `project.*`, `scene.*`, `play.*`, `debug.*`, `changes.*`,
-  `operations.*`, `scripts.*`, `audit.*`, `tests.run`, `capture`,
-  `scenario.run` and the native `assets.*`, `diagnostics.*`, `profiler.*`,
-  `compat.*` tools, and no `logs.*` tool among them: `rg 'logs'
-  editor/Unitas.Editor/Registry/ editor/Unitas.Editor/Play/` matches nothing.
-  The runtime log itself is recorded by the bridge's `UnityEngine.LogRecorder`
-  (`bridge/UnityEngine/LogRecorder.cs:44`) and is consumed only by the
-  tooling that asserts on it — the playtest framework's `log` checkpoint
-  (`bridge/Unitas.Bridge/Playtest/CheckpointEvaluators.cs:43`) and the NUnit
-  log assertions — so an agent cannot read a log line for itself, and there is
-  no `logs.read`-style tool.
-- **The capture-to-disk path is unproven in the benchmark lane.** The managed
-  camera's own capture-to-disk is proven
-  (`bridge/Unitas.Bridge.Tests/RenderTests.cs:358` reads the file back), and so
-  is the BMP writer
-  (`crates/unitas-render/tests/render/render_tests.rs:309-312`). The path that
-  writes the sample's capture to disk, `capture_sample_reference_bmp`
-  (`crates/unitas-build/src/player.rs:811`), sits behind the `device` feature,
-  needs a GPU, and is called only by the player's `--capture-reference` flag
-  (`crates/unitas-build/src/bin/unitas-player.rs:141`), while the editor's
-  `capture` MCP tool (`editor/Unitas.Editor/Play/CaptureTool.cs:19`) returns its
-  frame payload in memory and the agent-authoring benchmark plan
-  (`samples/marble-rush/Benchmarks/agent-authoring/bonus-pickup/agent-steps.json`)
-  and acceptance scenario (`acceptance.scenario.json`) take no capture to disk,
-  so neither the default gate nor the benchmark lane (`make verify-benchmark`)
-  verifies capture-to-disk evidence.
+- **CLOSED: no standalone runtime-log read tool for agents.** The editor's
+  MCP registry now registers `logs.read`
+  (`editor/Unitas.Editor/Play/LogsTools.cs:14`), wired into the default
+  registry by `BuiltinDefaults.RegisterAll`
+  (`editor/Unitas.Editor/Registry/BuiltinDefaults.cs:347`): an agent can read
+  the runtime log lines the bridge's `UnityEngine.LogRecorder` records for the
+  active play session, with optional `severity`, `afterFrame` and `limit`
+  arguments. What is proven: the worker's `logs` command parses
+  (`crates/unitas-build/src/control.rs:686`) and dispatches, with the
+  no-script-host case answering an empty entry list
+  (`logs_without_a_script_host_returns_an_empty_entry_list`,
+  `crates/unitas-build/src/control.rs:717`); the tool itself answers
+  `no-active-play-session` instead of erroring when no play session runs.
+- **CLOSED: the capture-to-disk path is proven for the editor MCP tool.** The
+  `capture` tool (`editor/Unitas.Editor/Play/CaptureTool.cs:14`) gained an
+  optional `outputPath` argument: when present, the frame the tool already
+  returns in memory is additionally encoded as a 24-bit BMP in the same layout
+  as the runtime's BMP writer (`crates/unitas-render/src/image.rs:130`) and
+  written to that path, with the written path noted in the payload; when
+  absent, the payload is unchanged. What is proven: the live-worker suite
+  `PlayLiveCaptureTests`
+  (`editor/Unitas.Editor.Tests/Play/PlayAndCaptureTests.cs:372`) runs both
+  modes against a real play worker — the capture without `outputPath` carries
+  no `outputPath` field, the capture with `outputPath` returns the identical
+  in-memory image payload, and the written file parses back through the
+  bridge's `BmpImage.Load` with the requested dimensions and non-black pixels.
+  What remains unclaimed: the GPU device lane —
+  `capture_sample_reference_bmp` (`crates/unitas-build/src/player.rs:841`),
+  behind the `device` feature and called only by the player's
+  `--capture-reference` flag
+  (`crates/unitas-build/src/bin/unitas-player.rs:252`) — is still not
+  exercised by the default gate or the benchmark lane (`make
+  verify-benchmark`), and the benchmark plan and acceptance scenario still
+  take no capture to disk.
 
-Neither gap is closed, and no other claim in this file changes because of
-them.
+Both gaps are closed as recorded above, and no other claim in this file
+changes because of them.

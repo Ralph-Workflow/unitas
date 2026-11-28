@@ -44,6 +44,13 @@ struct ShellEntityMap {
     active_toggle_button: Option<EntityId>,
     undo_button: Option<EntityId>,
     redo_button: Option<EntityId>,
+    search_input: Option<EntityId>,
+    search_placeholder_text: Option<EntityId>,
+    page_prev_button: Option<EntityId>,
+    page_next_button: Option<EntityId>,
+    result_count_text: Option<EntityId>,
+    save_button: Option<EntityId>,
+    save_status_text: Option<EntityId>,
 }
 
 struct ShellLoopState {
@@ -199,6 +206,13 @@ fn discover_shell_entities(runtime: &Runtime) -> ShellEntityMap {
         active_toggle_button: find("ActiveToggleButton"),
         undo_button: find("UndoButton"),
         redo_button: find("RedoButton"),
+        search_input: find("SearchInput"),
+        search_placeholder_text: find("SearchPlaceholderText"),
+        page_prev_button: find("PagePrevButton"),
+        page_next_button: find("PageNextButton"),
+        result_count_text: find("ResultCountText"),
+        save_button: find("SaveButton"),
+        save_status_text: find("SaveStatusText"),
     }
 }
 
@@ -262,6 +276,7 @@ fn apply_workspace_state(runtime: &mut Runtime, entities: &ShellEntityMap, state
     ) {
         runtime.set_ui_text(id.as_u64(), t);
     }
+    apply_search_view_fields(runtime, entities, state);
     let set_rows = |rt: &mut Runtime,
                     labels: &[Option<EntityId>],
                     btns: &[Option<EntityId>],
@@ -294,6 +309,34 @@ fn apply_workspace_state(runtime: &mut Runtime, entities: &ShellEntityMap, state
     }
 }
 
+fn apply_search_view_fields(runtime: &mut Runtime, entities: &ShellEntityMap, state: &Value) {
+    if let (Some(id), Some(val)) = (entities.result_count_text, state.get("resultCount")) {
+        let s = match val {
+            Value::String(s) => s.clone(),
+            Value::Number(n) => n.to_string(),
+            _ => val.to_string(),
+        };
+        runtime.set_ui_text(id.as_u64(), &s);
+    }
+    if let (Some(id), Some(t)) = (
+        entities.save_status_text,
+        state.get("saveStatus").and_then(Value::as_str),
+    ) {
+        runtime.set_ui_text(id.as_u64(), t);
+    }
+    if let Some(q) = state.get("searchQuery").and_then(Value::as_str) {
+        let applied = entities
+            .search_input
+            .is_some_and(|id| runtime.set_ui_input_field_text(id.as_u64(), q, false));
+        if !applied
+            && !q.is_empty()
+            && let Some(id) = entities.search_placeholder_text
+        {
+            runtime.set_ui_text(id.as_u64(), q);
+        }
+    }
+}
+
 fn map_clicked_entity(e: &ShellEntityMap, clicked: EntityId) -> Option<Value> {
     if let Some(idx) = e
         .hierarchy_row_buttons
@@ -310,20 +353,24 @@ fn map_clicked_entity(e: &ShellEntityMap, clicked: EntityId) -> Option<Value> {
         return Some(json!({"type": "select_property", "index": idx}));
     }
     let t = Some(clicked);
-    if t == e.step_up_button {
-        return Some(json!({"type": "step_property", "delta": 1}));
-    }
-    if t == e.step_down_button {
-        return Some(json!({"type": "step_property", "delta": -1}));
-    }
-    if t == e.toggle_value_button {
-        return Some(json!({"type": "toggle_property"}));
-    }
-    if t == e.active_toggle_button {
-        return Some(json!({"type": "toggle_active"}));
-    }
-    if t == e.select_next_button {
-        return Some(json!({"type": "select_next"}));
+    let direct = [
+        (
+            e.step_up_button,
+            json!({"type": "step_property", "delta": 1}),
+        ),
+        (
+            e.step_down_button,
+            json!({"type": "step_property", "delta": -1}),
+        ),
+        (e.toggle_value_button, json!({"type": "toggle_property"})),
+        (e.active_toggle_button, json!({"type": "toggle_active"})),
+        (e.select_next_button, json!({"type": "select_next"})),
+        (e.page_prev_button, json!({"type": "page", "delta": -1})),
+        (e.page_next_button, json!({"type": "page", "delta": 1})),
+        (e.save_button, json!({"type": "save"})),
+    ];
+    if let Some((_, event)) = direct.into_iter().find(|(button, _)| *button == t) {
+        return Some(event);
     }
     let cmds = [
         (e.create_object_button, "scene.create_object"),
@@ -488,10 +535,9 @@ fn collect_canvas_texts(runtime: &Runtime) -> Vec<String> {
 }
 
 #[cfg(test)]
-#[test]
-fn map_clicked_entity_covers_all_rows_and_action_buttons() {
+fn click_test_entity_map() -> ShellEntityMap {
     let f = |i| Some(EntityId::new(i));
-    let e = ShellEntityMap {
+    ShellEntityMap {
         title_text: f(1),
         play_status_text: f(2),
         select_next_button: f(10),
@@ -509,7 +555,20 @@ fn map_clicked_entity_covers_all_rows_and_action_buttons() {
         active_toggle_button: f(26),
         undo_button: f(27),
         redo_button: f(28),
-    };
+        search_input: f(29),
+        search_placeholder_text: f(30),
+        page_prev_button: f(31),
+        page_next_button: f(32),
+        result_count_text: f(33),
+        save_button: f(34),
+        save_status_text: f(35),
+    }
+}
+
+#[cfg(test)]
+#[test]
+fn map_clicked_entity_covers_all_rows_and_action_buttons() {
+    let e = click_test_entity_map();
     let m = |id| map_clicked_entity(&e, EntityId::new(id));
     assert_eq!(m(100), Some(json!({"type": "select", "index": 0})));
     assert_eq!(m(111), Some(json!({"type": "select", "index": 11})));
@@ -520,6 +579,9 @@ fn map_clicked_entity_covers_all_rows_and_action_buttons() {
     assert_eq!(m(22), Some(json!({"type": "toggle_property"})));
     assert_eq!(m(26), Some(json!({"type": "toggle_active"})));
     assert_eq!(m(10), Some(json!({"type": "select_next"})));
+    assert_eq!(m(31), Some(json!({"type": "page", "delta": -1})));
+    assert_eq!(m(32), Some(json!({"type": "page", "delta": 1})));
+    assert_eq!(m(34), Some(json!({"type": "save"})));
     for (id, c) in [
         (23, "scene.create_object"),
         (24, "scene.duplicate_object"),
@@ -531,4 +593,302 @@ fn map_clicked_entity_covers_all_rows_and_action_buttons() {
         assert_eq!(m(id), Some(json!({"type": "command", "command": c})));
     }
     assert_eq!(m(999), None);
+}
+
+#[cfg(test)]
+const SHELL_VIEW_SCENE: &str = "%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!1 &1
+GameObject:
+  m_Name: HudCanvas
+  m_Layer: 5
+--- !u!4 &2
+Transform:
+  m_GameObject: {fileID: 1}
+  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
+  m_LocalPosition: {x: 0, y: 0, z: 0}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_Children: []
+  m_Father: {fileID: 0}
+--- !u!224 &3
+RectTransform:
+  m_GameObject: {fileID: 1}
+  m_Father: {fileID: 0}
+  m_AnchorMin: {x: 0, y: 0}
+  m_AnchorMax: {x: 1, y: 1}
+  m_AnchoredPosition: {x: 0, y: 0}
+  m_SizeDelta: {x: 0, y: 0}
+  m_Pivot: {x: 0.5, y: 0.5}
+--- !u!223 &4
+Canvas:
+  m_GameObject: {fileID: 1}
+  m_Enabled: 1
+  m_RenderMode: 0
+  m_SortingOrder: 0
+--- !u!114 &5
+MonoBehaviour:
+  m_GameObject: {fileID: 1}
+  m_Enabled: 1
+  m_Script: {fileID: 11500000, guid: 0cd44c1031e13a943bb63640046fad76, type: 3}
+  m_UiScaleMode: 1
+  m_ReferenceResolution: {x: 800, y: 600}
+  m_ScreenMatchMode: 0
+  m_MatchWidthOrHeight: 0.5
+--- !u!1 &10
+GameObject:
+  m_Name: SearchInput
+  m_Layer: 5
+--- !u!4 &11
+Transform:
+  m_GameObject: {fileID: 10}
+  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
+  m_LocalPosition: {x: 0, y: 0, z: 0}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_Children: []
+  m_Father: {fileID: 2}
+--- !u!224 &12
+RectTransform:
+  m_GameObject: {fileID: 10}
+  m_Father: {fileID: 3}
+  m_AnchorMin: {x: 0, y: 1}
+  m_AnchorMax: {x: 0, y: 1}
+  m_AnchoredPosition: {x: 16, y: -48}
+  m_SizeDelta: {x: 240, y: 28}
+  m_Pivot: {x: 0, y: 1}
+--- !u!1 &20
+GameObject:
+  m_Name: SearchPlaceholderText
+  m_Layer: 5
+--- !u!4 &21
+Transform:
+  m_GameObject: {fileID: 20}
+  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
+  m_LocalPosition: {x: 0, y: 0, z: 0}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_Children: []
+  m_Father: {fileID: 2}
+--- !u!224 &22
+RectTransform:
+  m_GameObject: {fileID: 20}
+  m_Father: {fileID: 3}
+  m_AnchorMin: {x: 0, y: 1}
+  m_AnchorMax: {x: 0, y: 1}
+  m_AnchoredPosition: {x: 20, y: -52}
+  m_SizeDelta: {x: 232, y: 20}
+  m_Pivot: {x: 0, y: 1}
+--- !u!114 &23
+MonoBehaviour:
+  m_GameObject: {fileID: 20}
+  m_Enabled: 1
+  m_Script: {fileID: 11500000, guid: 5f7201a12d95ffc409449d95f23cf332, type: 3}
+  m_Text: Search
+  m_FontSize: 14
+  m_Color: {r: 1, g: 1, b: 1, a: 1}
+--- !u!1 &30
+GameObject:
+  m_Name: PagePrevButton
+  m_Layer: 5
+--- !u!4 &31
+Transform:
+  m_GameObject: {fileID: 30}
+  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
+  m_LocalPosition: {x: 0, y: 0, z: 0}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_Children: []
+  m_Father: {fileID: 2}
+--- !u!224 &32
+RectTransform:
+  m_GameObject: {fileID: 30}
+  m_Father: {fileID: 3}
+  m_AnchorMin: {x: 0, y: 0}
+  m_AnchorMax: {x: 0, y: 0}
+  m_AnchoredPosition: {x: 16, y: 12}
+  m_SizeDelta: {x: 32, y: 24}
+  m_Pivot: {x: 0, y: 0}
+--- !u!1 &40
+GameObject:
+  m_Name: PageNextButton
+  m_Layer: 5
+--- !u!4 &41
+Transform:
+  m_GameObject: {fileID: 40}
+  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
+  m_LocalPosition: {x: 0, y: 0, z: 0}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_Children: []
+  m_Father: {fileID: 2}
+--- !u!224 &42
+RectTransform:
+  m_GameObject: {fileID: 40}
+  m_Father: {fileID: 3}
+  m_AnchorMin: {x: 0, y: 0}
+  m_AnchorMax: {x: 0, y: 0}
+  m_AnchoredPosition: {x: 56, y: 12}
+  m_SizeDelta: {x: 32, y: 24}
+  m_Pivot: {x: 0, y: 0}
+--- !u!1 &50
+GameObject:
+  m_Name: ResultCountText
+  m_Layer: 5
+--- !u!4 &51
+Transform:
+  m_GameObject: {fileID: 50}
+  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
+  m_LocalPosition: {x: 0, y: 0, z: 0}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_Children: []
+  m_Father: {fileID: 2}
+--- !u!224 &52
+RectTransform:
+  m_GameObject: {fileID: 50}
+  m_Father: {fileID: 3}
+  m_AnchorMin: {x: 0, y: 0}
+  m_AnchorMax: {x: 0, y: 0}
+  m_AnchoredPosition: {x: 96, y: 12}
+  m_SizeDelta: {x: 120, y: 24}
+  m_Pivot: {x: 0, y: 0}
+--- !u!114 &53
+MonoBehaviour:
+  m_GameObject: {fileID: 50}
+  m_Enabled: 1
+  m_Script: {fileID: 11500000, guid: 5f7201a12d95ffc409449d95f23cf332, type: 3}
+  m_Text: 0 results
+  m_FontSize: 14
+  m_Color: {r: 1, g: 1, b: 1, a: 1}
+--- !u!1 &60
+GameObject:
+  m_Name: SaveButton
+  m_Layer: 5
+--- !u!4 &61
+Transform:
+  m_GameObject: {fileID: 60}
+  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
+  m_LocalPosition: {x: 0, y: 0, z: 0}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_Children: []
+  m_Father: {fileID: 2}
+--- !u!224 &62
+RectTransform:
+  m_GameObject: {fileID: 60}
+  m_Father: {fileID: 3}
+  m_AnchorMin: {x: 1, y: 1}
+  m_AnchorMax: {x: 1, y: 1}
+  m_AnchoredPosition: {x: -16, y: -12}
+  m_SizeDelta: {x: 80, y: 28}
+  m_Pivot: {x: 1, y: 1}
+--- !u!1 &70
+GameObject:
+  m_Name: SaveStatusText
+  m_Layer: 5
+--- !u!4 &71
+Transform:
+  m_GameObject: {fileID: 70}
+  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
+  m_LocalPosition: {x: 0, y: 0, z: 0}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_Children: []
+  m_Father: {fileID: 2}
+--- !u!224 &72
+RectTransform:
+  m_GameObject: {fileID: 70}
+  m_Father: {fileID: 3}
+  m_AnchorMin: {x: 1, y: 1}
+  m_AnchorMax: {x: 1, y: 1}
+  m_AnchoredPosition: {x: -104, y: -16}
+  m_SizeDelta: {x: 120, y: 20}
+  m_Pivot: {x: 1, y: 1}
+--- !u!114 &73
+MonoBehaviour:
+  m_GameObject: {fileID: 70}
+  m_Enabled: 1
+  m_Script: {fileID: 11500000, guid: 5f7201a12d95ffc409449d95f23cf332, type: 3}
+  m_Text: clean
+  m_FontSize: 14
+  m_Color: {r: 1, g: 1, b: 1, a: 1}
+";
+
+#[cfg(test)]
+static RECORDED_SHELL_EVENTS: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+
+#[cfg(test)]
+extern "C" fn record_shell_event(event_ptr: usize) -> usize {
+    let Some(Ok(event)) = read_c_string(event_ptr) else {
+        return 0;
+    };
+    if let Ok(mut recorded) = RECORDED_SHELL_EVENTS.lock() {
+        recorded.push(event);
+    }
+    allocate_c_string(
+        "{\"titleText\":\"Workspace\",\"searchQuery\":\"boss\",\"resultCount\":7,\
+         \"pageIndex\":1,\"pageCount\":3,\"saveStatus\":\"dirty\"}",
+    )
+}
+
+#[cfg(test)]
+fn assert_shell_events_and_view(
+    runtime: &Runtime,
+    state: &ShellLoopState,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let recorded = RECORDED_SHELL_EVENTS
+        .lock()
+        .map_err(|_| "event log lock poisoned")?
+        .clone();
+    let events: Vec<Value> = recorded
+        .iter()
+        .map(|raw| serde_json::from_str(raw))
+        .collect::<Result<_, _>>()?;
+    assert_eq!(
+        events,
+        vec![
+            json!({"type": "search.set", "query": "x"}),
+            json!({"type": "page", "delta": 1}),
+            json!({"type": "save"}),
+        ]
+    );
+    let texts = collect_canvas_texts(runtime);
+    for expected in ["boss", "7", "dirty"] {
+        assert!(
+            texts.iter().any(|text| text == expected),
+            "the canvas texts miss {expected}"
+        );
+    }
+    assert_eq!(state.last_workspace_state["pageIndex"], json!(1));
+    assert_eq!(state.last_workspace_state["pageCount"], json!(3));
+    Ok(())
+}
+
+#[cfg(test)]
+#[test]
+fn shell_events_pass_through_and_view_fields_render() -> Result<(), Box<dyn std::error::Error>> {
+    let temp_dir = std::env::temp_dir().join(format!("unitas_shell_view_{}", std::process::id()));
+    std::fs::create_dir_all(&temp_dir)?;
+    let scene_path = temp_dir.join("shell_view.unity");
+    std::fs::write(&scene_path, SHELL_VIEW_SCENE)?;
+    let mut runtime = Runtime::new()?;
+    runtime.load_scene(&scene_path)?;
+    runtime.set_ui_screen_size(800.0, 600.0);
+    let entities = discover_shell_entities(&runtime);
+    assert!(entities.search_input.is_some());
+    assert!(entities.save_button.is_some());
+    if let Ok(mut recorded) = RECORDED_SHELL_EVENTS.lock() {
+        recorded.clear();
+    }
+    let mut state = ShellLoopState {
+        callback: Some(record_shell_event),
+        entities,
+        pending_events: vec![
+            json!({"type": "search.set", "query": "x"}),
+            json!({"type": "page", "delta": 1}),
+            json!({"type": "save"}),
+        ],
+        event_cursor: 0,
+        last_workspace_state: json!({}),
+    };
+    for frame in 0..3 {
+        dispatch_pending_events_for_frame(&mut runtime, &mut state, frame);
+    }
+    assert_shell_events_and_view(&runtime, &state)?;
+    let _ = runtime.shutdown();
+    let _ = std::fs::remove_dir_all(&temp_dir);
+    Ok(())
 }

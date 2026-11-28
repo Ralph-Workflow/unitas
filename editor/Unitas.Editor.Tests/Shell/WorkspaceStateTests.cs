@@ -22,6 +22,10 @@ namespace Unitas.Editor.Tests
             ScriptedSelectStepPropertyAndUndoRestoreValue();
             TogglePropertyAndToggleActiveFlipBoolAndActiveState();
             CreateDuplicateAndDestroyUpdateHierarchyAndKeepSelectionValid();
+            SearchSetFiltersHierarchyAndReportsResultCount();
+            PageDeltasClampAtBoundsAndMatterOnlyBeyondOnePage();
+            SaveEventPersistsAuthoredChangeAcrossReopen();
+            SaveStatusTransitionsFromCleanToDirtyToSaved();
             OffscreenShellRunRendersWorkspaceCanvasAndCapturesBmpWhenAbiPresent();
         }
 
@@ -173,10 +177,11 @@ namespace Unitas.Editor.Tests
                 Check.That(
                     "hierarchy-rows: select index 2 marks row 2 with >",
                     state.HierarchyRows.Count > 2 && state.HierarchyRows[2].StartsWith("> ", StringComparison.Ordinal));
-                Check.Equal(
-                    "hierarchy-rows: truncated list ends with ellipsis row at index 11",
-                    "...",
-                    state.HierarchyRows[WorkspaceState.MaxHierarchyRows - 1]);
+                Check.That(
+                    "hierarchy-rows: overflowing hierarchy fills page 0 with 12 real rows and adds pages",
+                    state.HierarchyRows.Count == WorkspaceState.MaxHierarchyRows
+                        && state.HierarchyRows[WorkspaceState.MaxHierarchyRows - 1] != "..."
+                        && state.PageCount > 1);
 
                 state.SelectById(host, session, "1000000001");
                 Check.That(
@@ -336,6 +341,248 @@ namespace Unitas.Editor.Tests
             {
                 DeleteDirectory(project);
             }
+        }
+
+        private static void SearchSetFiltersHierarchyAndReportsResultCount()
+        {
+            string project = CreateSampleProjectCopy("search");
+            try
+            {
+                using McpHost host = NewHostWithSceneTools();
+                ShellHost shell = new ShellHost(host);
+
+                shell.ApplyEvent(ShellEvent.Init(project));
+                int totalCount = shell.State.HierarchyEntries.Count;
+                int expectedPickupCount = CountEntries(shell.State, entry =>
+                    entry.Name.Contains("pickup", StringComparison.OrdinalIgnoreCase));
+                Check.That("shell-search: sample scene contains pickup-named objects", expectedPickupCount > 0);
+
+                JsonObject initialDto = shell.State.ToJsonObject();
+                Check.Equal(
+                    "shell-search: initial searchQuery is empty",
+                    "",
+                    initialDto["searchQuery"]?.GetValue<string>() ?? "missing");
+                Check.Equal(
+                    "shell-search: initial resultCount equals the full hierarchy",
+                    totalCount,
+                    initialDto["resultCount"]?.GetValue<int>() ?? -1);
+
+                shell.ApplyEvent(ShellEvent.SearchSet("pickup"));
+                Check.Equal("shell-search: query 'pickup' matches every pickup row", expectedPickupCount, shell.State.ResultCount);
+                Check.Equal("shell-search: filtered rows render one row per match", expectedPickupCount, shell.State.HierarchyRows.Count);
+                int mismatchingRows = CountRows(shell.State, row => !row.Contains("pickup", StringComparison.OrdinalIgnoreCase));
+                Check.Equal("shell-search: every rendered hierarchy row matches the query", 0, mismatchingRows);
+
+                shell.ApplyEvent(ShellEvent.SearchSet("PICKUP"));
+                Check.Equal("shell-search: uppercase query matches the same rows (case-insensitive)", expectedPickupCount, shell.State.ResultCount);
+
+                shell.ApplyEvent(ShellEvent.SearchSet("pickup_1"));
+                Check.Equal("shell-search: narrow query matches exactly one row", 1, shell.State.ResultCount);
+                Check.That(
+                    "shell-search: the single matching row is Pickup_1",
+                    shell.State.HierarchyRows.Count == 1
+                        && shell.State.HierarchyRows[0].Contains("Pickup_1", StringComparison.Ordinal));
+
+                shell.ApplyEvent(ShellEvent.SearchSet("no-such-object-zzz"));
+                Check.Equal("shell-search: no-match query reports resultCount 0", 0, shell.State.ResultCount);
+                Check.Equal("shell-search: no-match query renders no hierarchy rows", 0, shell.State.HierarchyRows.Count);
+                Check.Equal("shell-search: no-match query keeps pageCount at 1", 1, shell.State.PageCount);
+
+                shell.ApplyEvent(ShellEvent.SearchSet("active"));
+                int activeCount = shell.State.ResultCount;
+                shell.ApplyEvent(ShellEvent.SearchSet("inactive"));
+                int inactiveCount = shell.State.ResultCount;
+                Check.Equal(
+                    "shell-search: active and inactive state queries partition the hierarchy",
+                    totalCount,
+                    activeCount + inactiveCount);
+
+                shell.ApplyEvent(ShellEvent.SearchSet("pickup"));
+                JsonObject filteredDto = shell.State.ToJsonObject();
+                Check.Equal(
+                    "shell-search: DTO searchQuery carries the applied query",
+                    "pickup",
+                    filteredDto["searchQuery"]?.GetValue<string>() ?? string.Empty);
+                Check.Equal(
+                    "shell-search: DTO resultCount matches the filtered rows",
+                    expectedPickupCount,
+                    filteredDto["resultCount"]?.GetValue<int>() ?? -1);
+            }
+            finally
+            {
+                DeleteDirectory(project);
+            }
+        }
+
+        private static void PageDeltasClampAtBoundsAndMatterOnlyBeyondOnePage()
+        {
+            string project = CreateSampleProjectCopy("paging");
+            try
+            {
+                using McpHost host = NewHostWithSceneTools();
+                ShellHost shell = new ShellHost(host);
+
+                shell.ApplyEvent(ShellEvent.Init(project));
+                int totalCount = shell.State.HierarchyEntries.Count;
+                Check.That(
+                    "shell-page: sample hierarchy exceeds one 12-row page",
+                    totalCount > WorkspaceState.MaxHierarchyRows);
+                int expectedPages = (totalCount + WorkspaceState.MaxHierarchyRows - 1) / WorkspaceState.MaxHierarchyRows;
+                Check.Equal("shell-page: empty query page count covers the full hierarchy", expectedPages, shell.State.PageCount);
+                Check.Equal("shell-page: initial pageIndex is 0", 0, shell.State.PageIndex);
+                Check.Equal(
+                    "shell-page: first page renders a full 12-row page",
+                    WorkspaceState.MaxHierarchyRows,
+                    shell.State.HierarchyRows.Count);
+                string firstRowOfPage0 = shell.State.HierarchyRows[0];
+
+                shell.ApplyEvent(ShellEvent.Page(1));
+                Check.Equal("shell-page: page +1 advances to pageIndex 1", 1, shell.State.PageIndex);
+                Check.That(
+                    "shell-page: page 1 renders different rows than page 0",
+                    shell.State.HierarchyRows.Count > 0 && shell.State.HierarchyRows[0] != firstRowOfPage0);
+
+                shell.ApplyEvent(ShellEvent.Page(100));
+                Check.Equal("shell-page: page +100 clamps at the last page", expectedPages - 1, shell.State.PageIndex);
+                int lastPageRowCount = totalCount - ((expectedPages - 1) * WorkspaceState.MaxHierarchyRows);
+                Check.Equal("shell-page: last page renders the remainder rows", lastPageRowCount, shell.State.HierarchyRows.Count);
+
+                shell.ApplyEvent(ShellEvent.Page(-100));
+                Check.Equal("shell-page: page -100 clamps back to pageIndex 0", 0, shell.State.PageIndex);
+                Check.Equal(
+                    "shell-page: page 0 renders a full 12-row page again",
+                    WorkspaceState.MaxHierarchyRows,
+                    shell.State.HierarchyRows.Count);
+
+                shell.ApplyEvent(ShellEvent.Page(1));
+                shell.ApplyEvent(ShellEvent.SearchSet("pickup"));
+                Check.Equal("shell-page: search.set resets pageIndex to 0", 0, shell.State.PageIndex);
+                Check.That(
+                    "shell-page: filtered pickup result set fits a single page",
+                    shell.State.ResultCount <= WorkspaceState.MaxHierarchyRows && shell.State.PageCount == 1);
+                string filteredFirstRow = shell.State.HierarchyRows[0];
+                shell.ApplyEvent(ShellEvent.Page(1));
+                Check.Equal("shell-page: page +1 on a single-page result set stays at 0", 0, shell.State.PageIndex);
+                Check.Equal(
+                    "shell-page: rows are unchanged when paging a single-page result set",
+                    filteredFirstRow,
+                    shell.State.HierarchyRows[0]);
+            }
+            finally
+            {
+                DeleteDirectory(project);
+            }
+        }
+
+        private static void SaveEventPersistsAuthoredChangeAcrossReopen()
+        {
+            string project = CreateSampleProjectCopy("save-persist");
+            try
+            {
+                using (McpHost host = NewHostWithSceneTools())
+                {
+                    ShellHost shell = new ShellHost(host);
+                    shell.ApplyEvent(ShellEvent.Init(project));
+                    Check.Equal("shell-save: initial saveStatus is clean", "clean", shell.State.SaveStatus);
+
+                    shell.ApplyEvent(ShellEvent.InvokeCommand(
+                        "scene.set_property",
+                        new JsonObject { ["fileId"] = PickupFileId, ["path"] = "m_Name", ["value"] = "Pickup_Persisted_By_Save" }));
+                    Check.Equal("shell-save: authored mutation marks saveStatus dirty", "dirty", shell.State.SaveStatus);
+
+                    shell.ApplyEvent(ShellEvent.Save());
+                    Check.Equal("shell-save: save event reports saved", "saved", shell.State.SaveStatus);
+                    Check.Equal(
+                        "shell-save: DTO saveStatus is saved after the save event",
+                        "saved",
+                        shell.State.ToJsonObject()["saveStatus"]?.GetValue<string>() ?? string.Empty);
+                }
+
+                string scenePath = Path.Combine(project, ProjectSceneRelative);
+                Check.That(
+                    "shell-save: scene file on disk contains the authored rename",
+                    File.ReadAllText(scenePath).Contains("Pickup_Persisted_By_Save", StringComparison.Ordinal));
+
+                using McpHost reopenedHost = NewHostWithSceneTools();
+                ShellHost reopened = new ShellHost(reopenedHost);
+                reopened.ApplyEvent(ShellEvent.Init(project));
+                int persistedCount = CountEntries(
+                    reopened.State,
+                    entry => string.Equals(entry.Name, "Pickup_Persisted_By_Save", StringComparison.Ordinal));
+                Check.Equal("shell-save: reopened scene keeps the saved rename", 1, persistedCount);
+                Check.Equal("shell-save: reopened workspace starts clean", "clean", reopened.State.SaveStatus);
+            }
+            finally
+            {
+                DeleteDirectory(project);
+            }
+        }
+
+        private static void SaveStatusTransitionsFromCleanToDirtyToSaved()
+        {
+            string project = CreateSampleProjectCopy("save-status");
+            try
+            {
+                using McpHost host = NewHostWithSceneTools();
+                ShellHost shell = new ShellHost(host);
+
+                shell.ApplyEvent(ShellEvent.Init(project));
+                Check.Equal("save-status: init leaves saveStatus clean", "clean", shell.State.SaveStatus);
+                Check.Equal(
+                    "save-status: DTO carries the clean saveStatus",
+                    "clean",
+                    shell.State.ToJsonObject()["saveStatus"]?.GetValue<string>() ?? string.Empty);
+
+                shell.ApplyEvent(ShellEvent.InvokeCommand(
+                    "scene.set_property",
+                    new JsonObject { ["fileId"] = PickupFileId, ["path"] = "m_Name", ["value"] = "Pickup_Dirty_Check" }));
+                Check.Equal("save-status: property mutation transitions saveStatus to dirty", "dirty", shell.State.SaveStatus);
+                Check.Equal(
+                    "save-status: DTO carries the dirty saveStatus",
+                    "dirty",
+                    shell.State.ToJsonObject()["saveStatus"]?.GetValue<string>() ?? string.Empty);
+
+                shell.ApplyEvent(ShellEvent.Save());
+                Check.Equal("save-status: save event transitions saveStatus to saved", "saved", shell.State.SaveStatus);
+
+                shell.ApplyEvent(ShellEvent.ToggleActive());
+                Check.Equal("save-status: a further mutation returns saveStatus to dirty", "dirty", shell.State.SaveStatus);
+
+                shell.ApplyEvent(ShellEvent.Save());
+                Check.Equal("save-status: saving again returns saveStatus to saved", "saved", shell.State.SaveStatus);
+            }
+            finally
+            {
+                DeleteDirectory(project);
+            }
+        }
+
+        private static int CountEntries(WorkspaceState state, Func<WorkspaceHierarchyEntry, bool> predicate)
+        {
+            int count = 0;
+            foreach (WorkspaceHierarchyEntry entry in state.HierarchyEntries)
+            {
+                if (predicate(entry))
+                {
+                    count++;
+                }
+            }
+
+            return count;
+        }
+
+        private static int CountRows(WorkspaceState state, Func<string, bool> predicate)
+        {
+            int count = 0;
+            foreach (string row in state.HierarchyRows)
+            {
+                if (predicate(row))
+                {
+                    count++;
+                }
+            }
+
+            return count;
         }
 
         private static int FindPropertyRowIndex(WorkspaceState state, string substring)

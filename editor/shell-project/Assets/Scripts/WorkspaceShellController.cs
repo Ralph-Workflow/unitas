@@ -27,6 +27,13 @@ namespace Unitas.Editor.ShellProject
         private Button? _activeToggleButton;
         private Button? _undoButton;
         private Button? _redoButton;
+        private InputField? _searchInput;
+        private Text? _searchPlaceholderText;
+        private Button? _pagePrevButton;
+        private Button? _pageNextButton;
+        private Text? _resultCountText;
+        private Button? _saveButton;
+        private Text? _saveStatusText;
 
         public Text? TitleText => _titleText;
 
@@ -62,6 +69,20 @@ namespace Unitas.Editor.ShellProject
 
         public Button? RedoButton => _redoButton;
 
+        public InputField? SearchInput => _searchInput;
+
+        public Text? SearchPlaceholderText => _searchPlaceholderText;
+
+        public Button? PagePrevButton => _pagePrevButton;
+
+        public Button? PageNextButton => _pageNextButton;
+
+        public Text? ResultCountText => _resultCountText;
+
+        public Button? SaveButton => _saveButton;
+
+        public Text? SaveStatusText => _saveStatusText;
+
         private new void Awake()
         {
             _titleText = FindText("WorkspaceTitleText");
@@ -77,6 +98,13 @@ namespace Unitas.Editor.ShellProject
             _activeToggleButton = FindButton("ActiveToggleButton");
             _undoButton = FindButton("UndoButton");
             _redoButton = FindButton("RedoButton");
+            _searchInput = FindInputField("SearchInput");
+            _searchPlaceholderText = FindText("SearchPlaceholderText");
+            _pagePrevButton = FindButton("PagePrevButton");
+            _pageNextButton = FindButton("PageNextButton");
+            _resultCountText = FindText("ResultCountText");
+            _saveButton = FindButton("SaveButton");
+            _saveStatusText = FindText("SaveStatusText");
             DiscoverRows();
         }
 
@@ -84,7 +112,12 @@ namespace Unitas.Editor.ShellProject
             string title,
             IReadOnlyList<string> hierarchyRows,
             IReadOnlyList<string> propertyRows,
-            string playStatus)
+            string playStatus,
+            string searchQuery,
+            int resultCount,
+            int pageIndex,
+            int pageCount,
+            string saveStatus)
         {
             if (_titleText != null)
             {
@@ -98,6 +131,41 @@ namespace Unitas.Editor.ShellProject
 
             ApplyRows(_hierarchyRowLabels, _hierarchyRowButtons, hierarchyRows);
             ApplyRows(_propertyRowLabels, _propertyRowButtons, propertyRows);
+            ApplySearch(searchQuery);
+
+            if (_resultCountText != null)
+            {
+                _resultCountText.text = resultCount.ToString();
+            }
+
+            if (_pagePrevButton != null)
+            {
+                _pagePrevButton.interactable = pageIndex > 0;
+            }
+
+            if (_pageNextButton != null)
+            {
+                _pageNextButton.interactable = pageIndex + 1 < pageCount;
+            }
+
+            if (_saveStatusText != null)
+            {
+                _saveStatusText.text = saveStatus ?? string.Empty;
+            }
+        }
+
+        private void ApplySearch(string? searchQuery)
+        {
+            string query = searchQuery ?? string.Empty;
+            if (_searchInput != null && _searchInput.text != query)
+            {
+                _searchInput.text = query;
+            }
+
+            if (_searchPlaceholderText != null && query.Length > 0)
+            {
+                _searchPlaceholderText.text = query;
+            }
         }
 
         private void DiscoverRows()
@@ -147,6 +215,12 @@ namespace Unitas.Editor.ShellProject
         {
             GameObject? owner = GameObject.Find(objectName);
             return owner != null ? owner.GetComponent<Button>() : null;
+        }
+
+        private static InputField? FindInputField(string objectName)
+        {
+            GameObject? owner = GameObject.Find(objectName);
+            return owner != null ? owner.GetComponent<InputField>() : null;
         }
     }
 }

@@ -32,6 +32,7 @@ namespace Unitas.Editor.Tests
                 ("PlayWorkerCrashTests", PlayAndCaptureTests.WorkerCrashEndsOnlyThatPlaySessionAndHostContinues),
                 ("PlayPersonOnlyGrantTests", PlayAndCaptureTests.PersonOnlyGrantRefusedWithoutCredentialOrOverStdioAndAllowedWithCredential),
                 ("PlayLiveCaptureTests", PlayAndCaptureTests.LiveWorkerCaptureReturnsImageIdMapAndResolvableObjectBounds),
+                ("LogsReadTests", LogsReadTests.Run),
                 ("PlayRuntimeDisposalTests", PlayAndCaptureTests.RuntimeDisposalStopsThePlayWorker),
                 ("RegistryTests", RegistryTests.Run),
                 ("ScenarioToolsTests", ScenarioToolsTests.Run),

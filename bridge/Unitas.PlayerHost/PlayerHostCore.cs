@@ -4,6 +4,8 @@ using System.IO;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Runtime.Loader;
+using System.Text;
+using System.Text.Json.Nodes;
 using Unitas.Bridge;
 using Unitas.Bridge.Scripting;
 using Unitas.Scripting;
@@ -22,6 +24,7 @@ namespace Unitas.PlayerHost
         ShutdownFailed = 6,
         NotInitialized = 7,
         AlreadyInitialized = 8,
+        BufferTooSmall = 9,
     }
 
     public enum ScriptChangesWhilePlayingPreference
@@ -227,6 +230,45 @@ namespace Unitas.PlayerHost
                     loadContext?.Unload();
                 }
             }
+        }
+
+        /// Serialize the recorded runtime log lines the filters select as a JSON
+        /// array. The worker control loop calls this between ticks, so the
+        /// recorder is not mutated while it is read.
+        public static byte[] CollectLogsJson(int severity, long afterFrame, int limit)
+        {
+            JsonArray entries = new JsonArray();
+            int added = 0;
+            foreach (LogEntry entry in LogRecorder.Entries)
+            {
+                if (added >= limit)
+                {
+                    break;
+                }
+
+                if (severity >= 0 && (int)entry.Severity != severity)
+                {
+                    continue;
+                }
+
+                if (afterFrame >= 0 && entry.Frame <= afterFrame)
+                {
+                    continue;
+                }
+
+                entries.Add(new JsonObject
+                {
+                    ["severity"] = entry.Severity.ToString().ToLowerInvariant(),
+                    ["frame"] = entry.Frame,
+                    ["time"] = entry.Time,
+                    ["message"] = entry.Message,
+                    ["callStack"] = entry.CallStack,
+                    ["origin"] = entry.Origin?.name,
+                });
+                added++;
+            }
+
+            return Encoding.UTF8.GetBytes(entries.ToJsonString());
         }
 
         private static AssemblyLoadContext? LoadManagedAssemblies(string managedDir)

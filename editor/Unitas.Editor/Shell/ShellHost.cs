@@ -167,6 +167,24 @@ namespace Unitas.Editor.Shell
                 return;
             }
 
+            if (string.Equals(shellEvent.Type, ShellEvent.TypeSearchSet, StringComparison.Ordinal))
+            {
+                workspaceState.SetSearchQuery(shellEvent.Query ?? string.Empty);
+                return;
+            }
+
+            if (string.Equals(shellEvent.Type, ShellEvent.TypePage, StringComparison.Ordinal))
+            {
+                workspaceState.PageBy(shellEvent.Delta.HasValue ? (int)Math.Round(shellEvent.Delta.Value) : 0);
+                return;
+            }
+
+            if (string.Equals(shellEvent.Type, ShellEvent.TypeSave, StringComparison.Ordinal))
+            {
+                workspaceState.SaveScene(host, sessionId);
+                return;
+            }
+
             if (string.Equals(shellEvent.Type, ShellEvent.TypeCommand, StringComparison.Ordinal)
                 && !string.IsNullOrWhiteSpace(shellEvent.Command))
             {
@@ -299,6 +317,7 @@ namespace Unitas.Editor.Shell
                     : new JsonObject();
                 PopulateDefaultCommandArguments(command, callArgs);
                 host.CallTool(sessionId, command, callArgs);
+                workspaceState.MarkDirty();
                 workspaceState.RefreshFromOpenScene(host, sessionId);
             }
             catch (McpError)

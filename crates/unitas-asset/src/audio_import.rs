@@ -1628,6 +1628,11 @@ pub fn cook_audio_candidates(
     cooked_out_dir: Option<&Path>,
 ) -> Result<(CookedAudioManifest, ImportSessionReport), ImportCacheError> {
     let _cook_guard = lock_audio_cook();
+    // Nothing to import: skip touching the on-disk cache so projects without
+    // assets keep a clean Library footprint (SER005).
+    if candidates.is_empty() {
+        return Ok((CookedAudioManifest::default(), ImportSessionReport::empty()));
+    }
     let cache_cooked_dir = cache_dir.join(COOKED_DIR_NAME);
     if candidates.is_empty() && !cache_cooked_dir.is_dir() {
         // Nothing to cook and no prior cache: stay side-effect free so builds

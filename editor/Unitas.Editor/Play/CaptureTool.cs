@@ -1,4 +1,6 @@
 using System;
+using System.Buffers.Binary;
+using System.IO;
 using System.Text.Json.Nodes;
 
 namespace Unitas.Editor.Mcp
@@ -46,6 +48,10 @@ namespace Unitas.Editor.Mcp
                             ["pixelY"] = new JsonObject
                             {
                                 ["type"] = "integer",
+                            },
+                            ["outputPath"] = new JsonObject
+                            {
+                                ["type"] = "string",
                             },
                         },
                     },
@@ -159,6 +165,7 @@ namespace Unitas.Editor.Mcp
             int height = ExtractOptionalInt(arguments, "height", DefaultCaptureHeight);
             bool idMap = ExtractOptionalBool(arguments, "id_map", true);
             string? requestedPlaySessionId = ExtractOptionalString(arguments, "playSessionId");
+            string? outputPath = ExtractOptionalString(arguments, "outputPath");
 
             string operationId = host.StartOperation(callerSessionId, "capture", Scope.ReadProject);
             JsonObject workerResponse;
@@ -193,6 +200,19 @@ namespace Unitas.Editor.Mcp
             }
 
             JsonObject payload = BuildCapturePayload(workerResponse, existingSession?.PlaySessionId, arguments);
+            if (outputPath != null)
+            {
+                try
+                {
+                    WriteCaptureBmp(payload, outputPath);
+                }
+                catch (McpError error)
+                {
+                    host.FailOperation(operationId, error.Message);
+                    throw;
+                }
+                payload["outputPath"] = outputPath;
+            }
             host.CompleteOperation(operationId, CaptureFrameOrigin, payload);
             return ToolOutput.Untrusted(CaptureFrameOrigin, payload)
                 .WithAffectedIdentities(affectedIdentity)
@@ -255,6 +275,78 @@ namespace Unitas.Editor.Mcp
             return payload;
         }
 
+        // The written file mirrors the layout of the runtime's BMP writer
+        // (crates/unitas-render/src/image.rs to_bmp_bytes): 24-bit BI_RGB,
+        // bottom-up rows, BGR byte order, so BmpImage.Load parses it back.
+        private static void WriteCaptureBmp(JsonObject payload, string outputPath)
+        {
+            int width = ExtractRequiredInt(payload, "width");
+            int height = ExtractRequiredInt(payload, "height");
+            if (!(payload["image"] is JsonValue imageValue)
+                || !imageValue.TryGetValue(out string? base64Image))
+            {
+                throw new McpError.ParseError("capture payload is missing base64 'image'");
+            }
+            byte[] rgba;
+            try
+            {
+                rgba = Convert.FromBase64String(base64Image);
+            }
+            catch (FormatException error)
+            {
+                throw new McpError.ParseError("capture image is not valid base64: " + error.Message);
+            }
+            if (rgba.Length != width * height * 4)
+            {
+                throw new McpError.ParseError("capture image byte count does not match width * height * 4");
+            }
+            byte[] bmp = EncodeBmp24(rgba, width, height);
+            try
+            {
+                string? directory = Path.GetDirectoryName(outputPath);
+                if (!string.IsNullOrEmpty(directory))
+                {
+                    Directory.CreateDirectory(directory);
+                }
+                File.WriteAllBytes(outputPath, bmp);
+            }
+            catch (Exception error) when (error is IOException || error is UnauthorizedAccessException)
+            {
+                throw new McpError.InvalidParams("capture could not write outputPath '" + outputPath + "': " + error.Message);
+            }
+        }
+        private static byte[] EncodeBmp24(byte[] rgba, int width, int height)
+        {
+            const int headerSize = 54;
+            int rowStride = ((width * 3) + 3) & ~3;
+            int pixelBytes = rowStride * height;
+            byte[] bmp = new byte[headerSize + pixelBytes];
+            bmp[0] = (byte)'B';
+            bmp[1] = (byte)'M';
+            BinaryPrimitives.WriteInt32LittleEndian(bmp.AsSpan(2, 4), bmp.Length);
+            BinaryPrimitives.WriteInt32LittleEndian(bmp.AsSpan(10, 4), headerSize);
+            BinaryPrimitives.WriteInt32LittleEndian(bmp.AsSpan(14, 4), 40);
+            BinaryPrimitives.WriteInt32LittleEndian(bmp.AsSpan(18, 4), width);
+            BinaryPrimitives.WriteInt32LittleEndian(bmp.AsSpan(22, 4), height);
+            BinaryPrimitives.WriteUInt16LittleEndian(bmp.AsSpan(26, 2), 1);
+            BinaryPrimitives.WriteUInt16LittleEndian(bmp.AsSpan(28, 2), 24);
+            BinaryPrimitives.WriteInt32LittleEndian(bmp.AsSpan(34, 4), pixelBytes);
+            BinaryPrimitives.WriteInt32LittleEndian(bmp.AsSpan(38, 4), 2835);
+            BinaryPrimitives.WriteInt32LittleEndian(bmp.AsSpan(42, 4), 2835);
+            for (int y = height - 1; y >= 0; y--)
+            {
+                int rowStart = headerSize + ((height - 1 - y) * rowStride);
+                for (int x = 0; x < width; x++)
+                {
+                    int source = ((y * width) + x) * 4;
+                    int target = rowStart + (x * 3);
+                    bmp[target] = rgba[source + 2];
+                    bmp[target + 1] = rgba[source + 1];
+                    bmp[target + 2] = rgba[source];
+                }
+            }
+            return bmp;
+        }
         private static string? ExtractOptionalString(JsonNode arguments, string propertyName)
         {
             if (arguments is JsonObject obj
