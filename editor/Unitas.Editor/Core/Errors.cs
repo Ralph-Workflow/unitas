@@ -191,4 +191,40 @@ namespace Unitas.Editor.Mcp
             public string ActionName { get; }
         }
     }
+
+    public sealed class UnknownChangeItem : McpError
+    {
+        public UnknownChangeItem(string changeSetId, string itemId)
+            : base("unknown change item " + itemId + " in change-set " + changeSetId)
+        {
+            ChangeSetId = changeSetId;
+            ItemId = itemId;
+        }
+
+        public string ChangeSetId { get; }
+
+        public string ItemId { get; }
+    }
+
+    public sealed class ChangeItemNotPending : McpError
+    {
+        public ChangeItemNotPending(string itemId)
+            : base("change item " + itemId + " is no longer pending review")
+        {
+            ItemId = itemId;
+        }
+
+        public string ItemId { get; }
+    }
+
+    public sealed class ChangeSetNotApplied : McpError
+    {
+        public ChangeSetNotApplied(string changeSetId)
+            : base("change-set " + changeSetId + " is not applied")
+        {
+            ChangeSetId = changeSetId;
+        }
+
+        public string ChangeSetId { get; }
+    }
 }

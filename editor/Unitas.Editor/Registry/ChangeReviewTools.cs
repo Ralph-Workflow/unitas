@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Text.Json.Nodes;
 
 namespace Unitas.Editor.Mcp
@@ -6,6 +7,8 @@ namespace Unitas.Editor.Mcp
     public static class ChangeReviewTools
     {
         public const string PendingOrigin = "unitas://changes/pending";
+
+        public const string PolicyOrigin = "unitas://changes/policy";
 
         public static void Register(McpHost host, ChangeSetStore store)
         {
@@ -15,7 +18,7 @@ namespace Unitas.Editor.Mcp
             host.RegisterTool(
                 new ToolDefinition(
                     "changes.list",
-                    "Enumerate change sets held under the project review policy (EDT-008)",
+                    "Enumerate change sets held under the project review policy, itemized and ordered risk-first (EDT-008)",
                     new JsonObject
                     {
                         ["type"] = "object",
@@ -27,7 +30,7 @@ namespace Unitas.Editor.Mcp
             host.RegisterTool(
                 new ToolDefinition(
                     "changes.show",
-                    "Show one change set by id",
+                    "Show one change set by id with its items ordered risk-first",
                     new JsonObject
                     {
                         ["type"] = "object",
@@ -93,6 +96,121 @@ namespace Unitas.Editor.Mcp
                     Scope.ReadProject),
                 arguments => HandleReject(host, store, arguments));
 
+            host.RegisterTool(
+                new ToolDefinition(
+                    "changes.accept_item",
+                    "Accept one item of a pending change set (person-only, EDT-008)",
+                    new JsonObject
+                    {
+                        ["type"] = "object",
+                        ["properties"] = new JsonObject
+                        {
+                            ["id"] = new JsonObject
+                            {
+                                ["type"] = "string",
+                            },
+                            ["itemId"] = new JsonObject
+                            {
+                                ["type"] = "string",
+                            },
+                            ["personCredential"] = new JsonObject
+                            {
+                                ["type"] = "string",
+                            },
+                        },
+                        ["required"] = new JsonArray("id", "itemId"),
+                    },
+                    Scope.ReadProject),
+                arguments => HandleAcceptItem(host, store, arguments));
+
+            host.RegisterTool(
+                new ToolDefinition(
+                    "changes.reject_item",
+                    "Reject one item of a pending change set (person-only, EDT-008)",
+                    new JsonObject
+                    {
+                        ["type"] = "object",
+                        ["properties"] = new JsonObject
+                        {
+                            ["id"] = new JsonObject
+                            {
+                                ["type"] = "string",
+                            },
+                            ["itemId"] = new JsonObject
+                            {
+                                ["type"] = "string",
+                            },
+                            ["personCredential"] = new JsonObject
+                            {
+                                ["type"] = "string",
+                            },
+                        },
+                        ["required"] = new JsonArray("id", "itemId"),
+                    },
+                    Scope.ReadProject),
+                arguments => HandleRejectItem(host, store, arguments));
+
+            host.RegisterTool(
+                new ToolDefinition(
+                    "changes.revert",
+                    "Revert an applied change set and restore the files it changed (person-only, EDT-008)",
+                    new JsonObject
+                    {
+                        ["type"] = "object",
+                        ["properties"] = new JsonObject
+                        {
+                            ["id"] = new JsonObject
+                            {
+                                ["type"] = "string",
+                            },
+                            ["personCredential"] = new JsonObject
+                            {
+                                ["type"] = "string",
+                            },
+                        },
+                        ["required"] = new JsonArray("id"),
+                    },
+                    Scope.ReadProject),
+                arguments => HandleRevert(host, store, arguments));
+
+            host.RegisterTool(
+                new ToolDefinition(
+                    "changes.policy.get",
+                    "Report the project review policy (EDT-008)",
+                    new JsonObject
+                    {
+                        ["type"] = "object",
+                        ["properties"] = new JsonObject(),
+                    },
+                    Scope.ReadProject),
+                _ => ToolOutput.Untrusted(PolicyOrigin, store.Policy.ToValue()));
+
+            host.RegisterTool(
+                new ToolDefinition(
+                    "changes.policy.set",
+                    "Update the project review policy; absent keys keep their current values (person-only, EDT-008)",
+                    new JsonObject
+                    {
+                        ["type"] = "object",
+                        ["properties"] = new JsonObject
+                        {
+                            ["requireApproval"] = new JsonObject
+                            {
+                                ["type"] = "boolean",
+                            },
+                            ["holdAgentWrites"] = new JsonObject
+                            {
+                                ["type"] = "boolean",
+                            },
+                            ["personCredential"] = new JsonObject
+                            {
+                                ["type"] = "string",
+                            },
+                        },
+                    },
+                    Scope.ReadProject),
+                arguments => HandlePolicySet(host, store, arguments));
+
             host.RegisterResource(
                 new ResourceDefinition(
                     PendingOrigin,
@@ -114,6 +232,7 @@ namespace Unitas.Editor.Mcp
             ArgumentNullException.ThrowIfNull(host);
             ArgumentNullException.ThrowIfNull(store);
             ArgumentNullException.ThrowIfNull(toolName);
+            store.EnsureAgentWritesAllowed(toolName, arguments);
             string sessionId = RequireCallerSession(host);
             SessionIdentity identity = host.GetSessionIdentity(sessionId);
             JsonObject operation = new JsonObject
@@ -135,7 +254,7 @@ namespace Unitas.Editor.Mcp
         private static ToolOutput HandleShow(ChangeSetStore store, JsonNode arguments)
         {
             ChangeSet set = store.Get(RequireId(arguments, "changes.show"));
-            return ToolOutput.Untrusted(PendingOrigin, set.ToValue());
+            return ToolOutput.Untrusted(PendingOrigin, RiskOrderedValue(set));
         }
 
         private static ToolOutput HandleApprove(McpHost host, ChangeSetStore store, JsonNode arguments)
@@ -163,6 +282,116 @@ namespace Unitas.Editor.Mcp
                 .WithAffectedIdentities(set.Id);
         }
 
+        private static ToolOutput HandleAcceptItem(McpHost host, ChangeSetStore store, JsonNode arguments)
+        {
+            RequirePerson(host, arguments, "changes.accept_item");
+            string id = RequireId(arguments, "changes.accept_item");
+            string itemId = RequireItemId(arguments, "changes.accept_item");
+            ChangeSet set = store.AcceptItem(id, itemId);
+            return ToolOutput.Untrusted(PendingOrigin, RiskOrderedValue(set))
+                .WithAffectedIdentities(set.Id);
+        }
+
+        private static ToolOutput HandleRejectItem(McpHost host, ChangeSetStore store, JsonNode arguments)
+        {
+            RequirePerson(host, arguments, "changes.reject_item");
+            string id = RequireId(arguments, "changes.reject_item");
+            string itemId = RequireItemId(arguments, "changes.reject_item");
+            ChangeSet set = store.RejectItem(id, itemId);
+            return ToolOutput.Untrusted(PendingOrigin, RiskOrderedValue(set))
+                .WithAffectedIdentities(set.Id);
+        }
+
+        private static ToolOutput HandleRevert(McpHost host, ChangeSetStore store, JsonNode arguments)
+        {
+            RequirePerson(host, arguments, "changes.revert");
+            string id = RequireId(arguments, "changes.revert");
+            JsonObject report = store.Revert(id);
+            ChangeSet set = store.Get(id);
+            JsonObject payload = RiskOrderedValue(set);
+            payload["restore"] = report;
+            return ToolOutput.Untrusted(PendingOrigin, payload)
+                .WithAffectedIdentities(set.Id);
+        }
+
+        private static ToolOutput HandlePolicySet(McpHost host, ChangeSetStore store, JsonNode arguments)
+        {
+            RequirePerson(host, arguments, "changes.policy.set");
+            ReviewPolicy current = store.Policy;
+            ReviewPolicy updated = new ReviewPolicy(
+                OptionalBool(arguments, "requireApproval") ?? current.RequireApproval,
+                OptionalBool(arguments, "holdAgentWrites") ?? current.HoldAgentWrites);
+            store.SetPolicy(updated);
+            return ToolOutput.Untrusted(PolicyOrigin, updated.ToValue());
+        }
+
+        private static JsonObject RiskOrderedValue(ChangeSet set)
+        {
+            JsonObject value = set.ToValue();
+            if (value["items"] is not JsonArray items)
+            {
+                return value;
+            }
+
+            List<(int Severity, int Index, JsonNode Item)> entries = new List<(int, int, JsonNode)>();
+            for (int index = 0; index < items.Count; index++)
+            {
+                if (items[index] is JsonNode item)
+                {
+                    entries.Add((SeverityOf(item), index, item.DeepClone()));
+                }
+            }
+
+            entries.Sort((left, right) => left.Severity != right.Severity
+                ? left.Severity.CompareTo(right.Severity)
+                : left.Index.CompareTo(right.Index));
+            JsonArray ordered = new JsonArray();
+            foreach ((int _, int _, JsonNode item) in entries)
+            {
+                ordered.Add(item);
+            }
+
+            value["items"] = ordered;
+            return value;
+        }
+
+        private static int SeverityOf(JsonNode item)
+        {
+            string risk = item["risk"]?.GetValue<string>() ?? string.Empty;
+            for (int index = 0; index < ChangeRisks.SeverityOrder.Count; index++)
+            {
+                if (string.Equals(ChangeRisks.AsString(ChangeRisks.SeverityOrder[index]), risk, StringComparison.Ordinal))
+                {
+                    return index;
+                }
+            }
+
+            return ChangeRisks.SeverityOrder.Count;
+        }
+
+        private static bool? OptionalBool(JsonNode arguments, string propertyName)
+        {
+            if (arguments is JsonObject obj
+                && obj[propertyName] is JsonValue value
+                && value.TryGetValue(out bool parsed))
+            {
+                return parsed;
+            }
+
+            return null;
+        }
+
+        private static string RequireItemId(JsonNode arguments, string actionName)
+        {
+            string? itemId = ExtractOptionalString(arguments, "itemId");
+            if (string.IsNullOrWhiteSpace(itemId))
+            {
+                throw new McpError.InvalidParams(actionName + " requires an 'itemId'");
+            }
+
+            return itemId!;
+        }
+
         private static void RequirePerson(McpHost host, JsonNode arguments, string actionName)
         {
             string sessionId = RequireCallerSession(host);
@@ -176,7 +405,7 @@ namespace Unitas.Editor.Mcp
             JsonArray changeSets = new JsonArray();
             foreach (ChangeSet set in store.Pending)
             {
-                changeSets.Add(set.ToValue());
+                changeSets.Add(RiskOrderedValue(set));
             }
 
             return new JsonObject
@@ -190,7 +419,7 @@ namespace Unitas.Editor.Mcp
             JsonArray changeSets = new JsonArray();
             foreach (ChangeSet set in store.All)
             {
-                changeSets.Add(set.ToValue());
+                changeSets.Add(RiskOrderedValue(set));
             }
 
             return new JsonObject

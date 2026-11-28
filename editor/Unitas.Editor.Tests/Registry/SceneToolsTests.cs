@@ -28,6 +28,8 @@ namespace Unitas.Editor.Tests
             SetActiveTogglesTheObject();
             DuplicateObjectCopiesTheObject();
             SnapshotAndRestoreBringTheEditTimeSceneBack();
+            SceneMutationUnderTheDefaultPolicyIsStagedUntilApproval();
+            HoldAgentWritesRefusesSceneMutationsAndNamesThePolicyTool();
         }
 
         private static void RegistersTheSceneToolsWithLeastPrivilegeScopes()
@@ -143,7 +145,7 @@ namespace Unitas.Editor.Tests
                 using McpHost host = NewHost();
                 ChangeSetStore store = new ChangeSetStore(host);
                 SceneTools.Register(host, store);
-                string session = NewEditingSession(host);
+                string session = NewEditingSession(host, store);
 
                 JsonNode opened = host.CallTool(
                     session,
@@ -228,7 +230,7 @@ namespace Unitas.Editor.Tests
                 ChangeSetStore store = new ChangeSetStore(host);
                 SceneTools.Register(host, store);
                 ChangeReviewTools.Register(host, store);
-                string session = NewEditingSession(host);
+                string session = NewEditingSession(host, store);
 
                 host.CallTool(
                     session,
@@ -276,7 +278,7 @@ namespace Unitas.Editor.Tests
                 using McpHost host = NewHost();
                 ChangeSetStore store = new ChangeSetStore(host);
                 SceneTools.Register(host, store);
-                string session = NewEditingSession(host);
+                string session = NewEditingSession(host, store);
 
                 host.CallTool(
                     session,
@@ -348,7 +350,7 @@ namespace Unitas.Editor.Tests
                 using McpHost host = NewHost();
                 ChangeSetStore store = new ChangeSetStore(host);
                 SceneTools.Register(host, store);
-                string session = NewEditingSession(host);
+                string session = NewEditingSession(host, store);
 
                 host.CallTool(
                     session,
@@ -396,7 +398,7 @@ namespace Unitas.Editor.Tests
                 using McpHost host = NewHost();
                 ChangeSetStore store = new ChangeSetStore(host);
                 SceneTools.Register(host, store);
-                string session = NewEditingSession(host);
+                string session = NewEditingSession(host, store);
                 OpenSampleScene(host, session, project);
 
                 JsonNode inspected = host.CallTool(
@@ -445,7 +447,7 @@ namespace Unitas.Editor.Tests
                 ChangeSetStore store = new ChangeSetStore(host);
                 SceneTools.Register(host, store);
                 ChangeReviewTools.Register(host, store);
-                string session = NewEditingSession(host);
+                string session = NewEditingSession(host, store);
                 OpenSampleScene(host, session, project);
 
                 JsonNode moved = host.CallTool(
@@ -511,7 +513,7 @@ namespace Unitas.Editor.Tests
                 using McpHost host = NewHost();
                 ChangeSetStore store = new ChangeSetStore(host);
                 SceneTools.Register(host, store);
-                string session = NewEditingSession(host);
+                string session = NewEditingSession(host, store);
                 OpenSampleScene(host, session, project);
 
                 host.CallTool(
@@ -561,7 +563,7 @@ namespace Unitas.Editor.Tests
                 using McpHost host = NewHost();
                 ChangeSetStore store = new ChangeSetStore(host);
                 SceneTools.Register(host, store);
-                string session = NewEditingSession(host);
+                string session = NewEditingSession(host, store);
                 OpenSampleScene(host, session, project);
 
                 JsonNode duplicated = host.CallTool(
@@ -609,7 +611,7 @@ namespace Unitas.Editor.Tests
                 using McpHost host = NewHost();
                 ChangeSetStore store = new ChangeSetStore(host);
                 SceneTools.Register(host, store);
-                string session = NewEditingSession(host);
+                string session = NewEditingSession(host, store);
                 OpenSampleScene(host, session, project);
 
                 host.CallTool(
@@ -670,6 +672,152 @@ namespace Unitas.Editor.Tests
             }
         }
 
+        private static void SceneMutationUnderTheDefaultPolicyIsStagedUntilApproval()
+        {
+            string project = CreateProjectWithSampleScene("staged");
+            try
+            {
+                using McpHost host = new McpHost(
+                    new FixedClock(1_700_000_000_000L),
+                    PersonCredential.FromToken("person-token"));
+                ChangeSetStore store = new ChangeSetStore(host);
+                SceneTools.Register(host, store);
+                ChangeReviewTools.Register(host, store);
+                string agentSession = host.CreateSession(new SessionIdentity("agent-1", "stdio", "stdio-local"));
+                host.GrantScope(agentSession, Scope.ReadProject, GrantAuthority.Person);
+                host.GrantScope(agentSession, Scope.EditContent, GrantAuthority.Person);
+                string personSession = host.CreateSession(new SessionIdentity("person-ui", "http", "person-1"));
+                OpenSampleScene(host, agentSession, project);
+
+                JsonNode staged = host.CallTool(
+                    agentSession,
+                    "scene.set_property",
+                    new JsonObject
+                    {
+                        ["fileId"] = PickupFileId,
+                        ["path"] = "m_Name",
+                        ["value"] = "Pickup_1 Staged",
+                    });
+                Check.Equal(
+                    "scene: the staged edit reports pending review",
+                    "pending-review",
+                    staged["content"]?["status"]?.GetValue<string>() ?? string.Empty);
+                string changeId = staged["content"]?["changeId"]?.GetValue<string>() ?? string.Empty;
+                Check.That("scene: the staged edit names its change set", changeId.Length > 0);
+
+                JsonNode hierarchy = host.CallTool(agentSession, "scene.hierarchy", new JsonObject());
+                Check.Equal(
+                    "scene: the staged edit leaves the scene unchanged",
+                    "Pickup_1",
+                    NameOf(hierarchy, PickupFileId));
+
+                JsonNode shown = host.CallTool(
+                    personSession,
+                    "changes.show",
+                    new JsonObject
+                    {
+                        ["id"] = changeId,
+                    });
+                JsonArray? items = shown["content"]?["items"] as JsonArray;
+                Check.Equal("scene: changes.show lists the staged item", 1, items?.Count ?? 0);
+                Check.Equal(
+                    "scene: the staged item names the scene tool",
+                    "scene.set_property",
+                    items?[0]?["tool"]?.GetValue<string>() ?? string.Empty);
+                Check.Equal(
+                    "scene: the staged item is pending",
+                    "pending",
+                    items?[0]?["status"]?.GetValue<string>() ?? string.Empty);
+
+                host.CallTool(
+                    personSession,
+                    "changes.accept_item",
+                    new JsonObject
+                    {
+                        ["id"] = changeId,
+                        ["itemId"] = changeId + ".1",
+                        ["personCredential"] = "person-token",
+                    });
+                host.CallTool(
+                    personSession,
+                    "changes.approve",
+                    new JsonObject
+                    {
+                        ["id"] = changeId,
+                        ["personCredential"] = "person-token",
+                    });
+
+                JsonNode afterApproval = host.CallTool(agentSession, "scene.hierarchy", new JsonObject());
+                Check.Equal(
+                    "scene: approval applies the staged edit",
+                    "Pickup_1 Staged",
+                    NameOf(afterApproval, PickupFileId));
+
+                host.CallTool(agentSession, "editor.undo", new JsonObject());
+                JsonNode afterUndo = host.CallTool(agentSession, "scene.hierarchy", new JsonObject());
+                Check.Equal(
+                    "scene: the approved edit joins the undo history",
+                    "Pickup_1",
+                    NameOf(afterUndo, PickupFileId));
+            }
+            finally
+            {
+                DeleteDirectory(project);
+            }
+        }
+
+        private static void HoldAgentWritesRefusesSceneMutationsAndNamesThePolicyTool()
+        {
+            string project = CreateProjectWithSampleScene("holdwrites");
+            try
+            {
+                using McpHost host = NewHost();
+                ChangeSetStore store = new ChangeSetStore(host);
+                SceneTools.Register(host, store);
+                store.SetPolicy(new ReviewPolicy(requireApproval: true, holdAgentWrites: true));
+                string session = host.CreateSession(new SessionIdentity("agent-1", "stdio", "stdio-local"));
+                host.GrantScope(session, Scope.ReadProject, GrantAuthority.Person);
+                host.GrantScope(session, Scope.EditContent, GrantAuthority.Person);
+                OpenSampleScene(host, session, project);
+
+                McpError? refused = null;
+                try
+                {
+                    host.CallTool(
+                        session,
+                        "scene.set_property",
+                        new JsonObject
+                        {
+                            ["fileId"] = PickupFileId,
+                            ["path"] = "m_Name",
+                            ["value"] = "Pickup_1 Blocked",
+                        });
+                }
+                catch (McpError failure)
+                {
+                    refused = failure;
+                }
+
+                Check.That("scene: holdAgentWrites refuses the scene edit", refused != null);
+                Check.That(
+                    "scene: the refusal names changes.policy.set",
+                    refused != null && refused.Message.Contains("changes.policy.set", StringComparison.Ordinal));
+                Check.Equal(
+                    "scene: the refused edit stages nothing",
+                    0,
+                    store.All.Count);
+                JsonNode hierarchy = host.CallTool(session, "scene.hierarchy", new JsonObject());
+                Check.Equal(
+                    "scene: the refused edit leaves the scene unchanged",
+                    "Pickup_1",
+                    NameOf(hierarchy, PickupFileId));
+            }
+            finally
+            {
+                DeleteDirectory(project);
+            }
+        }
+
         private static void OpenSampleScene(McpHost host, string session, string project)
         {
             host.CallTool(
@@ -694,12 +842,18 @@ namespace Unitas.Editor.Tests
             return inspected["content"]?["position"]?.GetValue<string>() ?? string.Empty;
         }
 
-        private static string NewEditingSession(McpHost host)
+        private static string NewEditingSession(McpHost host, ChangeSetStore store)
         {
+            UseAutoApplyPolicyForEagerSceneExpectations(store);
             string session = host.CreateSession(new SessionIdentity("agent-1", "stdio", "stdio-local"));
             host.GrantScope(session, Scope.ReadProject, GrantAuthority.Person);
             host.GrantScope(session, Scope.EditContent, GrantAuthority.Person);
             return session;
+        }
+
+        private static void UseAutoApplyPolicyForEagerSceneExpectations(ChangeSetStore store)
+        {
+            store.SetPolicy(new ReviewPolicy(requireApproval: false, holdAgentWrites: false));
         }
 
         private static string NameOf(JsonNode envelope, long fileId)

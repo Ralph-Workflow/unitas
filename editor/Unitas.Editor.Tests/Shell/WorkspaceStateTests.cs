@@ -708,7 +708,17 @@ namespace Unitas.Editor.Tests
             string scenes = Path.Combine(root, "Assets", "Scenes");
             Directory.CreateDirectory(scenes);
             File.Copy(ResolveSampleScenePath(), Path.Combine(scenes, "MarbleRush.unity"));
+            UseAutoApplyPolicyForPreReviewGateShellExpectations(root);
             return root;
+        }
+
+        private static void UseAutoApplyPolicyForPreReviewGateShellExpectations(string project)
+        {
+            string directory = Path.Combine(project, ".unitas");
+            Directory.CreateDirectory(directory);
+            File.WriteAllText(
+                Path.Combine(directory, "review-policy.json"),
+                new ReviewPolicy(requireApproval: false, holdAgentWrites: false).ToValue().ToJsonString());
         }
 
         private static string ResolveSampleScenePath()

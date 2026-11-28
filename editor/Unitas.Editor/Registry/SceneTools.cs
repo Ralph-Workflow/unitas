@@ -26,8 +26,9 @@ namespace Unitas.Editor.Mcp
             ArgumentNullException.ThrowIfNull(store);
 
             RegisterCoreSceneTools(host, store);
-            RegisterHistorySceneTools(host);
+            RegisterHistorySceneTools(host, store);
             RegisterExtendedSceneTools(host, store);
+            RegisterSceneAppliers(store);
 
             host.RegisterResource(
                 new ResourceDefinition(
@@ -156,7 +157,7 @@ namespace Unitas.Editor.Mcp
                 arguments => HandleDestroyObject(host, store, arguments));
         }
 
-        private static void RegisterHistorySceneTools(McpHost host)
+        private static void RegisterHistorySceneTools(McpHost host, ChangeSetStore store)
         {
             host.RegisterTool(
                 new ToolDefinition(
@@ -168,7 +169,11 @@ namespace Unitas.Editor.Mcp
                         ["properties"] = new JsonObject(),
                     },
                     Scope.EditContent),
-                _ => HandleSave());
+                _ =>
+                {
+                    store.EnsureAgentWritesAllowed("scene.save");
+                    return HandleSave();
+                });
 
             host.RegisterTool(
                 new ToolDefinition(
@@ -180,7 +185,11 @@ namespace Unitas.Editor.Mcp
                         ["properties"] = new JsonObject(),
                     },
                     Scope.EditContent),
-                _ => HandleUndo());
+                _ =>
+                {
+                    store.EnsureAgentWritesAllowed("editor.undo");
+                    return HandleUndo();
+                });
 
             host.RegisterTool(
                 new ToolDefinition(
@@ -192,7 +201,11 @@ namespace Unitas.Editor.Mcp
                         ["properties"] = new JsonObject(),
                     },
                     Scope.EditContent),
-                _ => HandleRedo());
+                _ =>
+                {
+                    store.EnsureAgentWritesAllowed("editor.redo");
+                    return HandleRedo();
+                });
         }
 
         private static void RegisterExtendedSceneTools(McpHost host, ChangeSetStore store)
@@ -355,24 +368,25 @@ namespace Unitas.Editor.Mcp
             string propertyPath = RequireText(arguments, "path", "scene.set_property");
             string value = RequireValue(arguments, "value", "scene.set_property");
 
-            SceneOp op = SceneOp.SetProperty(fileId, propertyPath, value);
-            SceneOp inverse;
-            lock (Gate)
-            {
-                inverse = ApplyOp(scene, op, "scene.set_property");
-                scene.History.Push(op, inverse);
-            }
-
             JsonObject operation = new JsonObject
             {
                 ["tool"] = "scene.set_property",
                 ["scene"] = scene.RelativePath,
+                ["sceneFile"] = scene.FullPath,
                 ["fileId"] = fileId,
                 ["path"] = propertyPath,
-                ["before"] = inverse.Value,
                 ["after"] = value,
             };
             ChangeSet set = HoldChange(host, store, operation, "scene.set_property");
+            if (store.Policy.RequireApproval)
+            {
+                return ToolOutput.Untrusted(EditOrigin, PendingEditPayload(scene, set, new JsonObject
+                {
+                    ["fileId"] = fileId,
+                    ["path"] = propertyPath,
+                    ["after"] = value,
+                })).WithAffectedIdentities(set.Id);
+            }
 
             JsonObject payload = new JsonObject
             {
@@ -380,7 +394,7 @@ namespace Unitas.Editor.Mcp
                 ["scene"] = scene.RelativePath,
                 ["fileId"] = fileId,
                 ["path"] = propertyPath,
-                ["before"] = inverse.Value,
+                ["before"] = set.Operations[0]["before"]?.DeepClone(),
                 ["after"] = value,
                 ["changeId"] = set.Id,
                 ["changeSet"] = set.ToValue(),
@@ -394,31 +408,31 @@ namespace Unitas.Editor.Mcp
             string name = RequireText(arguments, "name", "scene.create_object");
             long parentFileId = OptionalLong(arguments, "parentFileId");
 
-            SceneOp op = SceneOp.CreateGameObject(name, parentFileId);
-            SceneOp inverse;
-            lock (Gate)
-            {
-                inverse = ApplyOp(scene, op, "scene.create_object");
-                scene.History.Push(op, inverse);
-            }
-
             JsonObject operation = new JsonObject
             {
                 ["tool"] = "scene.create_object",
                 ["scene"] = scene.RelativePath,
-                ["fileId"] = inverse.FileId,
+                ["sceneFile"] = scene.FullPath,
                 ["name"] = name,
                 ["parentFileId"] = parentFileId,
                 ["before"] = string.Empty,
                 ["after"] = name,
             };
             ChangeSet set = HoldChange(host, store, operation, "scene.create_object");
+            if (store.Policy.RequireApproval)
+            {
+                return ToolOutput.Untrusted(EditOrigin, PendingEditPayload(scene, set, new JsonObject
+                {
+                    ["name"] = name,
+                    ["parentFileId"] = parentFileId,
+                })).WithAffectedIdentities(set.Id);
+            }
 
             JsonObject payload = new JsonObject
             {
                 ["status"] = "applied",
                 ["scene"] = scene.RelativePath,
-                ["fileId"] = inverse.FileId,
+                ["fileId"] = set.Operations[0]["appliedFileId"]?.DeepClone(),
                 ["name"] = name,
                 ["parentFileId"] = parentFileId,
                 ["changeId"] = set.Id,
@@ -432,30 +446,32 @@ namespace Unitas.Editor.Mcp
             OpenScene scene = CurrentScene("scene.destroy_object");
             long fileId = RequireLong(arguments, "fileId", "scene.destroy_object");
 
-            SceneOp op = SceneOp.DestroyGameObject(fileId);
-            SceneOp inverse;
-            lock (Gate)
-            {
-                inverse = ApplyOp(scene, op, "scene.destroy_object");
-                scene.History.Push(op, inverse);
-            }
-
+            string name = NameOf(scene, fileId, "scene.destroy_object");
             JsonObject operation = new JsonObject
             {
                 ["tool"] = "scene.destroy_object",
                 ["scene"] = scene.RelativePath,
+                ["sceneFile"] = scene.FullPath,
                 ["fileId"] = fileId,
-                ["before"] = inverse.ObjectName,
+                ["before"] = name,
                 ["after"] = string.Empty,
             };
             ChangeSet set = HoldChange(host, store, operation, "scene.destroy_object");
+            if (store.Policy.RequireApproval)
+            {
+                return ToolOutput.Untrusted(EditOrigin, PendingEditPayload(scene, set, new JsonObject
+                {
+                    ["fileId"] = fileId,
+                    ["name"] = name,
+                })).WithAffectedIdentities(set.Id);
+            }
 
             JsonObject payload = new JsonObject
             {
                 ["status"] = "applied",
                 ["scene"] = scene.RelativePath,
                 ["fileId"] = fileId,
-                ["name"] = inverse.ObjectName,
+                ["name"] = name,
                 ["changeId"] = set.Id,
                 ["changeSet"] = set.ToValue(),
             };
@@ -532,23 +548,27 @@ namespace Unitas.Editor.Mcp
             long parentFileId = OptionalLong(arguments, "parentFileId");
 
             string previousParent = ParentOf(scene, fileId, "scene.reparent_object");
-            SceneOp op = SceneOp.Reparent(fileId, parentFileId);
-            SceneOp inverse;
-            lock (Gate)
-            {
-                inverse = ApplyOp(scene, op, "scene.reparent_object");
-                scene.History.Push(op, inverse);
-            }
-
             JsonObject operation = new JsonObject
             {
                 ["tool"] = "scene.reparent_object",
                 ["scene"] = scene.RelativePath,
+                ["sceneFile"] = scene.FullPath,
                 ["fileId"] = fileId,
+                ["parentFileId"] = parentFileId,
                 ["before"] = previousParent,
                 ["after"] = parentFileId.ToString(CultureInfo.InvariantCulture),
             };
             ChangeSet set = HoldChange(host, store, operation, "scene.reparent_object");
+            if (store.Policy.RequireApproval)
+            {
+                return ToolOutput.Untrusted(EditOrigin, PendingEditPayload(scene, set, new JsonObject
+                {
+                    ["fileId"] = fileId,
+                    ["parentFileId"] = parentFileId,
+                    ["before"] = previousParent,
+                    ["after"] = parentFileId.ToString(CultureInfo.InvariantCulture),
+                })).WithAffectedIdentities(set.Id);
+            }
 
             JsonObject payload = new JsonObject
             {
@@ -571,23 +591,27 @@ namespace Unitas.Editor.Mcp
             bool active = RequireBool(arguments, "active", "scene.set_active");
 
             string previous = ActiveOf(scene, fileId, "scene.set_active");
-            SceneOp op = SceneOp.SetActive(fileId, active);
-            SceneOp inverse;
-            lock (Gate)
-            {
-                inverse = ApplyOp(scene, op, "scene.set_active");
-                scene.History.Push(op, inverse);
-            }
-
             JsonObject operation = new JsonObject
             {
                 ["tool"] = "scene.set_active",
                 ["scene"] = scene.RelativePath,
+                ["sceneFile"] = scene.FullPath,
                 ["fileId"] = fileId,
+                ["active"] = active,
                 ["before"] = previous,
                 ["after"] = active ? "1" : "0",
             };
             ChangeSet set = HoldChange(host, store, operation, "scene.set_active");
+            if (store.Policy.RequireApproval)
+            {
+                return ToolOutput.Untrusted(EditOrigin, PendingEditPayload(scene, set, new JsonObject
+                {
+                    ["fileId"] = fileId,
+                    ["active"] = active,
+                    ["before"] = previous,
+                    ["after"] = active ? "1" : "0",
+                })).WithAffectedIdentities(set.Id);
+            }
 
             JsonObject payload = new JsonObject
             {
@@ -618,30 +642,33 @@ namespace Unitas.Editor.Mcp
                 parentFileId = ParentFileIdOf(scene, fileId, "scene.duplicate_object");
             }
 
-            SceneOp op = SceneOp.DuplicateGameObject(fileId, copyName, parentFileId);
-            SceneOp inverse;
-            lock (Gate)
-            {
-                inverse = ApplyOp(scene, op, "scene.duplicate_object");
-                scene.History.Push(op, inverse);
-            }
-
             JsonObject operation = new JsonObject
             {
                 ["tool"] = "scene.duplicate_object",
                 ["scene"] = scene.RelativePath,
+                ["sceneFile"] = scene.FullPath,
                 ["fileId"] = fileId,
                 ["name"] = copyName,
+                ["parentFileId"] = parentFileId,
                 ["before"] = string.Empty,
                 ["after"] = copyName,
             };
             ChangeSet set = HoldChange(host, store, operation, "scene.duplicate_object");
+            if (store.Policy.RequireApproval)
+            {
+                return ToolOutput.Untrusted(EditOrigin, PendingEditPayload(scene, set, new JsonObject
+                {
+                    ["sourceFileId"] = fileId,
+                    ["name"] = copyName,
+                    ["parentFileId"] = parentFileId,
+                })).WithAffectedIdentities(set.Id);
+            }
 
             JsonObject payload = new JsonObject
             {
                 ["status"] = "applied",
                 ["scene"] = scene.RelativePath,
-                ["fileId"] = inverse.FileId,
+                ["fileId"] = set.Operations[0]["appliedFileId"]?.DeepClone(),
                 ["sourceFileId"] = fileId,
                 ["name"] = copyName,
                 ["parentFileId"] = parentFileId,
@@ -1024,9 +1051,121 @@ namespace Unitas.Editor.Mcp
 
         private static ChangeSet HoldChange(McpHost host, ChangeSetStore store, JsonObject operation, string toolName)
         {
+            store.EnsureAgentWritesAllowed(toolName);
             string sessionId = host.CurrentSessionId
                 ?? throw new McpError.InvalidRequest(toolName + " requires an active MCP session");
             return store.Hold(host.GetSessionIdentity(sessionId).Agent, operation);
+        }
+
+        private static void RegisterSceneAppliers(ChangeSetStore store)
+        {
+            store.RegisterApplier("scene.set_property", ApplyRecordedSceneOperation);
+            store.RegisterApplier("scene.create_object", ApplyRecordedSceneOperation);
+            store.RegisterApplier("scene.destroy_object", ApplyRecordedSceneOperation);
+            store.RegisterApplier("scene.reparent_object", ApplyRecordedSceneOperation);
+            store.RegisterApplier("scene.set_active", ApplyRecordedSceneOperation);
+            store.RegisterApplier("scene.duplicate_object", ApplyRecordedSceneOperation);
+        }
+
+        private static JsonObject ApplyRecordedSceneOperation(JsonObject operation)
+        {
+            string toolName = RecordedText(operation, "tool", "scene.review");
+            string relative = RecordedText(operation, "scene", toolName);
+            string fullPath = RecordedText(operation, "sceneFile", toolName);
+            OpenScene scene = GetOrOpen(fullPath, relative, toolName);
+            SceneOp op = RecordedSceneOp(operation, toolName);
+            lock (Gate)
+            {
+                SceneOp inverse = ApplyOp(scene, op, toolName);
+                scene.History.Push(op, inverse);
+                if (toolName == "scene.set_property")
+                {
+                    operation["before"] = inverse.Value;
+                }
+                else if (toolName == "scene.create_object" || toolName == "scene.duplicate_object")
+                {
+                    operation["appliedFileId"] = inverse.FileId;
+                }
+            }
+
+            return new JsonObject();
+        }
+
+        private static SceneOp RecordedSceneOp(JsonObject operation, string toolName)
+        {
+            switch (toolName)
+            {
+                case "scene.set_property":
+                    return SceneOp.SetProperty(
+                        RecordedLong(operation, "fileId", toolName),
+                        RecordedText(operation, "path", toolName),
+                        RecordedText(operation, "after", toolName));
+                case "scene.create_object":
+                    return SceneOp.CreateGameObject(
+                        RecordedText(operation, "name", toolName),
+                        RecordedLong(operation, "parentFileId", toolName));
+                case "scene.destroy_object":
+                    return SceneOp.DestroyGameObject(RecordedLong(operation, "fileId", toolName));
+                case "scene.reparent_object":
+                    return SceneOp.Reparent(
+                        RecordedLong(operation, "fileId", toolName),
+                        RecordedLong(operation, "parentFileId", toolName));
+                case "scene.set_active":
+                    return SceneOp.SetActive(
+                        RecordedLong(operation, "fileId", toolName),
+                        RecordedFlag(operation, toolName));
+                case "scene.duplicate_object":
+                    return SceneOp.DuplicateGameObject(
+                        RecordedLong(operation, "fileId", toolName),
+                        RecordedText(operation, "name", toolName),
+                        RecordedLong(operation, "parentFileId", toolName));
+                default:
+                    throw new McpError.InvalidRequest(toolName + " has no recorded scene operation to apply");
+            }
+        }
+
+        private static string RecordedText(JsonObject operation, string propertyName, string toolName)
+        {
+            if (operation[propertyName] is JsonValue value
+                && value.TryGetValue(out string? text)
+                && text != null)
+            {
+                return text;
+            }
+
+            throw new McpError.InvalidRequest(
+                toolName + " holds a recorded operation without a textual '" + propertyName + "'");
+        }
+
+        private static long RecordedLong(JsonObject operation, string propertyName, string toolName)
+        {
+            if (TryReadLong(operation[propertyName], out long number))
+            {
+                return number;
+            }
+
+            throw new McpError.InvalidRequest(
+                toolName + " holds a recorded operation without a numeric '" + propertyName + "'");
+        }
+
+        private static bool RecordedFlag(JsonObject operation, string toolName)
+        {
+            if (operation["active"] is JsonValue value && value.TryGetValue(out bool active))
+            {
+                return active;
+            }
+
+            throw new McpError.InvalidRequest(
+                toolName + " holds a recorded operation without a boolean 'active'");
+        }
+
+        private static JsonObject PendingEditPayload(OpenScene scene, ChangeSet set, JsonObject payload)
+        {
+            payload["status"] = "pending-review";
+            payload["scene"] = scene.RelativePath;
+            payload["changeId"] = set.Id;
+            payload["changeSet"] = set.ToValue();
+            return payload;
         }
 
         private static string RequireText(JsonNode arguments, string propertyName, string toolName)

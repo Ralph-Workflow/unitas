@@ -104,6 +104,8 @@ namespace Unitas.Editor.Mcp
                     },
                     Scope.EditContent),
                 arguments => HandleWrite(host, store, arguments));
+
+            store.RegisterApplier("project.write_file", operation => ApplyHeldWrite(host, operation));
         }
 
         private static ToolOutput HandleList(McpHost host, JsonNode arguments)
@@ -186,7 +188,45 @@ namespace Unitas.Editor.Mcp
                 host.RequireScope(sessionId, Scope.EditScripts);
             }
 
+            store.EnsureAgentWritesAllowed("project.write_file", arguments);
+
             string before = File.Exists(target) ? ReadText(target, "project.write_file") : string.Empty;
+            JsonObject operation = new JsonObject
+            {
+                ["tool"] = "project.write_file",
+                ["path"] = relative,
+                ["before"] = before,
+                ["after"] = content,
+            };
+            string? requestedProject = ProjectAccess.OptionalString(arguments, "projectPath");
+            if (requestedProject != null)
+            {
+                operation["projectPath"] = requestedProject;
+            }
+
+            ChangeSet set = store.Hold(host.GetSessionIdentity(sessionId).Agent, operation);
+
+            JsonObject payload = new JsonObject
+            {
+                ["status"] = store.PolicyForArguments(arguments).RequireApproval ? "pending-review" : "applied",
+                ["path"] = relative,
+                ["bytes"] = content.Length,
+                ["changeId"] = set.Id,
+                ["changeSet"] = set.ToValue(),
+            };
+            return ToolOutput.Untrusted(FileOrigin, payload).WithAffectedIdentities(set.Id);
+        }
+
+        private static JsonObject ApplyHeldWrite(McpHost host, JsonObject operation)
+        {
+            string root = ResolveOperationRoot(host, operation);
+            string relative = RequirePath(operation, "project.write_file");
+            if (operation["after"] is not JsonValue afterValue || !afterValue.TryGetValue(out string? after))
+            {
+                throw new McpError.InvalidParams("project.write_file recorded an operation without its after text");
+            }
+
+            string target = ProjectAccess.ResolveFile(root, relative, "project.write_file");
             try
             {
                 string? directory = Path.GetDirectoryName(target);
@@ -195,34 +235,19 @@ namespace Unitas.Editor.Mcp
                     Directory.CreateDirectory(directory);
                 }
 
-                File.WriteAllText(target, content);
+                File.WriteAllText(target, after);
             }
             catch (Exception error) when (error is IOException || error is UnauthorizedAccessException)
             {
                 throw new McpError.Io(error);
             }
 
-            // The write is applied so an agent can author unattended; the change
-            // set is the provenance record of that applied edit and stays
-            // pending until a person reviews it.
-            JsonObject operation = new JsonObject
-            {
-                ["tool"] = "project.write_file",
-                ["path"] = relative,
-                ["before"] = before,
-                ["after"] = content,
-            };
-            ChangeSet set = store.Hold(host.GetSessionIdentity(sessionId).Agent, operation);
+            return operation;
+        }
 
-            JsonObject payload = new JsonObject
-            {
-                ["status"] = "applied",
-                ["path"] = relative,
-                ["bytes"] = content.Length,
-                ["changeId"] = set.Id,
-                ["changeSet"] = set.ToValue(),
-            };
-            return ToolOutput.Untrusted(FileOrigin, payload).WithAffectedIdentities(set.Id);
+        private static string ResolveOperationRoot(McpHost host, JsonObject operation)
+        {
+            return ProjectAccess.ResolveRoot(host, operation, "project.write_file");
         }
 
         private static void Collect(string directory, string root, List<string> paths, ref bool truncated)

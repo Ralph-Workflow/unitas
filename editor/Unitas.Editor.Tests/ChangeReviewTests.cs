@@ -14,6 +14,382 @@ namespace Unitas.Editor.Tests
             PersonApproveAppliesHeldMutationAndAuditsTransitions();
             PersonRejectRefusesHeldMutationAndClosesIt();
             RejectRestoresTheFilesTheChangeSetChanged();
+            PolicyDefaultsRoundTripAndTolerateMalformedValues();
+            HoldStagesItemsUnderTheDefaultPolicy();
+            AcceptAndRejectItemsThenApproveAppliesOnlyAccepted();
+            AutoApplyPolicyAppliesThroughTheRegisteredContinuation();
+            AutoApplyWithoutAContinuationIsLoud();
+            RiskClassificationCoversTheFourClasses();
+            DiffNormalizationMatchesTheOperationShape();
+            ItemIdsAreStableAcrossItemsAndSets();
+            SetPolicyPersistsToTheProjectFile();
+        }
+
+        private static void PolicyDefaultsRoundTripAndTolerateMalformedValues()
+        {
+            ReviewPolicy policy = ReviewPolicy.Default;
+            Check.That("policy: the default requires approval", policy.RequireApproval);
+            Check.That("policy: the default does not hold agent writes", !policy.HoldAgentWrites);
+            ReviewPolicy absent = ReviewPolicy.FromValue(null);
+            Check.That("policy: an absent value falls back to the default", absent.RequireApproval && !absent.HoldAgentWrites);
+            ReviewPolicy malformed = ReviewPolicy.FromValue(new JsonObject { ["requireApproval"] = "yes" });
+            Check.That("policy: a malformed value falls back to the default", malformed.RequireApproval && !malformed.HoldAgentWrites);
+            JsonObject value = new ReviewPolicy(requireApproval: false, holdAgentWrites: true).ToValue();
+            Check.That("policy: to-value records requireApproval", !value["requireApproval"]!.GetValue<bool>());
+            Check.That("policy: to-value records holdAgentWrites", value["holdAgentWrites"]!.GetValue<bool>());
+            ReviewPolicy roundTripped = ReviewPolicy.FromValue(value);
+            Check.That(
+                "policy: to-value and from-value round-trip",
+                !roundTripped.RequireApproval && roundTripped.HoldAgentWrites);
+        }
+
+        private static void HoldStagesItemsUnderTheDefaultPolicy()
+        {
+            FixedClock clock = new FixedClock(5_000);
+            using McpHost host = new McpHost(clock);
+            ChangeSetStore store = new ChangeSetStore(host);
+            ChangeReviewTools.Register(host, store);
+            RegisterSyntheticMutator(host, store);
+            Driver driver = new Driver();
+            RegisterDriver(host, driver);
+            int applied = 0;
+            store.RegisterApplier("test.mutate", _ =>
+            {
+                applied++;
+                return new JsonObject();
+            });
+            string agentSession = host.CreateSession(new SessionIdentity("agent-a", "stdio", "person-1"));
+            host.CallTool(agentSession, "test.mutate", new JsonObject { ["value"] = "staged" });
+            ChangeSet set = store.Get("cs-1");
+            Check.Equal("staged: one item per held operation", 1, set.Items.Count);
+            ChangeItem item = set.Items[0];
+            Check.Equal("staged: the item id is the set id plus a one-based index", "cs-1.1", item.Id);
+            Check.That("staged: the item is pending", item.Status == ChangeItemStatus.Pending);
+            Check.Equal("staged: the item names the tool", "test.mutate", item.Tool);
+            Check.Equal("staged: the continuation is not invoked", 0, applied);
+            JsonArray items = (JsonArray)set.ToValue()["items"]!;
+            Check.Equal("staged: the payload lists the item", 1, items.Count);
+            Check.Equal(
+                "staged: the payload reports the item pending",
+                "pending",
+                ((JsonObject)items[0]!)["status"]!.GetValue<string>());
+            Drive(host, agentSession, driver, () => store.AcceptItem("cs-1", "cs-1.1").ToValue());
+            Check.That("staged: accept marks the item accepted", item.Status == ChangeItemStatus.Accepted);
+            Drive(host, agentSession, driver, () => store.Approve("cs-1").ToValue());
+            Check.Equal("staged: approve applies the accepted item", 1, applied);
+            Check.That("staged: the approved set is applied", set.Status == ChangeSetStatus.Applied);
+        }
+
+        private static void AcceptAndRejectItemsThenApproveAppliesOnlyAccepted()
+        {
+            FixedClock clock = new FixedClock(6_000);
+            string project = CreateProject("item-review");
+            try
+            {
+                using McpHost host = new McpHost(clock);
+                ChangeSetStore store = new ChangeSetStore(host);
+                AssetTools.Register(host, store);
+                Driver driver = new Driver();
+                RegisterDriver(host, driver);
+                host.OpenProject(project);
+                string agentSession = host.CreateSession(new SessionIdentity("agent-a", "stdio", "person-1"));
+                host.GrantScope(agentSession, Scope.EditContent, GrantAuthority.Person);
+                List<string> appliedPaths = new List<string>();
+                store.RegisterApplier("assets.import", operation =>
+                {
+                    appliedPaths.Add(operation["path"]!.GetValue<string>());
+                    return new JsonObject();
+                });
+                host.CallTool(
+                    agentSession,
+                    "assets.import",
+                    new JsonObject
+                    {
+                        ["projectPath"] = project,
+                        ["path"] = "Assets/Notes.txt",
+                        ["text"] = "hello\n",
+                    });
+                ChangeSet set = store.Get("cs-1");
+                Check.Equal("items: the import holds the asset and meta operations", 2, set.Items.Count);
+                Check.Equal("items: the first item id", "cs-1.1", set.Items[0].Id);
+                Check.Equal("items: the second item id", "cs-1.2", set.Items[1].Id);
+                Check.Equal("items: nothing is applied while staged", 0, appliedPaths.Count);
+                Drive(host, agentSession, driver, () => store.AcceptItem("cs-1", "cs-1.1").ToValue());
+                Drive(host, agentSession, driver, () => store.RejectItem("cs-1", "cs-1.2").ToValue());
+                Check.That("items: the accepted item is accepted", set.Items[0].Status == ChangeItemStatus.Accepted);
+                Check.That("items: the rejected item is rejected", set.Items[1].Status == ChangeItemStatus.Rejected);
+                bool doubleTransitionRefused = false;
+                try
+                {
+                    Drive(host, agentSession, driver, () => store.AcceptItem("cs-1", "cs-1.2").ToValue());
+                }
+                catch (ChangeItemNotPending)
+                {
+                    doubleTransitionRefused = true;
+                }
+
+                Check.That("items: accepting a rejected item is refused", doubleTransitionRefused);
+                bool unknownItemRefused = false;
+                try
+                {
+                    Drive(host, agentSession, driver, () => store.AcceptItem("cs-1", "cs-1.9").ToValue());
+                }
+                catch (UnknownChangeItem)
+                {
+                    unknownItemRefused = true;
+                }
+
+                Check.That("items: an unknown item id is refused", unknownItemRefused);
+                Drive(host, agentSession, driver, () => store.Approve("cs-1").ToValue());
+                Check.Equal("items: approve applies only the accepted item", 1, appliedPaths.Count);
+                Check.Equal("items: the applied item is the asset", "Assets/Notes.txt", appliedPaths[0]);
+                Check.That("items: the approved set is applied", set.Status == ChangeSetStatus.Applied);
+                Check.That("items: the rejected item stays rejected", set.Items[1].Status == ChangeItemStatus.Rejected);
+            }
+            finally
+            {
+                DeleteDirectory(project);
+            }
+        }
+
+        private static void AutoApplyPolicyAppliesThroughTheRegisteredContinuation()
+        {
+            FixedClock clock = new FixedClock(7_000);
+            using McpHost host = new McpHost(clock);
+            ChangeSetStore store = new ChangeSetStore(host);
+            ChangeReviewTools.Register(host, store);
+            RegisterSyntheticMutator(host, store);
+            store.SetPolicy(new ReviewPolicy(requireApproval: false, holdAgentWrites: false));
+            string? appliedValue = null;
+            store.RegisterApplier("test.mutate", operation =>
+            {
+                appliedValue = ((JsonObject)operation["arguments"]!)["value"]!.GetValue<string>();
+                return new JsonObject();
+            });
+            string agentSession = host.CreateSession(new SessionIdentity("agent-a", "stdio", "person-1"));
+            host.CallTool(agentSession, "test.mutate", new JsonObject { ["value"] = "automatic" });
+            Check.Equal("auto: the continuation ran at hold time", "automatic", appliedValue!);
+            ChangeItem item = store.Get("cs-1").Items[0];
+            Check.That("auto: the item ends accepted", item.Status == ChangeItemStatus.Accepted);
+        }
+
+        private static void AutoApplyWithoutAContinuationIsLoud()
+        {
+            FixedClock clock = new FixedClock(8_000);
+            using McpHost host = new McpHost(clock);
+            ChangeSetStore store = new ChangeSetStore(host);
+            ChangeReviewTools.Register(host, store);
+            RegisterSyntheticMutator(host, store);
+            store.SetPolicy(new ReviewPolicy(requireApproval: false, holdAgentWrites: false));
+            string agentSession = host.CreateSession(new SessionIdentity("agent-a", "stdio", "person-1"));
+            bool refused = false;
+            try
+            {
+                host.CallTool(agentSession, "test.mutate", new JsonObject { ["value"] = "automatic" });
+            }
+            catch (McpError)
+            {
+                refused = true;
+            }
+
+            Check.That("auto: a missing continuation is a loud misconfiguration", refused);
+        }
+
+        private static void RiskClassificationCoversTheFourClasses()
+        {
+            FixedClock clock = new FixedClock(9_000);
+            using McpHost host = new McpHost(clock);
+            ChangeSetStore store = new ChangeSetStore(host);
+            Driver driver = new Driver();
+            RegisterDriver(host, driver);
+            string agentSession = host.CreateSession(new SessionIdentity("agent-a", "stdio", "person-1"));
+            Check.Equal(
+                "risk: emptying a tests file is test-deletion",
+                "test-deletion",
+                HoldRisk(driver, store, agentSession, new JsonObject
+                {
+                    ["tool"] = "project.write_file",
+                    ["path"] = "Assets/Editor/FooTests.cs",
+                    ["before"] = "class FooTests {}\n",
+                    ["after"] = "",
+                }));
+            Check.Equal(
+                "risk: deleting under a tests directory is test-deletion",
+                "test-deletion",
+                HoldRisk(driver, store, agentSession, new JsonObject
+                {
+                    ["tool"] = "asset.delete",
+                    ["path"] = "Assets/Tests/Helper.cs",
+                    ["before"] = "class Helper {}\n",
+                }));
+            Check.Equal(
+                "risk: widening a tolerance property is tolerance-widening",
+                "tolerance-widening",
+                HoldRisk(driver, store, agentSession, new JsonObject
+                {
+                    ["tool"] = "scene.set_property",
+                    ["scene"] = "Assets/Scenes/Main.unity",
+                    ["path"] = "m_Tolerance",
+                    ["before"] = "0.01",
+                    ["after"] = "0.5",
+                }));
+            Check.Equal(
+                "risk: editing a script is script-edit",
+                "script-edit",
+                HoldRisk(driver, store, agentSession, new JsonObject
+                {
+                    ["tool"] = "project.write_file",
+                    ["path"] = "Assets/Scripts/Mover.cs",
+                    ["before"] = "class Mover {}\n",
+                    ["after"] = "class Mover { }\n",
+                }));
+            Check.Equal(
+                "risk: a scene value edit is content-edit",
+                "content-edit",
+                HoldRisk(driver, store, agentSession, new JsonObject
+                {
+                    ["tool"] = "scene.set_property",
+                    ["scene"] = "Assets/Scenes/Main.unity",
+                    ["path"] = "m_Name",
+                    ["before"] = "Old",
+                    ["after"] = "New",
+                }));
+            Check.Equal(
+                "risk: the severity order lists test-deletion first",
+                "test-deletion",
+                ChangeRisks.AsString(ChangeRisks.SeverityOrder[0]));
+            Check.Equal(
+                "risk: the severity order lists tolerance-widening second",
+                "tolerance-widening",
+                ChangeRisks.AsString(ChangeRisks.SeverityOrder[1]));
+        }
+
+        private static void DiffNormalizationMatchesTheOperationShape()
+        {
+            FixedClock clock = new FixedClock(10_000);
+            using McpHost host = new McpHost(clock);
+            ChangeSetStore store = new ChangeSetStore(host);
+            Driver driver = new Driver();
+            RegisterDriver(host, driver);
+            string agentSession = host.CreateSession(new SessionIdentity("agent-a", "stdio", "person-1"));
+            JsonObject fileDiff = HoldDiff(driver, store, agentSession, new JsonObject
+            {
+                ["tool"] = "project.write_file",
+                ["path"] = "Assets/Notes.md",
+                ["before"] = "first\n",
+                ["after"] = "second\n",
+            });
+            Check.Equal("diff: a file write normalizes to text", "text", fileDiff["kind"]!.GetValue<string>());
+            Check.Equal("diff: the text diff names the path", "Assets/Notes.md", fileDiff["path"]!.GetValue<string>());
+            Check.Equal("diff: the text diff keeps before", "first\n", fileDiff["before"]!.GetValue<string>());
+            Check.Equal("diff: the text diff keeps after", "second\n", fileDiff["after"]!.GetValue<string>());
+            JsonObject propertyDiff = HoldDiff(driver, store, agentSession, new JsonObject
+            {
+                ["tool"] = "scene.set_property",
+                ["scene"] = "Assets/Scenes/Main.unity",
+                ["path"] = "m_Name",
+                ["before"] = "Old",
+                ["after"] = "New",
+            });
+            Check.Equal("diff: a property op normalizes to properties", "properties", propertyDiff["kind"]!.GetValue<string>());
+            Check.Equal(
+                "diff: the properties diff names the scene",
+                "Assets/Scenes/Main.unity",
+                propertyDiff["path"]!.GetValue<string>());
+            JsonObject property = (JsonObject)((JsonArray)propertyDiff["properties"]!)[0]!;
+            Check.Equal("diff: the property entry names the property", "m_Name", property["name"]!.GetValue<string>());
+            Check.Equal("diff: the property entry keeps before", "Old", property["before"]!.GetValue<string>());
+            Check.Equal("diff: the property entry keeps after", "New", property["after"]!.GetValue<string>());
+        }
+
+        private static void ItemIdsAreStableAcrossItemsAndSets()
+        {
+            FixedClock clock = new FixedClock(11_000);
+            using McpHost host = new McpHost(clock);
+            ChangeSetStore store = new ChangeSetStore(host);
+            Driver driver = new Driver();
+            RegisterDriver(host, driver);
+            string agentSession = host.CreateSession(new SessionIdentity("agent-a", "stdio", "person-1"));
+            Drive(host, agentSession, driver, () => store.Hold("agent-a", new JsonObject { ["tool"] = "test.mutate" }).ToValue());
+            Drive(host, agentSession, driver, () => store.Hold("agent-a", new JsonObject { ["tool"] = "test.mutate" }).ToValue());
+            Check.Equal("ids: the first set numbers its item from one", "cs-1.1", store.Get("cs-1").Items[0].Id);
+            Check.Equal("ids: the second set restarts at one", "cs-2.1", store.Get("cs-2").Items[0].Id);
+        }
+
+        private static void SetPolicyPersistsToTheProjectFile()
+        {
+            FixedClock clock = new FixedClock(12_000);
+            string project = CreateProject("policy");
+            try
+            {
+                using McpHost host = new McpHost(clock);
+                host.OpenProject(project);
+                ChangeSetStore store = new ChangeSetStore(host);
+                Check.That("persist: an absent policy file loads the default", store.Policy.RequireApproval);
+                store.SetPolicy(new ReviewPolicy(requireApproval: false, holdAgentWrites: true));
+                string policyFile = Path.Combine(project, ".unitas", "review-policy.json");
+                Check.That("persist: the policy file is written under the project", File.Exists(policyFile));
+                JsonObject persisted = (JsonObject)JsonNode.Parse(File.ReadAllText(policyFile))!;
+                Check.That("persist: the file holds requireApproval", !persisted["requireApproval"]!.GetValue<bool>());
+                Check.That("persist: the file holds holdAgentWrites", persisted["holdAgentWrites"]!.GetValue<bool>());
+                ChangeSetStore reopened = new ChangeSetStore(host);
+                Check.That(
+                    "persist: a new store over the same project loads the saved policy",
+                    !reopened.Policy.RequireApproval && reopened.Policy.HoldAgentWrites);
+            }
+            finally
+            {
+                DeleteDirectory(project);
+            }
+        }
+
+        private static string HoldRisk(Driver driver, ChangeSetStore store, string session, JsonObject operation)
+        {
+            return (string)HoldValue(driver, store, session, operation, "risk")!;
+        }
+
+        private static JsonObject HoldDiff(Driver driver, ChangeSetStore store, string session, JsonObject operation)
+        {
+            return (JsonObject)HoldValue(driver, store, session, operation, "diff");
+        }
+
+        private static JsonNode HoldValue(Driver driver, ChangeSetStore store, string session, JsonObject operation, string field)
+        {
+            JsonObject? payload = null;
+            Drive(driver.Host, session, driver, () =>
+            {
+                payload = store.Hold("agent-a", operation).ToValue();
+                return payload;
+            });
+            return ((JsonObject)((JsonArray)payload!["items"]!)[0]!)[field]!;
+        }
+
+        private sealed class Driver
+        {
+            public Func<ToolOutput>? Next;
+
+            public McpHost Host = null!;
+        }
+
+        private static void RegisterDriver(McpHost host, Driver driver)
+        {
+            driver.Host = host;
+            host.RegisterTool(
+                new ToolDefinition(
+                    "test.drive",
+                    "Synthetic driver that runs store calls inside a session",
+                    new JsonObject
+                    {
+                        ["type"] = "object",
+                    },
+                    Scope.ReadProject),
+                _ => driver.Next!());
+        }
+
+        private static void Drive(McpHost host, string session, Driver driver, Func<JsonObject> action)
+        {
+            driver.Next = () => ToolOutput.Untrusted("test://driver", action());
+            host.CallTool(session, "test.drive", new JsonObject());
         }
 
         private static void AgentMutationIsHeldUnderReviewPolicy()
@@ -98,7 +474,10 @@ namespace Unitas.Editor.Tests
             FixedClock clock = new FixedClock(2_000);
             using McpHost host = new McpHost(clock, PersonCredential.FromToken("person-token"));
             string? appliedValue = null;
-            ChangeSetStore store = new ChangeSetStore(host, operation =>
+            ChangeSetStore store = new ChangeSetStore(host);
+            Driver driver = new Driver();
+            RegisterDriver(host, driver);
+            store.RegisterApplier("test.mutate", operation =>
             {
                 appliedValue = ((JsonObject)operation["arguments"]!)["value"]!.GetValue<string>();
                 return new JsonObject
@@ -173,6 +552,7 @@ namespace Unitas.Editor.Tests
 
             Check.That("approve: person with a wrong token is refused", wrongTokenRefused);
 
+            Drive(host, personSession, driver, () => store.AcceptItem("cs-1", "cs-1.1").ToValue());
             JsonObject approved = ContentOf(host.CallTool(
                 personSession,
                 "changes.approve",
@@ -185,13 +565,14 @@ namespace Unitas.Editor.Tests
             Check.Equal("approve: approved operation executed", "agent-proposal", appliedValue!);
 
             List<AuditRecord> transitions = TransitionRecords(host);
-            Check.Equal("approve: hold, approve, apply transitions audited", 3, transitions.Count);
+            Check.Equal("approve: hold, accept, approve, apply transitions audited", 4, transitions.Count);
             Check.Equal("approve: first transition is hold", "changes.hold", transitions[0].Target);
-            Check.Equal("approve: second transition is approve", "changes.approve", transitions[1].Target);
-            Check.Equal("approve: third transition is apply", "changes.apply", transitions[2].Target);
+            Check.Equal("approve: second transition is accept-item", "changes.accept_item", transitions[1].Target);
+            Check.Equal("approve: third transition is approve", "changes.approve", transitions[2].Target);
+            Check.Equal("approve: fourth transition is apply", "changes.apply", transitions[3].Target);
             Check.That(
                 "approve: transitions by the person identity",
-                transitions[1].Identity.Client == "http" && transitions[2].Identity.Client == "http");
+                transitions[2].Identity.Client == "http" && transitions[3].Identity.Client == "http");
             Check.That(
                 "approve: refused agent attempt audited as failed tool call",
                 HasOutcomeFor(host, "changes.approve", "failed"));
@@ -202,7 +583,8 @@ namespace Unitas.Editor.Tests
             FixedClock clock = new FixedClock(3_000);
             using McpHost host = new McpHost(clock, PersonCredential.FromToken("person-token"));
             bool applied = false;
-            ChangeSetStore store = new ChangeSetStore(host, _ =>
+            ChangeSetStore store = new ChangeSetStore(host);
+            store.RegisterApplier("test.mutate", _ =>
             {
                 applied = true;
                 return new JsonObject();
@@ -295,6 +677,15 @@ namespace Unitas.Editor.Tests
             Check.Equal("reject: reject transition audited", "changes.reject", transitions[1].Target);
         }
 
+        private static void UseAutoApplyPolicyForPreReviewGateRestoreExpectations(string project)
+        {
+            string directory = Path.Combine(project, ".unitas");
+            Directory.CreateDirectory(directory);
+            File.WriteAllText(
+                Path.Combine(directory, "review-policy.json"),
+                new ReviewPolicy(requireApproval: false, holdAgentWrites: false).ToValue().ToJsonString());
+        }
+
         private static void RejectRestoresTheFilesTheChangeSetChanged()
         {
             FixedClock clock = new FixedClock(4_000);
@@ -306,12 +697,14 @@ namespace Unitas.Editor.Tests
                 ProjectTools.Register(host, store);
                 ChangeReviewTools.Register(host, store);
                 RegisterSyntheticMutator(host, store);
+                store.RegisterApplier("test.mutate", operation => operation);
                 host.OpenProject(project);
                 string agentSession = host.CreateSession(new SessionIdentity("agent-a", "stdio", "person-1"));
                 host.GrantScope(agentSession, Scope.EditContent, GrantAuthority.Person);
                 string personSession = host.CreateSession(new SessionIdentity("person-ui", "http", "person-1"));
 
                 File.WriteAllText(Path.Combine(project, "Assets", "Existing.txt"), "original\n");
+                UseAutoApplyPolicyForPreReviewGateRestoreExpectations(project);
                 host.CallTool(
                     agentSession,
                     "project.write_file",

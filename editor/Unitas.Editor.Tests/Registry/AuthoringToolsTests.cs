@@ -14,6 +14,8 @@ namespace Unitas.Editor.Tests
             ListReadWriteRoundTripRecordsAChangeSet();
             WriteOutsideTheProjectIsRefused();
             WriteRequiresTheEditScopes();
+            WriteFileUnderTheDefaultPolicyStagesUntilApproved();
+            WriteFileUnderHoldAgentWritesIsRefused();
             CompileReportsScriptDiagnostics();
             DiagnoseReportsStructuredDiagnostics();
             DiagnoseReportsASoundProject();
@@ -63,6 +65,7 @@ namespace Unitas.Editor.Tests
             {
                 using McpHost host = NewHost();
                 ChangeSetStore store = new ChangeSetStore(host);
+                UseAutoApplyPolicyForLegacyEagerExpectations(project);
                 ProjectTools.Register(host, store);
                 string session = host.CreateSession(new SessionIdentity("agent-1", "stdio", "stdio-local"));
                 host.GrantScope(session, Scope.EditContent, GrantAuthority.Person);
@@ -263,6 +266,149 @@ namespace Unitas.Editor.Tests
             {
                 DeleteDirectory(project);
             }
+        }
+
+        private static void WriteFileUnderTheDefaultPolicyStagesUntilApproved()
+        {
+            string project = CreateProject("staged-write", false);
+            try
+            {
+                using McpHost host = NewHost();
+                ChangeSetStore store = new ChangeSetStore(host);
+                ProjectTools.Register(host, store);
+                Driver driver = new Driver();
+                RegisterDriver(host, driver);
+                string session = host.CreateSession(new SessionIdentity("agent-1", "stdio", "stdio-local"));
+                host.GrantScope(session, Scope.EditContent, GrantAuthority.Person);
+                host.GrantScope(session, Scope.ReadProject, GrantAuthority.Person);
+
+                JsonNode envelope = host.CallTool(
+                    session,
+                    "project.write_file",
+                    new JsonObject
+                    {
+                        ["projectPath"] = project,
+                        ["path"] = "Assets/Staged.md",
+                        ["content"] = "staged draft\n",
+                    });
+                Check.Equal(
+                    "authoring: the staged write reports pending review",
+                    "pending-review",
+                    envelope["content"]?["status"]?.GetValue<string>() ?? string.Empty);
+                string changeId = envelope["content"]?["changeId"]?.GetValue<string>() ?? string.Empty;
+                string target = Path.Combine(project, "Assets", "Staged.md");
+                Check.That(
+                    "authoring: the staged write leaves the file absent",
+                    !File.Exists(target));
+                Check.Equal(
+                    "authoring: the staged write holds one pending change set",
+                    1,
+                    store.Pending.Count);
+
+                string itemId = store.Get(changeId).Items[0].Id;
+                Drive(host, session, driver, () => store.AcceptItem(changeId, itemId).ToValue());
+                Drive(host, session, driver, () => store.Approve(changeId).ToValue());
+                Check.Equal(
+                    "authoring: the approved write reaches the project file",
+                    "staged draft\n",
+                    File.ReadAllText(target));
+            }
+            finally
+            {
+                DeleteDirectory(project);
+            }
+        }
+
+        private static void WriteFileUnderHoldAgentWritesIsRefused()
+        {
+            string project = CreateProject("held-writes", false);
+            try
+            {
+                using McpHost host = NewHost();
+                ChangeSetStore store = new ChangeSetStore(host);
+                ProjectTools.Register(host, store);
+                string session = host.CreateSession(new SessionIdentity("agent-1", "stdio", "stdio-local"));
+                host.GrantScope(session, Scope.EditContent, GrantAuthority.Person);
+                UseHoldAgentWritesPolicy(project);
+
+                McpError? error = null;
+                try
+                {
+                    host.CallTool(
+                        session,
+                        "project.write_file",
+                        new JsonObject
+                        {
+                            ["projectPath"] = project,
+                            ["path"] = "Assets/Held.md",
+                            ["content"] = "held\n",
+                        });
+                }
+                catch (McpError failure)
+                {
+                    error = failure;
+                }
+
+                Check.That(
+                    "authoring: holdAgentWrites refuses the write",
+                    error is McpError.InvalidRequest);
+                Check.That(
+                    "authoring: the hold refusal names changes.policy.set",
+                    error != null && error.Message.Contains("changes.policy.set", StringComparison.Ordinal));
+                Check.That(
+                    "authoring: the refused write created no file",
+                    !File.Exists(Path.Combine(project, "Assets", "Held.md")));
+                Check.Equal(
+                    "authoring: the refused write staged no change set",
+                    0,
+                    store.Pending.Count);
+            }
+            finally
+            {
+                DeleteDirectory(project);
+            }
+        }
+
+        private sealed class Driver
+        {
+            public Func<ToolOutput>? Next;
+        }
+
+        private static void RegisterDriver(McpHost host, Driver driver)
+        {
+            host.RegisterTool(
+                new ToolDefinition(
+                    "test.drive",
+                    "Synthetic driver that runs store calls inside a session",
+                    new JsonObject
+                    {
+                        ["type"] = "object",
+                    },
+                    Scope.ReadProject),
+                _ => driver.Next!());
+        }
+
+        private static void Drive(McpHost host, string session, Driver driver, Func<JsonObject> action)
+        {
+            driver.Next = () => ToolOutput.Untrusted("test://driver", action());
+            host.CallTool(session, "test.drive", new JsonObject());
+        }
+
+        private static void UseAutoApplyPolicyForLegacyEagerExpectations(string project)
+        {
+            WriteReviewPolicy(project, new ReviewPolicy(requireApproval: false, holdAgentWrites: false));
+        }
+
+        private static void UseHoldAgentWritesPolicy(string project)
+        {
+            WriteReviewPolicy(project, new ReviewPolicy(requireApproval: true, holdAgentWrites: true));
+        }
+
+        private static void WriteReviewPolicy(string project, ReviewPolicy policy)
+        {
+            string directory = Path.Combine(project, ".unitas");
+            Directory.CreateDirectory(directory);
+            File.WriteAllText(Path.Combine(directory, "review-policy.json"), policy.ToValue().ToJsonString());
         }
 
         private static void CompileReportsScriptDiagnostics()
@@ -639,7 +785,9 @@ namespace Unitas.Editor.Tests
             {
                 using McpHost host = NewHost();
                 ChangeSetStore store = new ChangeSetStore(host);
+                UseAutoApplyPolicyForLegacyEagerExpectations(project);
                 SceneTools.Register(host, store);
+                host.OpenProject(project);
                 using StubWorker worker = new StubWorker();
                 using PlaySessionManager manager = new PlaySessionManager(_ => worker);
                 PlayTools.Register(host, manager);

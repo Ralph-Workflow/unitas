@@ -56,6 +56,8 @@ namespace Unitas.Editor.Mcp
                     },
                     Scope.EditContent),
                 arguments => HandleImport(host, store, arguments));
+
+            store.RegisterApplier(ToolName, operation => ApplyHeldImport(host, operation));
         }
 
         private static ToolOutput HandleImport(McpHost host, ChangeSetStore store, JsonNode arguments)
@@ -70,6 +72,8 @@ namespace Unitas.Editor.Mcp
                 host.RequireScope(sessionId, Scope.EditScripts);
             }
 
+            store.EnsureAgentWritesAllowed(ToolName, arguments);
+
             (byte[] payloadBytes, bool isText, string? rawText) = ResolvePayload(arguments, relativePath);
             string targetFile = Path.Combine(root, relativePath.Replace('/', Path.DirectorySeparatorChar));
             string metaRelativePath = relativePath + MetaExtension;
@@ -81,13 +85,11 @@ namespace Unitas.Editor.Mcp
             string beforeAsset = CaptureExistingFileState(targetFile, isText);
             string beforeMeta = File.Exists(metaFile) ? ReadTextFile(metaFile) : string.Empty;
 
-            WriteImportedFiles(targetFile, payloadBytes, isText, rawText, metaFile, metaContent);
-            JsonArray diagnostics = RefreshNativeAssetInventory(host, root, relativePath);
-
             string afterAsset = isText && rawText != null
                 ? rawText
                 : Base64EncodingTag + Convert.ToBase64String(payloadBytes);
 
+            string? requestedProject = ProjectAccess.OptionalString(arguments, "projectPath");
             JsonObject assetOperation = new JsonObject
             {
                 ["tool"] = ToolName,
@@ -104,14 +106,25 @@ namespace Unitas.Editor.Mcp
                 ["before"] = beforeMeta,
                 ["after"] = metaContent,
             };
+            if (requestedProject != null)
+            {
+                assetOperation["projectPath"] = requestedProject;
+                metaOperation["projectPath"] = requestedProject;
+            }
 
             string author = host.GetSessionIdentity(sessionId).Agent;
             ChangeSet set = store.Hold(author, assetOperation);
-            set.AddOperation(metaOperation);
+            store.AddOperation(set, metaOperation);
+
+            bool staged = store.PolicyForArguments(arguments).RequireApproval;
+
+            JsonArray diagnostics = staged
+                ? new JsonArray()
+                : RefreshNativeAssetInventory(host, root, relativePath);
 
             JsonObject payload = new JsonObject
             {
-                ["status"] = "imported",
+                ["status"] = staged ? "pending-review" : "imported",
                 ["path"] = relativePath,
                 ["metaPath"] = metaRelativePath,
                 ["guid"] = guid,
@@ -573,13 +586,36 @@ namespace Unitas.Editor.Mcp
             }
         }
 
-        private static void WriteImportedFiles(
-            string targetFile,
-            byte[] payloadBytes,
-            bool isText,
-            string? rawText,
-            string metaFile,
-            string metaContent)
+        private static JsonObject ApplyHeldImport(McpHost host, JsonObject operation)
+        {
+            string root = ProjectAccess.ResolveRoot(host, operation, ToolName);
+            if (operation["path"] is not JsonValue pathValue
+                || !pathValue.TryGetValue(out string? relative)
+                || string.IsNullOrWhiteSpace(relative))
+            {
+                throw new McpError.InvalidParams(ToolName + " recorded an operation without a path");
+            }
+
+            if (operation["after"] is not JsonValue afterValue || !afterValue.TryGetValue(out string? after))
+            {
+                throw new McpError.InvalidParams(ToolName + " recorded an operation without its after text");
+            }
+
+            bool isText = string.Equals(
+                operation["encoding"]?.GetValue<string>(),
+                "utf-8",
+                StringComparison.Ordinal);
+            if (!isText && !after.StartsWith(Base64EncodingTag, StringComparison.Ordinal))
+            {
+                throw new McpError.InvalidParams(ToolName + " recorded a binary operation without a base64 payload");
+            }
+
+            string targetFile = ProjectAccess.ResolveFile(root, relative, ToolName);
+            WriteImportedFile(targetFile, after, isText);
+            return operation;
+        }
+
+        private static void WriteImportedFile(string targetFile, string after, bool isText)
         {
             try
             {
@@ -589,18 +625,17 @@ namespace Unitas.Editor.Mcp
                     Directory.CreateDirectory(directory);
                 }
 
-                if (isText && rawText != null)
+                if (isText)
                 {
-                    File.WriteAllText(targetFile, rawText);
+                    File.WriteAllText(targetFile, after);
                 }
                 else
                 {
-                    File.WriteAllBytes(targetFile, payloadBytes);
+                    File.WriteAllBytes(targetFile, Convert.FromBase64String(after.Substring(Base64EncodingTag.Length)));
                 }
-
-                File.WriteAllText(metaFile, metaContent);
             }
-            catch (Exception error) when (error is IOException || error is UnauthorizedAccessException)
+            catch (Exception error) when (
+                error is IOException || error is UnauthorizedAccessException || error is FormatException)
             {
                 throw new McpError.Io(error);
             }

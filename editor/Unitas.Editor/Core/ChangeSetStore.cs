@@ -7,24 +7,198 @@ namespace Unitas.Editor.Mcp
 {
     public sealed class ChangeSetStore
     {
+        public const string PolicyFileRelativePath = ".unitas/review-policy.json";
+
         private const string Base64EncodingPrefix = "base64:";
         private readonly McpHost host;
-        private readonly Func<JsonObject, JsonObject>? applier;
+        private readonly Dictionary<string, Func<JsonObject, JsonObject>> appliers =
+            new Dictionary<string, Func<JsonObject, JsonObject>>(StringComparer.Ordinal);
         private readonly List<ChangeSet> order = new List<ChangeSet>();
         private readonly Dictionary<string, ChangeSet> sets =
             new Dictionary<string, ChangeSet>(StringComparer.Ordinal);
         private readonly Dictionary<string, JsonObject> restores =
             new Dictionary<string, JsonObject>(StringComparer.Ordinal);
+        private readonly Dictionary<string, ReviewPolicy> policiesByRoot =
+            new Dictionary<string, ReviewPolicy>(StringComparer.Ordinal);
         private long nextId;
 
-        public ChangeSetStore(McpHost host, Func<JsonObject, JsonObject>? applier = null)
+        public ChangeSetStore(McpHost host)
         {
             ArgumentNullException.ThrowIfNull(host);
             this.host = host;
-            this.applier = applier;
+        }
+
+        // Loaded once per project root on first access: later file edits must
+        // not bypass an in-memory hold without a person-only changes.policy.set.
+        public ReviewPolicy Policy => PolicyForRoot(null);
+
+        // Tools that resolve their root from a projectPath argument (the same
+        // resolution ProjectAccess uses) get that root's policy.
+        public ReviewPolicy PolicyForArguments(JsonNode? arguments)
+        {
+            return PolicyForRoot(ArgumentString(arguments, "projectPath"));
+        }
+
+        private ReviewPolicy PolicyForRoot(string? requestedRoot)
+        {
+            string root = ResolvePolicyRoot(requestedRoot);
+            if (!policiesByRoot.TryGetValue(root, out ReviewPolicy? cached))
+            {
+                cached = LoadPolicy(root, host.ProjectPath);
+                policiesByRoot[root] = cached;
+            }
+
+            return cached;
+        }
+
+        private string ResolvePolicyRoot(string? requestedRoot)
+        {
+            string? root = requestedRoot;
+            if (string.IsNullOrWhiteSpace(root))
+            {
+                root = host.ProjectPath;
+            }
+
+            if (string.IsNullOrWhiteSpace(root))
+            {
+                root = Directory.GetCurrentDirectory();
+            }
+
+            try
+            {
+                return Path.GetFullPath(root!);
+            }
+            catch (Exception error) when (error is ArgumentException || error is NotSupportedException)
+            {
+                return Path.GetFullPath(Directory.GetCurrentDirectory());
+            }
+        }
+
+        public void RegisterApplier(string tool, Func<JsonObject, JsonObject> applier)
+        {
+            ArgumentException.ThrowIfNullOrWhiteSpace(tool);
+            ArgumentNullException.ThrowIfNull(applier);
+            appliers[tool] = applier;
+        }
+
+        public void SetPolicy(ReviewPolicy policy)
+        {
+            ArgumentNullException.ThrowIfNull(policy);
+            policiesByRoot[ResolvePolicyRoot(null)] = policy;
+            string? project = host.ProjectPath;
+            if (string.IsNullOrWhiteSpace(project))
+            {
+                return;
+            }
+
+            string path = Path.Combine(project, PolicyFileRelativePath);
+            string? directory = Path.GetDirectoryName(path);
+            if (!string.IsNullOrEmpty(directory))
+            {
+                Directory.CreateDirectory(directory);
+            }
+
+            File.WriteAllText(path, policy.ToValue().ToJsonString());
+        }
+
+        // Walks up from the requested root to the nearest policy file so a
+        // projectPath pointing at a subdirectory cannot escape the hold set
+        // on the project tree; the walk never leaves the host project.
+        private static ReviewPolicy LoadPolicy(string root, string? hostProject)
+        {
+            DirectoryInfo? directory = new DirectoryInfo(root);
+            while (directory != null)
+            {
+                string candidate = Path.Combine(directory.FullName, PolicyFileRelativePath);
+                try
+                {
+                    if (File.Exists(candidate))
+                    {
+                        return ReviewPolicy.FromValue(JsonNode.Parse(File.ReadAllText(candidate)) as JsonObject);
+                    }
+                }
+                catch (Exception error) when (
+                    error is IOException
+                    || error is UnauthorizedAccessException
+                    || error is System.Text.Json.JsonException
+                    || error is FormatException)
+                {
+                    return ReviewPolicy.Default;
+                }
+
+                if (hostProject != null
+                    && string.Equals(
+                        directory.FullName.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar),
+                        Path.GetFullPath(hostProject).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar),
+                        StringComparison.Ordinal))
+                {
+                    break;
+                }
+
+                directory = directory.Parent;
+            }
+
+            return ReviewPolicy.Default;
+        }
+
+        // Every agent write tool calls this first: under holdAgentWrites the
+        // refusal names the person-only unlock, and nothing is staged.
+        public void EnsureAgentWritesAllowed(string toolName)
+        {
+            EnsureAgentWritesAllowed(toolName, null);
+        }
+
+        public void EnsureAgentWritesAllowed(string toolName, JsonNode? arguments)
+        {
+            if (PolicyForArguments(arguments).HoldAgentWrites)
+            {
+                throw new McpError.InvalidRequest(
+                    toolName + " is disabled by the project review policy (holdAgentWrites); "
+                        + "a person can relax it with changes.policy.set");
+            }
+        }
+
+        // Reverts an applied set through the same file-restore path as rejection.
+        public JsonObject Revert(string id)
+        {
+            ChangeSet set = Get(id);
+            if (set.Status != ChangeSetStatus.Applied)
+            {
+                throw new ChangeSetNotApplied(id);
+            }
+
+            RecordTransition(set, "changes.revert");
+            JsonObject report = RestoreFiles(set);
+            restores[id] = report;
+            return report;
         }
 
         public IReadOnlyList<ChangeSet> All => order;
+
+        // Adds an operation to an existing set, mirroring Hold: under an
+        // auto-apply root policy the new item is applied immediately.
+        public ChangeItem AddOperation(ChangeSet set, JsonObject operation)
+        {
+            ArgumentNullException.ThrowIfNull(set);
+            ArgumentNullException.ThrowIfNull(operation);
+            set.AddOperation(operation);
+            ChangeItem item = set.Items[set.Items.Count - 1];
+            if (!PolicyForRoot(OperationString(operation, "projectPath")).RequireApproval)
+            {
+                try
+                {
+                    Apply(item, set.Operations[set.Operations.Count - 1]);
+                    item.Status = ChangeItemStatus.Accepted;
+                }
+                catch (McpError)
+                {
+                    item.Status = ChangeItemStatus.Rejected;
+                    throw;
+                }
+            }
+
+            return item;
+        }
 
         public IReadOnlyList<ChangeSet> Pending
         {
@@ -67,7 +241,34 @@ namespace Unitas.Editor.Mcp
             sets.Add(id, set);
             order.Add(set);
             RecordTransition(set, "changes.hold");
+            if (!PolicyForRoot(OperationString(operation, "projectPath")).RequireApproval)
+            {
+                for (int index = 0; index < set.Items.Count; index++)
+                {
+                    try
+                    {
+                        Apply(set.Items[index], set.Operations[index]);
+                        set.Items[index].Status = ChangeItemStatus.Accepted;
+                    }
+                    catch (McpError)
+                    {
+                        set.Items[index].Status = ChangeItemStatus.Rejected;
+                        throw;
+                    }
+                }
+            }
+
             return set;
+        }
+
+        public ChangeSet AcceptItem(string changeSetId, string itemId)
+        {
+            return TransitionItem(changeSetId, itemId, ChangeItemStatus.Accepted, "changes.accept_item");
+        }
+
+        public ChangeSet RejectItem(string changeSetId, string itemId)
+        {
+            return TransitionItem(changeSetId, itemId, ChangeItemStatus.Rejected, "changes.reject_item");
         }
 
         public ChangeSet Approve(string id)
@@ -75,18 +276,65 @@ namespace Unitas.Editor.Mcp
             ChangeSet set = PendingSet(id);
             set.Status = ChangeSetStatus.Approved;
             RecordTransition(set, "changes.approve");
-            if (applier != null)
+            try
             {
-                foreach (JsonObject operation in set.Operations)
+                for (int index = 0; index < set.Items.Count; index++)
                 {
-                    applier(operation);
+                    if (set.Items[index].Status == ChangeItemStatus.Accepted)
+                    {
+                        Apply(set.Items[index], set.Operations[index]);
+                    }
                 }
-
-                set.Status = ChangeSetStatus.Applied;
-                RecordTransition(set, "changes.apply");
+            }
+            catch (Exception)
+            {
+                // A failed apply must not strand the set in Approved limbo:
+                // back to Pending so the person can reject and restore files.
+                set.Status = ChangeSetStatus.Pending;
+                throw;
             }
 
+            set.Status = ChangeSetStatus.Applied;
+            RecordTransition(set, "changes.apply");
             return set;
+        }
+
+        private ChangeSet TransitionItem(string changeSetId, string itemId, ChangeItemStatus status, string action)
+        {
+            ChangeSet set = PendingSet(changeSetId);
+            ChangeItem? item = null;
+            foreach (ChangeItem candidate in set.Items)
+            {
+                if (string.Equals(candidate.Id, itemId, StringComparison.Ordinal))
+                {
+                    item = candidate;
+                    break;
+                }
+            }
+
+            if (item == null)
+            {
+                throw new UnknownChangeItem(changeSetId, itemId);
+            }
+
+            if (item.Status != ChangeItemStatus.Pending)
+            {
+                throw new ChangeItemNotPending(itemId);
+            }
+
+            item.Status = status;
+            RecordTransition(set, action);
+            return set;
+        }
+
+        private void Apply(ChangeItem item, JsonObject operation)
+        {
+            if (!appliers.TryGetValue(item.Tool, out Func<JsonObject, JsonObject>? applier))
+            {
+                throw new McpError.InvalidRequest("no applier registered for tool " + item.Tool);
+            }
+
+            applier(operation);
         }
 
         public ChangeSet Reject(string id, string reason)
@@ -311,6 +559,19 @@ namespace Unitas.Editor.Mcp
             {
                 return false;
             }
+        }
+
+        private static string? ArgumentString(JsonNode? arguments, string propertyName)
+        {
+            if (arguments is JsonObject obj
+                && obj[propertyName] is JsonValue value
+                && value.TryGetValue(out string? text)
+                && !string.IsNullOrWhiteSpace(text))
+            {
+                return text;
+            }
+
+            return null;
         }
 
         private static string? OperationString(JsonObject operation, string propertyName)

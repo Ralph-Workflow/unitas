@@ -18,6 +18,8 @@ namespace Unitas.Editor.Tests
             RecordsAuditAndChangeSetAndRejectRestoresWorkspaceClean();
             RestoresOverwrittenBinaryAndTextAssetsOnReject();
             RefusesPathEscapeOutsideAssetsAndInvalidPayloads();
+            ImportUnderTheDefaultPolicyStagesUntilApproved();
+            ImportUnderHoldAgentWritesIsRefused();
         }
 
         private static void RegistersAssetsImportWithLeastPrivilegeScope()
@@ -58,6 +60,7 @@ namespace Unitas.Editor.Tests
             {
                 using McpHost host = NewHost();
                 ChangeSetStore store = new ChangeSetStore(host);
+                UseAutoApplyPolicyForLegacyEagerExpectations(project);
                 AssetTools.Register(host, store);
                 string session = NewEditingSession(host);
 
@@ -141,6 +144,7 @@ namespace Unitas.Editor.Tests
             {
                 using McpHost host = NewHost();
                 ChangeSetStore store = new ChangeSetStore(host);
+                UseAutoApplyPolicyForLegacyEagerExpectations(project);
                 AssetTools.Register(host, store);
                 string session = NewEditingSession(host);
 
@@ -187,6 +191,7 @@ namespace Unitas.Editor.Tests
             {
                 using McpHost host = new McpHost(new FixedClock(5_000), PersonCredential.FromToken("person-token"));
                 ChangeSetStore store = new ChangeSetStore(host);
+                UseAutoApplyPolicyForLegacyEagerExpectations(project);
                 AssetTools.Register(host, store);
                 ChangeReviewTools.Register(host, store);
                 host.OpenProject(project);
@@ -276,6 +281,7 @@ namespace Unitas.Editor.Tests
             {
                 using McpHost host = new McpHost(new FixedClock(6_000), PersonCredential.FromToken("person-token"));
                 ChangeSetStore store = new ChangeSetStore(host);
+                UseAutoApplyPolicyForLegacyEagerExpectations(project);
                 AssetTools.Register(host, store);
                 ChangeReviewTools.Register(host, store);
                 host.OpenProject(project);
@@ -436,6 +442,172 @@ namespace Unitas.Editor.Tests
             {
                 DeleteDirectory(project);
             }
+        }
+
+        private static void ImportUnderTheDefaultPolicyStagesUntilApproved()
+        {
+            string project = CreateProject("staged-import");
+            try
+            {
+                using McpHost host = NewHost();
+                ChangeSetStore store = new ChangeSetStore(host);
+                AssetTools.Register(host, store);
+                ProjectTools.Register(host, store);
+                Driver driver = new Driver();
+                RegisterDriver(host, driver);
+                string session = NewEditingSession(host);
+
+                string materialYaml = "%YAML 1.1\n--- !u!21 &2100000\nMaterial:\n  m_Name: Staged\n";
+                JsonNode envelope = host.CallTool(
+                    session,
+                    "assets.import",
+                    new JsonObject
+                    {
+                        ["projectPath"] = project,
+                        ["path"] = "Assets/Materials/Staged.mat",
+                        ["text"] = materialYaml,
+                    });
+                JsonObject content = (JsonObject)envelope["content"]!;
+                Check.Equal(
+                    "assets: the staged import reports pending review",
+                    "pending-review",
+                    content["status"]?.GetValue<string>() ?? string.Empty);
+                Check.Equal(
+                    "assets: the staged import reports no diagnostics",
+                    0,
+                    (content["diagnostics"] as JsonArray)?.Count ?? -1);
+                string changeId = content["changeId"]?.GetValue<string>() ?? string.Empty;
+                string guid = content["guid"]?.GetValue<string>() ?? string.Empty;
+                string assetFile = Path.Combine(project, "Assets", "Materials", "Staged.mat");
+                string metaFile = assetFile + ".meta";
+                Check.That("assets: the staged import leaves the asset absent", !File.Exists(assetFile));
+                Check.That("assets: the staged import leaves the meta absent", !File.Exists(metaFile));
+                Check.Equal(
+                    "assets: the staged import holds one pending change set",
+                    1,
+                    store.Pending.Count);
+
+                ChangeSet set = store.Get(changeId);
+                foreach (ChangeItem item in set.Items)
+                {
+                    string itemId = item.Id;
+                    Drive(host, session, driver, () => store.AcceptItem(changeId, itemId).ToValue());
+                }
+
+                Drive(host, session, driver, () => store.Approve(changeId).ToValue());
+
+                Check.That("assets: the approved import writes the asset", File.Exists(assetFile));
+                Check.That("assets: the approved import writes the meta", File.Exists(metaFile));
+                Check.That(
+                    "assets: the approved meta names the guid",
+                    File.ReadAllText(metaFile).Contains("guid: " + guid + "\n", StringComparison.Ordinal));
+
+                JsonNode read = host.CallTool(
+                    session,
+                    "project.read_file",
+                    new JsonObject
+                    {
+                        ["projectPath"] = project,
+                        ["path"] = "Assets/Materials/Staged.mat",
+                    });
+                Check.Equal(
+                    "assets: the approved import reads back through project.read_file",
+                    materialYaml,
+                    read["content"]?["content"]?.GetValue<string>() ?? string.Empty);
+            }
+            finally
+            {
+                DeleteDirectory(project);
+            }
+        }
+
+        private static void ImportUnderHoldAgentWritesIsRefused()
+        {
+            string project = CreateProject("held-writes");
+            try
+            {
+                using McpHost host = NewHost();
+                ChangeSetStore store = new ChangeSetStore(host);
+                AssetTools.Register(host, store);
+                string session = NewEditingSession(host);
+                UseHoldAgentWritesPolicy(project);
+
+                McpError? error = null;
+                try
+                {
+                    host.CallTool(
+                        session,
+                        "assets.import",
+                        new JsonObject
+                        {
+                            ["projectPath"] = project,
+                            ["path"] = "Assets/Materials/Held.mat",
+                            ["text"] = "%YAML 1.1\n--- !u!21 &2100000\nMaterial:\n  m_Name: Held\n",
+                        });
+                }
+                catch (McpError failure)
+                {
+                    error = failure;
+                }
+
+                Check.That("assets: holdAgentWrites refuses the import", error is McpError.InvalidRequest);
+                Check.That(
+                    "assets: the hold refusal names changes.policy.set",
+                    error != null && error.Message.Contains("changes.policy.set", StringComparison.Ordinal));
+                Check.That(
+                    "assets: the refused import created no asset",
+                    !File.Exists(Path.Combine(project, "Assets", "Materials", "Held.mat")));
+                Check.That(
+                    "assets: the refused import created no meta",
+                    !File.Exists(Path.Combine(project, "Assets", "Materials", "Held.mat.meta")));
+                Check.Equal("assets: the refused import staged no change set", 0, store.Pending.Count);
+            }
+            finally
+            {
+                DeleteDirectory(project);
+            }
+        }
+
+        private sealed class Driver
+        {
+            public Func<ToolOutput>? Next;
+        }
+
+        private static void RegisterDriver(McpHost host, Driver driver)
+        {
+            host.RegisterTool(
+                new ToolDefinition(
+                    "test.drive",
+                    "Synthetic driver that runs store calls inside a session",
+                    new JsonObject
+                    {
+                        ["type"] = "object",
+                    },
+                    Scope.ReadProject),
+                _ => driver.Next!());
+        }
+
+        private static void Drive(McpHost host, string session, Driver driver, Func<JsonObject> action)
+        {
+            driver.Next = () => ToolOutput.Untrusted("test://driver", action());
+            host.CallTool(session, "test.drive", new JsonObject());
+        }
+
+        private static void UseAutoApplyPolicyForLegacyEagerExpectations(string project)
+        {
+            WriteReviewPolicy(project, new ReviewPolicy(requireApproval: false, holdAgentWrites: false));
+        }
+
+        private static void UseHoldAgentWritesPolicy(string project)
+        {
+            WriteReviewPolicy(project, new ReviewPolicy(requireApproval: true, holdAgentWrites: true));
+        }
+
+        private static void WriteReviewPolicy(string project, ReviewPolicy policy)
+        {
+            string directory = Path.Combine(project, ".unitas");
+            Directory.CreateDirectory(directory);
+            File.WriteAllText(Path.Combine(directory, "review-policy.json"), policy.ToValue().ToJsonString());
         }
 
         private static void ExpectFailure(
