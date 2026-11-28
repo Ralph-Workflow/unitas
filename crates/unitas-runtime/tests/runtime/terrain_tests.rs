@@ -312,3 +312,108 @@ fn env_001_story_11_12_16_runtime_terrain_raycast_holes_wind_zone_and_instanced_
     assert!(draw_data.detail_batches[0].use_instancing);
     Ok(())
 }
+
+const PROBE_SCENE: &str = "%YAML 1.1\n%TAG !u! tag:unity3d.com,2011:\n--- !u!1 &100\nGameObject:\n  m_Name: Probe\n  m_Layer: 0\n--- !u!4 &101\nTransform:\n  m_GameObject: {fileID: 100}\n  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}\n  m_LocalPosition: {x: 0.5, y: 0, z: 0.5}\n  m_LocalScale: {x: 1, y: 1, z: 1}\n  m_Children: []\n  m_Father: {fileID: 0}\n";
+
+fn load_probe_runtime(name: &str) -> Result<Runtime, Box<dyn std::error::Error>> {
+    let temp_dir =
+        std::env::temp_dir().join(format!("unitas_terrain_{name}_{}", std::process::id()));
+    std::fs::create_dir_all(&temp_dir)?;
+    let temp_scene = temp_dir.join(format!("{name}.unity"));
+    std::fs::write(&temp_scene, PROBE_SCENE)?;
+    let mut runtime = Runtime::new()?;
+    let load_result = runtime.load_scene(&temp_scene);
+    let _ = std::fs::remove_dir_all(&temp_dir);
+    load_result?;
+    Ok(runtime)
+}
+
+fn probe_entity(runtime: &Runtime) -> Result<EntityId, Box<dyn std::error::Error>> {
+    let graph = runtime
+        .scene_graph()
+        .ok_or_else(|| String::from("no scene graph loaded"))?;
+    graph
+        .breadth_first_order()
+        .into_iter()
+        .find(|id| graph.entity(*id).is_some_and(|entity| entity.name == "Probe"))
+        .ok_or_else(|| String::from("probe entity not found").into())
+}
+
+fn register_probe_heightfield(runtime: &mut Runtime) -> TestResult {
+    let data = flat_data(RESOLUTION, TERRAIN_SIZE, FLAT_HEIGHT)?;
+    let terrain_entity = EntityId::new(30);
+    runtime
+        .terrain_mut()
+        .register_terrain(terrain_entity, &data, [0.0, 0.0, 0.0])?;
+    let body_entity = EntityId::new(31);
+    let radius = 0.5;
+    runtime.physics_mut().world_3d_mut().add_body(
+        body_entity,
+        sphere_desc([0.0, FLAT_HEIGHT + 0.25, 0.0], radius),
+    )?;
+    runtime.terrain_mut().register_heightfield(
+        terrain_entity,
+        TerrainBody::new(body_entity, Shape::Sphere { radius }),
+    )?;
+    Ok(())
+}
+
+#[test]
+fn heightfield_apply_runs_once_and_idles_without_world_changes() -> TestResult {
+    let mut runtime = load_probe_runtime("idle_gate")?;
+    register_probe_heightfield(&mut runtime)?;
+
+    runtime.tick(0.0)?;
+    assert_eq!(runtime.terrain().apply_count(), 0);
+    runtime.tick(0.0)?;
+    assert_eq!(runtime.terrain().apply_count(), 1);
+    for _ in 0..3 {
+        runtime.tick(0.0)?;
+    }
+    assert_eq!(
+        runtime.terrain().apply_count(),
+        1,
+        "unchanged ticks must not re-apply heightfields"
+    );
+    Ok(())
+}
+
+#[test]
+fn heightfield_apply_repeats_after_a_scene_graph_change() -> TestResult {
+    let mut runtime = load_probe_runtime("change_gate")?;
+    register_probe_heightfield(&mut runtime)?;
+
+    runtime.tick(0.0)?;
+    runtime.tick(0.0)?;
+    assert_eq!(runtime.terrain().apply_count(), 1);
+    for _ in 0..2 {
+        runtime.tick(0.0)?;
+    }
+    assert_eq!(runtime.terrain().apply_count(), 1);
+
+    let probe = probe_entity(&runtime)?;
+    {
+        let graph = runtime
+            .scene_graph_mut()
+            .ok_or_else(|| String::from("no mutable scene graph"))?;
+        let transform = graph
+            .transform_mut(probe)
+            .ok_or_else(|| String::from("probe has no transform"))?;
+        transform.translation[0] += 1.0;
+    }
+    runtime.tick(0.0)?;
+    assert_eq!(
+        runtime.terrain().apply_count(),
+        1,
+        "the tick that drains the change only re-arms the apply"
+    );
+    runtime.tick(0.0)?;
+    assert_eq!(
+        runtime.terrain().apply_count(),
+        2,
+        "a drained scene change must re-arm the heightfield apply"
+    );
+    runtime.tick(0.0)?;
+    assert_eq!(runtime.terrain().apply_count(), 2);
+    Ok(())
+}

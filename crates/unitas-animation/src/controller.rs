@@ -2,6 +2,7 @@ use std::collections::BTreeSet;
 
 use crate::avatar_mask::AvatarMask;
 use crate::clip::{AnimationClip, AnimationEvent, ClipSample, SampledBinding};
+use crate::curve::AnimatedValue;
 use crate::error::AnimationError;
 use crate::wire::{decode_controller_binary, encode_controller_binary};
 
@@ -2054,13 +2055,14 @@ impl Animator {
     }
     // Advances every additional controller layer and blends its sampled pose
     // into `result` by layer weight, restricted to the layer's avatar mask.
+    // Bindings no lower layer animates lerp from their default value, so a
+    // partial-weight layer only partially applies its unique targets.
     // Additive layers use the same weighted blend as override layers (see
     // LayerBlendingMode).
     fn advance_layers(&mut self, dt: f32, result: &mut AnimatorStepResult) {
         if self.controller.layers.is_empty() {
             return;
         }
-        let mut acc_weight = 1.0_f32; // base layer always contributes fully
         for layer_index in 0..self.controller.layers.len() {
             let weight = match self.controller.layers[layer_index].weight {
                 w if w.is_finite() => w.clamp(0.0, 1.0),
@@ -2081,9 +2083,7 @@ impl Animator {
             if layer_bindings.is_empty() {
                 continue;
             }
-            let frac = weight / (acc_weight + weight);
-            result.bindings = blend_sampled_bindings(&result.bindings, &layer_bindings, frac);
-            acc_weight += weight;
+            result.bindings = blend_layer_bindings(&result.bindings, &layer_bindings, weight);
         }
     }
 
@@ -2342,6 +2342,55 @@ fn blend_tree_2d_weights(px: f32, py: f32, children: &[([f32; 2], AnimationClip)
         raw_weights.push(1.0 / dist_sq);
     }
     raw_weights
+}
+
+pub fn blend_layer_bindings(
+    lower: &[SampledBinding],
+    layer: &[SampledBinding],
+    weight: f32,
+) -> Vec<SampledBinding> {
+    let w = if weight.is_finite() {
+        weight.clamp(0.0, 1.0)
+    } else {
+        0.0
+    };
+    let mut result = Vec::with_capacity(lower.len().max(layer.len()));
+    for item in lower {
+        if let Some(top) = layer.iter().find(|x| x.target == item.target) {
+            result.push(SampledBinding {
+                target: item.target.clone(),
+                value: item.value.blend(&top.value, w),
+            });
+        } else {
+            result.push(item.clone());
+        }
+    }
+    for item in layer {
+        if result.iter().any(|r| r.target == item.target) {
+            continue;
+        }
+        let value = match &item.value {
+            AnimatedValue::Float(_) => AnimatedValue::Float(0.0).blend(&item.value, w),
+            AnimatedValue::Vector3(_) => {
+                AnimatedValue::Vector3([0.0; 3]).blend(&item.value, w)
+            }
+            AnimatedValue::Quaternion(_) => {
+                AnimatedValue::Quaternion([0.0, 0.0, 0.0, 1.0]).blend(&item.value, w)
+            }
+            AnimatedValue::Color(_) => AnimatedValue::Color([0.0; 4]).blend(&item.value, w),
+            AnimatedValue::ObjectReference(_) => {
+                if w < 0.5 {
+                    continue;
+                }
+                item.value
+            }
+        };
+        result.push(SampledBinding {
+            target: item.target.clone(),
+            value,
+        });
+    }
+    result
 }
 
 pub fn blend_sampled_bindings(

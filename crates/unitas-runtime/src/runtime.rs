@@ -1270,8 +1270,11 @@ impl Runtime {
         self.step_trails(scaled_delta as f32);
         if scaled_delta >= 0.0 {
             let _ = self.navigation.step(scaled_delta);
+            self.write_back_navigation_transforms();
         }
-        self.terrain.apply_heightfields(self.physics.world_3d_mut());
+        if self.terrain.needs_heightfield_apply() {
+            self.terrain.apply_heightfields(self.physics.world_3d_mut());
+        }
     }
 
     fn run_player_loop_work<H>(
@@ -1520,8 +1523,14 @@ impl Runtime {
     }
 
     fn drain_scene_changes(&mut self) {
+        let mut world_changed = false;
         for scene in &mut self.scenes {
-            let _changes = scene.graph.take_changes();
+            if !scene.graph.take_changes().is_empty() {
+                world_changed = true;
+            }
+        }
+        if world_changed {
+            self.terrain.mark_heightfields_dirty();
         }
     }
 
@@ -1936,6 +1945,18 @@ impl Runtime {
             }
         }
         Ok(target)
+    }
+
+    fn write_back_navigation_transforms(&mut self) {
+        let entities = self.navigation.agent_entities();
+        for entity in entities {
+            if let Some(agent) = self.navigation.agent(entity)
+                && agent.update_position
+            {
+                let pos = agent.position();
+                self.write_back_entity_transform(entity, pos);
+            }
+        }
     }
 
     fn write_back_entity_transform(&mut self, entity: EntityId, world_pos: [f64; 3]) {

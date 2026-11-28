@@ -81,9 +81,10 @@ fn upper_layer_overrides_base_with_weighted_masked_blend() -> Result<(), Box<dyn
     animator.set_float("wave", 1.0).map_err(|d| format!("{d:?}"))?;
     let step = animator.step(0.1);
     assert_eq!(sample_x(&step, "Root"), Some(0.0));
-    // Root/Arm is unique to the upper layer: override layers fully control
-    // targets that no lower layer animates (injection is not weight-scaled).
-    assert!((sample_x(&step, "Root/Arm").unwrap() - 10.0).abs() < 1e-4);
+    // Root/Arm is unique to the upper layer: at weight 0.5 it lerps from the
+    // default value, so 10.0 lands halfway at 5.0.
+    let arm = sample_x(&step, "Root/Arm").ok_or("missing Root/Arm binding")?;
+    assert!((arm - 5.0).abs() < 1e-4);
     Ok(())
 }
 
@@ -114,7 +115,8 @@ fn zero_weight_layer_advances_but_does_not_blend() -> Result<(), Box<dyn Error>>
 
     let mut animator = Animator::new(controller);
     let step = animator.step(0.1);
-    assert!((sample_x(&step, "Root").unwrap() - 2.0).abs() < 1e-4);
+    let root = sample_x(&step, "Root").ok_or("missing Root binding")?;
+    assert!((root - 2.0).abs() < 1e-4);
     Ok(())
 }
 
@@ -166,9 +168,12 @@ fn layer_controller_survives_binary_wire_roundtrip() -> Result<(), Box<dyn Error
     let mut animator = Animator::new(decoded);
     animator.set_float("w", 1.0).map_err(|d| format!("{d:?}"))?;
     let step = animator.step(0.1);
-    // Layer 0 fully controls Root/Arm (unique target, direct tree at w=1 gives
-    // 8.0); layer 1 (additive, approximated as override) injects Root/Leg = 4.0.
-    assert!((sample_x(&step, "Root/Arm").unwrap() - 8.0).abs() < 1e-3);
-    assert!((sample_x(&step, "Root/Leg").unwrap() - 4.0).abs() < 1e-3);
+    // Layer 0 contributes Root/Arm at weight 0.25 (8.0 * 0.25 = 2.0, lerped
+    // from the default); layer 1 (additive, approximated as override) has
+    // weight 1.0 and injects Root/Leg = 4.0.
+    let arm = sample_x(&step, "Root/Arm").ok_or("missing Root/Arm binding")?;
+    assert!((arm - 2.0).abs() < 1e-3);
+    let leg = sample_x(&step, "Root/Leg").ok_or("missing Root/Leg binding")?;
+    assert!((leg - 4.0).abs() < 1e-3);
     Ok(())
 }

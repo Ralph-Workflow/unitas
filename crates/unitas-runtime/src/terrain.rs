@@ -36,6 +36,8 @@ pub struct TerrainWorld {
     terrains: BTreeMap<EntityId, Terrain>,
     heightfields: Vec<(EntityId, TerrainBody)>,
     wind_zones: BTreeMap<EntityId, WindZone>,
+    heightfield_apply_pending: bool,
+    heightfield_apply_count: u64,
 }
 
 impl TerrainWorld {
@@ -352,10 +354,26 @@ impl TerrainWorld {
             return Err(TerrainRuntimeError::UnknownTerrain(terrain_entity));
         }
         self.heightfields.push((terrain_entity, body));
+        self.heightfield_apply_pending = true;
         Ok(())
     }
 
-    pub fn apply_heightfields(&self, world: &mut World) -> Vec<TerrainContact> {
+    pub fn needs_heightfield_apply(&self) -> bool {
+        !self.heightfields.is_empty()
+            && (self.heightfield_apply_pending || self.heightfield_apply_count == 0)
+    }
+
+    pub fn mark_heightfields_dirty(&mut self) {
+        self.heightfield_apply_pending = true;
+    }
+
+    pub fn apply_count(&self) -> u64 {
+        self.heightfield_apply_count
+    }
+
+    pub fn apply_heightfields(&mut self, world: &mut World) -> Vec<TerrainContact> {
+        self.heightfield_apply_count += 1;
+        self.heightfield_apply_pending = false;
         let mut contacts = Vec::new();
         for (terrain_entity, body) in &self.heightfields {
             let Some(terrain) = self.terrains.get(terrain_entity) else {

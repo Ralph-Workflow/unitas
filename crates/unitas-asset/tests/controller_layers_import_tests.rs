@@ -197,7 +197,7 @@ fn imports_multi_layer_controller_with_mask_weight_and_direct_blend_tree(
     assert_eq!(layer.name, "Upper Body");
     assert!((layer.weight - 0.5).abs() < 1e-6);
     assert_eq!(layer.blending_mode, LayerBlendingMode::Override);
-    let mask = layer.mask.as_ref().expect("layer mask imported");
+    let mask = layer.mask.as_ref().ok_or("layer mask imported")?;
     assert!(mask.includes_path("Root/Arm"));
     assert!(!mask.includes_path("Root/Leg"));
     assert_eq!(layer.states.len(), 1);
@@ -215,7 +215,7 @@ fn imports_multi_layer_controller_with_mask_weight_and_direct_blend_tree(
     let decoded = AnimatorController::decode_binary(&controller.encode_binary())?;
     assert_eq!(decoded, controller);
     let mut animator = Animator::new(decoded);
-    animator.set_float("wave", 1.0)?;
+    animator.set_float("wave", 1.0).map_err(|d| format!("{d:?}"))?;
     let step = animator.step(0.1);
     let arm = step
         .bindings
@@ -225,7 +225,7 @@ fn imports_multi_layer_controller_with_mask_weight_and_direct_blend_tree(
             unitas_animation::AnimatedValue::Float(v) => Some(*v),
             _ => None,
         })
-        .expect("masked arm binding present");
+        .ok_or("masked arm binding present")?;
     // Layer weight 0.5 blends the 10.0 arm pose halfway onto the base.
     assert!((arm - 5.0).abs() < 1e-3, "arm value {arm}");
 
@@ -332,8 +332,8 @@ fn imports_nested_state_machines_with_machine_node_transitions(
     let idle_to_move = controller
         .transitions
         .iter()
-        .find(|t| t.source() == unitas_animation::TransitionSource::State(0))
-        .expect("Idle transition");
+        .find(|t| t.source() == unitas_animation::controller::TransitionSource::State(0))
+        .ok_or("Idle transition")?;
     assert_eq!(
         idle_to_move.target,
         unitas_animation::TransitionTarget::State(2)
@@ -343,8 +343,8 @@ fn imports_nested_state_machines_with_machine_node_transitions(
     let machine_to_walk = controller
         .transitions
         .iter()
-        .find(|t| t.source() == unitas_animation::TransitionSource::State(2))
-        .expect("machine-node transition");
+        .find(|t| t.source() == unitas_animation::controller::TransitionSource::State(2))
+        .ok_or("machine-node transition")?;
     assert_eq!(
         machine_to_walk.target,
         unitas_animation::TransitionTarget::State(1)
@@ -353,10 +353,10 @@ fn imports_nested_state_machines_with_machine_node_transitions(
 
     // Runtime: done=true moves Idle -> Run; back=true moves Run -> Walk.
     let mut animator = Animator::new(controller);
-    animator.set_bool("done", true)?;
+    animator.set_bool("done", true).map_err(|d| format!("{d:?}"))?;
     let step = animator.step(0.1);
     assert_eq!(step.state_info.state_name, "Run");
-    animator.set_bool("back", true)?;
+    animator.set_bool("back", true).map_err(|d| format!("{d:?}"))?;
     let step = animator.step(0.1);
     assert_eq!(step.state_info.state_name, "Walk");
 

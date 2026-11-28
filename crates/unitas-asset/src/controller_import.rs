@@ -2,11 +2,13 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use unitas_animation::avatar_mask::AvatarMask;
 use unitas_animation::curve::{AssetReference, ObjectReferenceCurve, ObjectReferenceKey};
 use unitas_animation::{
-    AnimationClip, AnimationEvent, AnimatorController, AnimatorState, ConditionOp, CurveBinding,
-    CurveBindingTarget, FloatCurve, InterruptionSource, Keyframe, ParameterDef, PropertyCurve,
-    StateMotion, StateTransition, TransitionCondition, TransitionTarget, WrapMode,
+    AnimationClip, AnimationEvent, AnimatorController, AnimatorControllerLayer, AnimatorState,
+    ConditionOp, CurveBinding, CurveBindingTarget, FloatCurve, InterruptionSource, Keyframe,
+    LayerBlendingMode, ParameterDef, PropertyCurve, StateMotion, StateTransition,
+    TransitionCondition, TransitionTarget, WrapMode,
 };
 
 use super::{
@@ -21,7 +23,8 @@ const BLEND_TREE_CLASS_ID: u32 = 206;
 const ANIMATOR_STATE_TRANSITION_CLASS_ID: u32 = 1101;
 const ANIMATOR_STATE_CLASS_ID: u32 = 1102;
 const ANIMATOR_STATE_MACHINE_CLASS_ID: u32 = 1107;
-const ANIMATOR_TRANSITION_CLASS_ID: u32 = 1109;
+const AVATAR_MASK_CLASS_ID: u32 = 319;
+const MAX_MACHINE_NESTING_DEPTH: usize = 32;
 
 pub fn import_animator_controller(
     path: &Path,
@@ -89,108 +92,50 @@ pub fn import_animator_controller(
         .unwrap_or(fallback_name);
 
     let parameters = parse_parameters(controller_node, &asset_label)?;
-    let state_machine_id =
-        resolve_state_machine_id(controller_node, first_state_machine_id, &asset_label)?;
-    let state_machine_doc = docs_by_id.get(&state_machine_id).copied().ok_or_else(|| {
-        AnimImportError::UnresolvedReference {
-            asset: asset_label.clone(),
-            member: "m_AnimatorStateMachines".to_string(),
-            reference: format!("fileID {state_machine_id}"),
-        }
-    })?;
-    let state_machine_node = state_machine_doc
-        .root
-        .get("AnimatorStateMachine")
-        .unwrap_or(&state_machine_doc.root);
+    let layer_specs = parse_layer_specs(controller_node, guids, &asset_label)?;
+    let base_machine_id =
+        resolve_base_machine_id(controller_node, &layer_specs, first_state_machine_id, &asset_label)?;
 
-    check_sub_state_machines(state_machine_node, &asset_label)?;
-
-    let state_ids = parse_child_state_ids(state_machine_node, &asset_label)?;
-    if state_ids.is_empty() {
-        return Err(AnimImportError::MalformedController {
-            asset: asset_label,
-            member: "m_ChildStates".to_string(),
-            reason: "AnimatorStateMachine defines no child states".to_string(),
-        });
-    }
-
-    let mut state_index_by_id: BTreeMap<i64, usize> = BTreeMap::new();
-    for (idx, state_id) in state_ids.iter().copied().enumerate() {
-        state_index_by_id.insert(state_id, idx);
-    }
-
-    let mut states = Vec::with_capacity(state_ids.len());
-    let mut transitions = Vec::new();
-
-    if let Some(any_items) = node_sequence(state_machine_node.get("m_AnyStateTransitions"))? {
-        for item in any_items {
-            let trans_id = extract_file_id(item);
-            if trans_id == 0 {
-                continue;
-            }
-            let transition = parse_transition(
-                trans_id,
-                None,
-                &docs_by_id,
-                &state_index_by_id,
-                &asset_label,
-            )?;
-            transitions.push(transition);
-        }
-    }
-
-    for (source_idx, state_id) in state_ids.iter().copied().enumerate() {
-        let state_doc = docs_by_id.get(&state_id).copied().ok_or_else(|| {
-            AnimImportError::UnresolvedReference {
-                asset: asset_label.clone(),
-                member: "m_ChildStates".to_string(),
-                reference: format!("fileID {state_id}"),
-            }
-        })?;
-        if state_doc.class_id != 0
-            && state_doc.class_id != ANIMATOR_STATE_CLASS_ID
-            && state_doc.root.get("AnimatorState").is_none()
-        {
+    let base = parse_state_machine(
+        base_machine_id,
+        "AnimatorController.m_StateMachine",
+        &docs_by_id,
+        guids,
+        &asset_label,
+    )?;
+    let mut controller = AnimatorController::new(
+        name,
+        parameters,
+        base.states,
+        base.entry_state,
+        base.transitions,
+    );
+    for (index, spec) in layer_specs.into_iter().enumerate().skip(1) {
+        if spec.machine_id == 0 {
             return Err(AnimImportError::MalformedController {
                 asset: asset_label,
-                member: format!("state {state_id}"),
-                reason: format!(
-                    "expected class 1102 AnimatorState, found class {}",
-                    state_doc.class_id
-                ),
+                member: format!("m_AnimatorLayers[{index}].m_StateMachine"),
+                reason: "animator layer has no state machine reference".to_string(),
             });
         }
-        let state_node = state_doc
-            .root
-            .get("AnimatorState")
-            .unwrap_or(&state_doc.root);
-        let (state, state_transitions) = parse_state(
-            state_id,
-            source_idx,
-            state_node,
+        let parsed = parse_state_machine(
+            spec.machine_id,
+            "AnimatorController.m_StateMachine",
             &docs_by_id,
-            &state_index_by_id,
             guids,
             &asset_label,
         )?;
-        states.push(state);
-        transitions.extend(state_transitions);
+        controller.layers.push(AnimatorControllerLayer {
+            name: spec.name,
+            weight: spec.weight,
+            mask: spec.mask,
+            blending_mode: spec.blending_mode,
+            states: parsed.states,
+            entry_state: parsed.entry_state,
+            transitions: parsed.transitions,
+        });
     }
-
-    let entry_state = resolve_entry_state(
-        state_machine_node,
-        &docs_by_id,
-        &state_index_by_id,
-        &asset_label,
-    )?;
-
-    Ok(AnimatorController::new(
-        name,
-        parameters,
-        states,
-        entry_state,
-        transitions,
-    ))
+    Ok(controller)
 }
 
 fn parse_parameters(
@@ -248,40 +193,175 @@ fn parse_parameters(
     Ok(parameters)
 }
 
-fn resolve_state_machine_id(
+struct LayerSpec {
+    name: String,
+    weight: f32,
+    mask: Option<AvatarMask>,
+    blending_mode: LayerBlendingMode,
+    machine_id: i64,
+}
+
+fn parse_layer_specs(
     controller_node: &YamlNode,
-    first_state_machine_id: Option<i64>,
+    guids: &GuidIndex,
     asset_label: &str,
-) -> Result<i64, AnimImportError> {
-    let mut layer_machine_id = 0i64;
-    if let Some(layers) = node_sequence(controller_node.get("m_AnimatorLayers"))? {
-        if layers.len() > 1 {
-            return Err(AnimImportError::UnsupportedConstruct {
+) -> Result<Vec<LayerSpec>, AnimImportError> {
+    let Some(items) = node_sequence(controller_node.get("m_AnimatorLayers"))? else {
+        return Ok(Vec::new());
+    };
+    let mut specs = Vec::with_capacity(items.len());
+    for (index, item) in items.iter().enumerate() {
+        if item.as_mapping().is_none() {
+            return Err(AnimImportError::MalformedController {
                 asset: asset_label.to_string(),
-                member: "m_AnimatorLayers".to_string(),
-                reason: format!(
-                    "multiple animator layers ({}) are not supported in single-layer AnimatorController",
-                    layers.len()
-                ),
+                member: format!("m_AnimatorLayers[{index}]"),
+                reason: "layer entry is not a mapping".to_string(),
             });
         }
-        if let Some(layer) = layers.first() {
-            if let Some(nested) = node_sequence(layer.get("m_AnimatorLayers"))? {
-                if !nested.is_empty() {
-                    return Err(AnimImportError::UnsupportedConstruct {
-                        asset: asset_label.to_string(),
-                        member: "m_AnimatorLayers[0].m_AnimatorLayers".to_string(),
-                        reason: "nested animator layers are not supported".to_string(),
-                    });
-                }
+        if let Some(nested) = node_sequence(item.get("m_AnimatorLayers"))? {
+            if !nested.is_empty() {
+                return Err(AnimImportError::UnsupportedConstruct {
+                    asset: asset_label.to_string(),
+                    member: format!("m_AnimatorLayers[{index}].m_AnimatorLayers"),
+                    reason: "nested animator layers are not supported".to_string(),
+                });
             }
-            if let Some(sm_node) = layer.get("m_StateMachine") {
-                layer_machine_id = extract_file_id(sm_node);
+        }
+        if node_i32(item, "m_SyncedLayerIndex", -1) >= 0 {
+            return Err(AnimImportError::UnsupportedConstruct {
+                asset: asset_label.to_string(),
+                member: format!("m_AnimatorLayers[{index}].m_SyncedLayerIndex"),
+                reason: "synced animator layers are not supported".to_string(),
+            });
+        }
+        let name = item
+            .get("m_Name")
+            .and_then(YamlNode::as_str)
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string)
+            .unwrap_or_else(|| format!("Layer {index}"));
+        let weight = node_f64(item, "m_DefaultWeight", 1.0) as f32;
+        let blending_mode = match node_i32(item, "m_BlendingMode", 0) {
+            0 => LayerBlendingMode::Override,
+            1 => LayerBlendingMode::Additive,
+            other => {
+                return Err(AnimImportError::UnsupportedConstruct {
+                    asset: asset_label.to_string(),
+                    member: format!("m_AnimatorLayers[{index}].m_BlendingMode"),
+                    reason: format!("unsupported AnimatorLayerBlendingMode {other}"),
+                });
+            }
+        };
+        let mask = parse_layer_mask(item.get("m_Mask"), index, guids, asset_label)?;
+        let machine_id = item.get("m_StateMachine").map(extract_file_id).unwrap_or(0);
+        specs.push(LayerSpec {
+            name,
+            weight,
+            mask,
+            blending_mode,
+            machine_id,
+        });
+    }
+    Ok(specs)
+}
+
+fn parse_layer_mask(
+    mask_node: Option<&YamlNode>,
+    layer_index: usize,
+    guids: &GuidIndex,
+    asset_label: &str,
+) -> Result<Option<AvatarMask>, AnimImportError> {
+    let member = format!("m_AnimatorLayers[{layer_index}].m_Mask");
+    let Some(mask_node) = mask_node else {
+        return Ok(None);
+    };
+    let file_id = extract_file_id(mask_node);
+    let Some(guid) = extract_guid(mask_node) else {
+        return if file_id == 0 {
+            Ok(None)
+        } else {
+            Err(AnimImportError::MalformedController {
+                asset: asset_label.to_string(),
+                member,
+                reason: "layer mask reference has a fileID but no guid".to_string(),
+            })
+        };
+    };
+    let trimmed = guid.trim();
+    let mask_path: PathBuf = guids
+        .get(trimmed)
+        .or_else(|| guids.get(&trimmed.to_ascii_lowercase()))
+        .map(Path::to_path_buf)
+        .ok_or_else(|| AnimImportError::UnresolvedReference {
+            asset: asset_label.to_string(),
+            member: member.clone(),
+            reference: format!("guid {trimmed}"),
+        })?;
+    let mask_label = mask_path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or(trimmed)
+        .to_string();
+    let bytes = fs::read(&mask_path).map_err(|error| AnimImportError::Read {
+        asset: mask_label.clone(),
+        message: error.to_string(),
+    })?;
+    let without_bom = bytes.strip_prefix(&[0xEF, 0xBB, 0xBF]).unwrap_or(&bytes);
+    let text = std::str::from_utf8(without_bom).map_err(|_| AnimImportError::InvalidUtf8)?;
+    let stream = parse(text)?;
+    let mask_doc = stream
+        .documents
+        .iter()
+        .find(|doc| {
+            doc.class_id == AVATAR_MASK_CLASS_ID || doc.root.get("AvatarMask").is_some()
+        })
+        .ok_or_else(|| AnimImportError::MalformedController {
+            asset: mask_label.clone(),
+            member: member.clone(),
+            reason: "mask asset has no AvatarMask document".to_string(),
+        })?;
+    let mask_root = mask_doc
+        .root
+        .get("AvatarMask")
+        .unwrap_or(&mask_doc.root);
+    let mask_name = mask_root
+        .get("m_Name")
+        .and_then(YamlNode::as_str)
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .unwrap_or("AvatarMask");
+    let mut mask = AvatarMask::new(mask_name);
+    if let Some(elements) = node_sequence(mask_root.get("m_Elements"))? {
+        for (index, element) in elements.iter().enumerate() {
+            let path = element
+                .get("m_Path")
+                .and_then(YamlNode::as_str)
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .ok_or_else(|| AnimImportError::MalformedController {
+                    asset: mask_label.clone(),
+                    member: format!("{member}.m_Elements[{index}]"),
+                    reason: "mask element has an empty m_Path".to_string(),
+                })?;
+            if node_f64(element, "m_Weight", 0.0) != 0.0 {
+                mask = mask.with_path(path);
             }
         }
     }
-    if layer_machine_id != 0 {
-        return Ok(layer_machine_id);
+    Ok(Some(mask))
+}
+
+fn resolve_base_machine_id(
+    controller_node: &YamlNode,
+    layer_specs: &[LayerSpec],
+    first_state_machine_id: Option<i64>,
+    asset_label: &str,
+) -> Result<i64, AnimImportError> {
+    if let Some(spec) = layer_specs.first() {
+        if spec.machine_id != 0 {
+            return Ok(spec.machine_id);
+        }
     }
     if let Some(machines) = node_sequence(controller_node.get("m_AnimatorStateMachines"))? {
         if machines.len() > 1 {
@@ -308,97 +388,340 @@ fn resolve_state_machine_id(
     })
 }
 
-fn check_sub_state_machines(
-    state_machine_node: &YamlNode,
+struct MachineInfo {
+    default_state_id: i64,
+    any_state_transitions: Vec<i64>,
+    entry_transitions: Vec<i64>,
+    machine_transitions: Vec<(i64, Vec<i64>)>,
+}
+
+struct ParsedMachine {
+    states: Vec<AnimatorState>,
+    transitions: Vec<StateTransition>,
+    entry_state: usize,
+}
+
+fn parse_state_machine(
+    machine_id: i64,
+    root_member: &str,
+    docs_by_id: &BTreeMap<i64, &Document>,
+    guids: &GuidIndex,
     asset_label: &str,
-) -> Result<(), AnimImportError> {
-    if let Some(sub_machines) = node_sequence(state_machine_node.get("m_ChildStateMachines"))? {
-        if !sub_machines.is_empty() {
-            return Err(AnimImportError::UnsupportedConstruct {
+) -> Result<ParsedMachine, AnimImportError> {
+    let mut order: Vec<i64> = Vec::new();
+    let mut machines: BTreeMap<i64, MachineInfo> = BTreeMap::new();
+    collect_machine(
+        machine_id,
+        root_member,
+        docs_by_id,
+        &mut order,
+        &mut machines,
+        asset_label,
+        0,
+    )?;
+    if order.is_empty() {
+        return Err(AnimImportError::MalformedController {
+            asset: asset_label.to_string(),
+            member: "m_ChildStates".to_string(),
+            reason: "AnimatorStateMachine defines no child states".to_string(),
+        });
+    }
+
+    let mut state_index_by_id: BTreeMap<i64, usize> = BTreeMap::new();
+    let mut target_index_by_id: BTreeMap<i64, usize> = BTreeMap::new();
+    for (idx, state_id) in order.iter().copied().enumerate() {
+        state_index_by_id.insert(state_id, idx);
+        target_index_by_id.insert(state_id, idx);
+    }
+    for (id, info) in &machines {
+        if info.default_state_id == 0 {
+            continue;
+        }
+        let default_idx = resolve_default_state_index(
+            info.default_state_id,
+            &state_index_by_id,
+            &machines,
+            asset_label,
+        )?;
+        target_index_by_id.insert(*id, default_idx);
+    }
+
+    let mut states = Vec::with_capacity(order.len());
+    let mut transitions = Vec::new();
+    for (source_idx, state_id) in order.iter().copied().enumerate() {
+        let state_doc = docs_by_id.get(&state_id).copied().ok_or_else(|| {
+            AnimImportError::UnresolvedReference {
                 asset: asset_label.to_string(),
-                member: "AnimatorStateMachine.m_ChildStateMachines".to_string(),
-                reason: "sub-state machines are not supported".to_string(),
+                member: "m_ChildStates".to_string(),
+                reference: format!("fileID {state_id}"),
+            }
+        })?;
+        if state_doc.class_id != 0
+            && state_doc.class_id != ANIMATOR_STATE_CLASS_ID
+            && state_doc.root.get("AnimatorState").is_none()
+        {
+            return Err(AnimImportError::MalformedController {
+                asset: asset_label.to_string(),
+                member: format!("state {state_id}"),
+                reason: format!(
+                    "expected class 1102 AnimatorState, found class {}",
+                    state_doc.class_id
+                ),
             });
         }
+        let state_node = state_doc
+            .root
+            .get("AnimatorState")
+            .unwrap_or(&state_doc.root);
+        let (state, state_transitions) = parse_state(
+            state_id,
+            source_idx,
+            state_node,
+            docs_by_id,
+            &target_index_by_id,
+            guids,
+            asset_label,
+        )?;
+        states.push(state);
+        transitions.extend(state_transitions);
     }
+
+    for info in machines.values() {
+        for trans_id in &info.any_state_transitions {
+            transitions.push(parse_transition(
+                *trans_id,
+                None,
+                docs_by_id,
+                &target_index_by_id,
+                asset_label,
+            )?);
+        }
+    }
+    for info in machines.values() {
+        for (first_id, trans_ids) in &info.machine_transitions {
+            let source_idx = target_index_by_id.get(first_id).copied().ok_or_else(|| {
+                AnimImportError::UnresolvedReference {
+                    asset: asset_label.to_string(),
+                    member: "AnimatorStateMachine.m_StateMachineTransitions".to_string(),
+                    reference: format!("fileID {first_id}"),
+                }
+            })?;
+            for trans_id in trans_ids {
+                transitions.push(parse_transition(
+                    *trans_id,
+                    Some(source_idx),
+                    docs_by_id,
+                    &target_index_by_id,
+                    asset_label,
+                )?);
+            }
+        }
+    }
+
+    let root_info = machines.get(&machine_id).ok_or_else(|| {
+        AnimImportError::MalformedController {
+            asset: asset_label.to_string(),
+            member: "m_StateMachine".to_string(),
+            reason: format!("state machine fileID {machine_id} was not collected"),
+        }
+    })?;
+    let entry_state = if root_info.default_state_id != 0 {
+        resolve_default_state_index(
+            root_info.default_state_id,
+            &state_index_by_id,
+            &machines,
+            asset_label,
+        )?
+    } else {
+        resolve_entry_state(root_info, docs_by_id, &target_index_by_id, asset_label)?
+    };
+    Ok(ParsedMachine {
+        states,
+        transitions,
+        entry_state,
+    })
+}
+
+fn collect_machine(
+    machine_id: i64,
+    member: &str,
+    docs_by_id: &BTreeMap<i64, &Document>,
+    order: &mut Vec<i64>,
+    machines: &mut BTreeMap<i64, MachineInfo>,
+    asset_label: &str,
+    depth: usize,
+) -> Result<(), AnimImportError> {
+    if depth > MAX_MACHINE_NESTING_DEPTH {
+        return Err(AnimImportError::MalformedController {
+            asset: asset_label.to_string(),
+            member: member.to_string(),
+            reason: "state machine nesting exceeds 32 levels (circular m_ChildStateMachines?)"
+                .to_string(),
+        });
+    }
+    let machine_doc = docs_by_id.get(&machine_id).copied().ok_or_else(|| {
+        AnimImportError::UnresolvedReference {
+            asset: asset_label.to_string(),
+            member: member.to_string(),
+            reference: format!("fileID {machine_id}"),
+        }
+    })?;
+    if machine_doc.class_id != 0
+        && machine_doc.class_id != ANIMATOR_STATE_MACHINE_CLASS_ID
+        && machine_doc.root.get("AnimatorStateMachine").is_none()
+    {
+        return Err(AnimImportError::MalformedController {
+            asset: asset_label.to_string(),
+            member: format!("state machine {machine_id}"),
+            reason: format!(
+                "expected class 1107 AnimatorStateMachine, found class {}",
+                machine_doc.class_id
+            ),
+        });
+    }
+    let machine_node = machine_doc
+        .root
+        .get("AnimatorStateMachine")
+        .unwrap_or(&machine_doc.root);
+    let mut info = MachineInfo {
+        default_state_id: machine_node
+            .get("m_DefaultState")
+            .map(extract_file_id)
+            .unwrap_or(0),
+        any_state_transitions: Vec::new(),
+        entry_transitions: Vec::new(),
+        machine_transitions: Vec::new(),
+    };
+    if let Some(items) = node_sequence(machine_node.get("m_ChildStates"))? {
+        for (index, item) in items.iter().enumerate() {
+            let state_ref = item.get("m_State").unwrap_or(item);
+            let state_id = extract_file_id(state_ref);
+            if state_id == 0 {
+                return Err(AnimImportError::MalformedController {
+                    asset: asset_label.to_string(),
+                    member: format!("m_ChildStates[{index}]"),
+                    reason: "child state reference has missing or zero fileID".to_string(),
+                });
+            }
+            order.push(state_id);
+        }
+    }
+    if let Some(items) = node_sequence(machine_node.get("m_ChildStateMachines"))? {
+        for (index, item) in items.iter().enumerate() {
+            let machine_ref = item.get("m_StateMachine").unwrap_or(item);
+            let sub_id = extract_file_id(machine_ref);
+            if sub_id == 0 {
+                return Err(AnimImportError::MalformedController {
+                    asset: asset_label.to_string(),
+                    member: format!("m_ChildStateMachines[{index}]"),
+                    reason: "child state machine reference has missing or zero fileID".to_string(),
+                });
+            }
+            collect_machine(
+                sub_id,
+                "AnimatorStateMachine.m_ChildStateMachines",
+                docs_by_id,
+                order,
+                machines,
+                asset_label,
+                depth + 1,
+            )?;
+        }
+    }
+    if let Some(items) = node_sequence(machine_node.get("m_AnyStateTransitions"))? {
+        for item in items {
+            let trans_id = extract_file_id(item);
+            if trans_id != 0 {
+                info.any_state_transitions.push(trans_id);
+            }
+        }
+    }
+    if let Some(items) = node_sequence(machine_node.get("m_EntryTransitions"))? {
+        for item in items {
+            let trans_id = extract_file_id(item);
+            if trans_id != 0 {
+                info.entry_transitions.push(trans_id);
+            }
+        }
+    }
+    if let Some(groups) = node_sequence(machine_node.get("m_StateMachineTransitions"))? {
+        for group in groups {
+            let first_id = group.get("first").map(extract_file_id).unwrap_or(0);
+            let mut trans_ids = Vec::new();
+            if let Some(seconds) = node_sequence(group.get("second"))? {
+                for second in seconds {
+                    let trans_id = extract_file_id(second);
+                    if trans_id != 0 {
+                        trans_ids.push(trans_id);
+                    }
+                }
+            }
+            info.machine_transitions.push((first_id, trans_ids));
+        }
+    }
+    machines.insert(machine_id, info);
     Ok(())
 }
 
-fn parse_child_state_ids(
-    state_machine_node: &YamlNode,
+fn resolve_default_state_index(
+    default_id: i64,
+    state_index_by_id: &BTreeMap<i64, usize>,
+    machines: &BTreeMap<i64, MachineInfo>,
     asset_label: &str,
-) -> Result<Vec<i64>, AnimImportError> {
-    let Some(items) = node_sequence(state_machine_node.get("m_ChildStates"))? else {
-        return Ok(Vec::new());
-    };
-    let mut ids = Vec::with_capacity(items.len());
-    for (index, item) in items.iter().enumerate() {
-        let state_ref = item.get("m_State").unwrap_or(item);
-        let id = extract_file_id(state_ref);
-        if id == 0 {
-            return Err(AnimImportError::MalformedController {
-                asset: asset_label.to_string(),
-                member: format!("m_ChildStates[{index}]"),
-                reason: "child state reference has missing or zero fileID".to_string(),
-            });
-        }
-        ids.push(id);
+) -> Result<usize, AnimImportError> {
+    if let Some(index) = state_index_by_id.get(&default_id) {
+        return Ok(*index);
     }
-    Ok(ids)
+    if let Some(info) = machines.get(&default_id) {
+        if info.default_state_id != 0 {
+            return resolve_default_state_index(
+                info.default_state_id,
+                state_index_by_id,
+                machines,
+                asset_label,
+            );
+        }
+    }
+    Err(AnimImportError::UnresolvedReference {
+        asset: asset_label.to_string(),
+        member: "AnimatorStateMachine.m_DefaultState".to_string(),
+        reference: format!("fileID {default_id}"),
+    })
 }
 
 fn resolve_entry_state(
-    state_machine_node: &YamlNode,
+    info: &MachineInfo,
     docs_by_id: &BTreeMap<i64, &Document>,
-    state_index_by_id: &BTreeMap<i64, usize>,
+    target_index_by_id: &BTreeMap<i64, usize>,
     asset_label: &str,
 ) -> Result<usize, AnimImportError> {
-    if let Some(default_node) = state_machine_node.get("m_DefaultState") {
-        let default_id = extract_file_id(default_node);
-        if default_id != 0 {
-            return state_index_by_id.get(&default_id).copied().ok_or_else(|| {
-                AnimImportError::UnresolvedReference {
-                    asset: asset_label.to_string(),
-                    member: "AnimatorStateMachine.m_DefaultState".to_string(),
-                    reference: format!("fileID {default_id}"),
-                }
-            });
-        }
-    }
-    if let Some(entry_transitions) = node_sequence(state_machine_node.get("m_EntryTransitions"))? {
-        for entry_ref in entry_transitions {
-            let trans_id = extract_file_id(entry_ref);
-            if trans_id == 0 {
-                continue;
+    for trans_id in &info.entry_transitions {
+        let trans_doc = docs_by_id.get(trans_id).copied().ok_or_else(|| {
+            AnimImportError::UnresolvedReference {
+                asset: asset_label.to_string(),
+                member: "AnimatorStateMachine.m_EntryTransitions".to_string(),
+                reference: format!("fileID {trans_id}"),
             }
-            let trans_doc = docs_by_id.get(&trans_id).copied().ok_or_else(|| {
-                AnimImportError::UnresolvedReference {
-                    asset: asset_label.to_string(),
-                    member: "AnimatorStateMachine.m_EntryTransitions".to_string(),
-                    reference: format!("fileID {trans_id}"),
-                }
-            })?;
-            let trans_node = trans_doc
-                .root
-                .get("AnimatorTransition")
-                .or_else(|| trans_doc.root.get("AnimatorStateTransition"))
-                .unwrap_or(&trans_doc.root);
-            let _ = ANIMATOR_TRANSITION_CLASS_ID;
-            if let Some(dst_node) = trans_node
-                .get("m_DstState")
-                .or_else(|| trans_node.get("m_DestinationState"))
-            {
-                let dst_id = extract_file_id(dst_node);
-                if dst_id != 0 {
-                    return state_index_by_id.get(&dst_id).copied().ok_or_else(|| {
-                        AnimImportError::UnresolvedReference {
-                            asset: asset_label.to_string(),
-                            member: "AnimatorStateMachine.m_EntryTransitions.m_DestinationState"
-                                .to_string(),
-                            reference: format!("fileID {dst_id}"),
-                        }
-                    });
-                }
+        })?;
+        let trans_node = trans_doc
+            .root
+            .get("AnimatorTransition")
+            .or_else(|| trans_doc.root.get("AnimatorStateTransition"))
+            .unwrap_or(&trans_doc.root);
+        if let Some(dst_node) = trans_node
+            .get("m_DstState")
+            .or_else(|| trans_node.get("m_DestinationState"))
+        {
+            let dst_id = extract_file_id(dst_node);
+            if dst_id != 0 {
+                return target_index_by_id.get(&dst_id).copied().ok_or_else(|| {
+                    AnimImportError::UnresolvedReference {
+                        asset: asset_label.to_string(),
+                        member: "AnimatorStateMachine.m_EntryTransitions.m_DestinationState"
+                            .to_string(),
+                        reference: format!("fileID {dst_id}"),
+                    }
+                });
             }
         }
     }
@@ -548,12 +871,20 @@ fn parse_blend_tree(
         .filter(|s| !s.is_empty())
         .unwrap_or(state_name);
     let blend_type = node_i32(tree_node, "m_BlendType", 0);
+    if blend_type == 4 {
+        return parse_direct_blend_tree(
+            tree_name,
+            tree_node,
+            state_loop_override,
+            guids,
+            asset_label,
+        );
+    }
     if blend_type != 0 {
         let kind = match blend_type {
             1 => "2D Simple Directional",
             2 => "2D Freeform Directional",
             3 => "2D Freeform Cartesian",
-            4 => "Direct",
             _ => "non-1D",
         };
         return Err(AnimImportError::UnsupportedConstruct {
@@ -637,6 +968,70 @@ fn parse_blend_tree(
         parameter,
         thresholds,
     })
+}
+
+fn parse_direct_blend_tree(
+    tree_name: &str,
+    tree_node: &YamlNode,
+    state_loop_override: Option<bool>,
+    guids: &GuidIndex,
+    asset_label: &str,
+) -> Result<StateMotion, AnimImportError> {
+    let Some(children) = node_sequence(tree_node.get("m_Childs"))? else {
+        return Err(AnimImportError::MalformedController {
+            asset: asset_label.to_string(),
+            member: format!("BlendTree({tree_name}).m_Childs"),
+            reason: "Direct BlendTree has no children".to_string(),
+        });
+    };
+    if children.is_empty() {
+        return Err(AnimImportError::MalformedController {
+            asset: asset_label.to_string(),
+            member: format!("BlendTree({tree_name}).m_Childs"),
+            reason: "Direct BlendTree has empty m_Childs".to_string(),
+        });
+    }
+    let mut parsed = Vec::with_capacity(children.len());
+    for (idx, child) in children.iter().enumerate() {
+        let member = format!("BlendTree({tree_name}).m_Childs[{idx}]");
+        let Some(motion_node) = child.get("m_Motion") else {
+            return Err(AnimImportError::MalformedController {
+                asset: asset_label.to_string(),
+                member,
+                reason: "ChildMotion is missing m_Motion".to_string(),
+            });
+        };
+        let Some(guid_str) = extract_guid(motion_node) else {
+            let child_file_id = extract_file_id(motion_node);
+            return Err(AnimImportError::UnsupportedConstruct {
+                asset: asset_label.to_string(),
+                member: format!("{member}.m_Motion"),
+                reason: format!(
+                    "BlendTree child motion must reference an AnimationClip GUID (found fileID {child_file_id})"
+                ),
+            });
+        };
+        let clip = load_clip_by_guid(
+            &guid_str,
+            state_loop_override,
+            guids,
+            asset_label,
+            &format!("{member}.m_Motion"),
+        )?;
+        let parameter = child
+            .get("m_DirectBlendParameter")
+            .and_then(YamlNode::as_str)
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .ok_or_else(|| AnimImportError::MalformedController {
+                asset: asset_label.to_string(),
+                member: format!("{member}.m_DirectBlendParameter"),
+                reason: "Direct BlendTree child has empty m_DirectBlendParameter".to_string(),
+            })?
+            .to_string();
+        parsed.push((parameter, clip));
+    }
+    Ok(StateMotion::BlendTreeDirect { children: parsed })
 }
 
 fn parse_transition(
@@ -1123,7 +1518,7 @@ mod tests {
     }
 
     #[test]
-    fn diagnoses_2d_blend_tree_and_sub_state_machine_and_unresolved_guid(
+    fn diagnoses_2d_blend_tree_and_unresolved_sub_machine_and_unresolved_guid(
     ) -> Result<(), Box<dyn std::error::Error>> {
         let dir = unique_temp_dir("diagnostics")?;
         let guids = GuidIndex::default();
@@ -1154,13 +1549,18 @@ mod tests {
         let sub_sm_path = dir.join("SubSm.controller");
         std::fs::write(&sub_sm_path, sub_sm_yaml)?;
         match import_animator_controller(&sub_sm_path, &guids) {
-            Err(AnimImportError::UnsupportedConstruct { asset, member, .. }) => {
+            Err(AnimImportError::UnresolvedReference {
+                asset,
+                member,
+                reference,
+            }) => {
                 assert_eq!(asset, "SubSm.controller");
                 assert!(member.contains("m_ChildStateMachines"));
+                assert!(reference.contains("110700001"));
             }
             other => {
                 return Err(format!(
-                    "expected UnsupportedConstruct for sub-state machine, got {other:?}"
+                    "expected UnresolvedReference for missing sub-state machine, got {other:?}"
                 )
                 .into())
             }
