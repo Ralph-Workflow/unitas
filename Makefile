@@ -11,11 +11,11 @@ EDITOR_TEST_BINARY := editor/Unitas.Editor.Tests/bin/Release/net8.0/Unitas.Edito
 EDITOR_TEST_BUNDLE := $(CURDIR)/target/editor-test-bundle
 EDITOR_TEST_SHARD_FANOUT := 12
 BRIDGE_TEST_SHARD_COUNT := 12
-BRIDGE_TEST_SHARDS := 1,2,3,4,5,6,7,8,9,10,11,12
+BRIDGE_TEST_SHARDS := 1 2 3 4 5 6 7 8 9 10 11 12
 CLIPPY_TARGET_DIR := $(CURDIR)/target/clippy
-EDITOR_TEST_SHARDS := AuditTests,BuildToolsTests,BuiltinDefaultsTests,ChangeReviewTests,ClockTests,HeadlessCliTests,KnowledgeResourceTests,NativeToolBridgeTests,OperationStoreTests,OperationToolsTests,RegistryTests,ScopeTests,SessionTests,ShellWorkspaceTests,ShellPlayTests,UntrustedContentTests \
+EDITOR_TEST_SHARDS := AuditTests,BuildToolsTests,BuiltinDefaultsTests,ChangeReviewTests,ChangeReviewToolSurfaceTests,ReviewPolicyToolsTests,ClockTests,HeadlessCliTests,KnowledgeResourceTests,NativeToolBridgeTests,OperationStoreTests,OperationToolsTests,RegistryTests,ScopeTests,SessionTests,ShellWorkspaceTests,ShellPlayTests,UntrustedContentTests \
 	ExecuteMethodToolsTests,ScenarioGlueDiscoveryTests \
-	HttpTransportTests \
+	HttpTransportTests,LogsReadTests \
 	ScenarioToolsTests \
 	StdioTransportTests \
 	PlaySessionLifecycleTests \
@@ -55,8 +55,9 @@ verify-static-gates:
 	python3 tools/verify.py timed fmt-rs $(VERIFY_BUDGET_SECONDS) cargo fmt --all -- --check & p3=$$!; \
 	python3 tools/verify.py timed clippy $(VERIFY_BUDGET_SECONDS) cargo clippy --workspace --all-targets --target-dir "$(CLIPPY_TARGET_DIR)" -- -D warnings & p4=$$!; \
 	python3 tools/verify.py timed typecheck $(VERIFY_BUDGET_SECONDS) mypy & p5=$$!; \
+	python3 tools/verify.py timed dotnet-format $(VERIFY_BUDGET_SECONDS) python3 tools/verify.py dotnet-format & p6=$$!; \
 	wait $$p1 || rc=1; wait $$p2 || rc=1; wait $$p3 || rc=1; \
-	wait $$p4 || rc=1; wait $$p5 || rc=1; \
+	wait $$p4 || rc=1; wait $$p5 || rc=1; wait $$p6 || rc=1; \
 	exit $$rc
 
 verify-test-gates:
@@ -69,10 +70,8 @@ verify-dotnet-gates:
 	@rc=0; \
 	$(MAKE) --no-print-directory runtime-build & pr=$$!; \
 	python3 tools/verify.py timed dotnet-build $(VERIFY_BUDGET_SECONDS) $(DOTNET_BUILD_COMMAND) || rc=1; \
-	$(MAKE) --no-print-directory dotnet-format & pf=$$!; \
 	wait $$pr || rc=1; \
 	if [ $$rc -eq 0 ]; then $(MAKE) --no-print-directory dotnet-test-run || rc=1; fi; \
-	wait $$pf || rc=1; \
 	exit $$rc
 
 test:
