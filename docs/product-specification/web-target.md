@@ -828,7 +828,7 @@ reference integrated-GPU laptop, and the reference mid-range phone are the
 reference hardware each release records there. A measurement beyond a budget
 is a visible regression.
 
-* The [Roll-a-Ball-style sample](sample-games/01-roll-a-ball.md)'s compressed
+* The [Marble Rush sample](sample-games/01-marble-rush.md)'s compressed
   transfer is no more than 15 MB.
 * Its first interactive frame arrives within 3 s on a cold cache over a
   50 Mbps connection, and within 1 s on a warm cache, on the reference desktop.
@@ -992,7 +992,7 @@ for WebGL selects this mode.
     percentile, the same heap size after the last loop as after the first,
     a heap that stays under 256 MB, and a reported heap high-water mark.
     (PLT-001, PRF-002, TST-002)
-16. The [Roll-a-Ball-style sample](sample-games/01-roll-a-ball.md) built for the Web target transfers no more
+16. The [Marble Rush sample](sample-games/01-marble-rush.md) built for the Web target transfers no more
     than 15 MB compressed, shows its first interactive frame within 3 s on a
     cold cache over a 50 Mbps connection and within 1 s on a warm cache on the
     reference desktop, runs at 60 fps at 1080p on the reference

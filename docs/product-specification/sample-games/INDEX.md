@@ -92,7 +92,7 @@ specification's behavior holds.
 
 | No. | Game | Document | Principal feature families |
 |---|---|---|---|
-| 1 | Roll-a-Ball-style arena ("Marble Rush") | [01-roll-a-ball.md](01-roll-a-ball.md) | RUN-001, RUN-003, RUN-004, PHY-001, INP-001, INP-002, REN-002, REN-004, UI-001, AUD-001, SAV-001, BLD-001 |
+| 1 | Marble arena ("Marble Rush") | [01-marble-rush.md](01-marble-rush.md) | RUN-001, RUN-003, RUN-004, PHY-001, INP-001, INP-002, REN-002, REN-004, UI-001, AUD-001, SAV-001, BLD-001 |
 | 2 | Two-dimensional platformer | [02-2d-platformer.md](02-2d-platformer.md) | REN-005, PHY-002, ANI-001, SAV-001, INP-002, UI-001 |
 | 3 | Third-person adventure | [03-third-person-adventure.md](03-third-person-adventure.md) | ANI-001, ANI-002, CIN-001, PHY-003, NAV-001, ENV-001, REN-003, MED-001, LOC-001, SAV-001 |
 | 4 | First-person interaction | [04-first-person-interaction.md](04-first-person-interaction.md) | INP-002, PHY-001, PHY-004, REN-001, REN-003, REN-006, AUD-001 |
@@ -399,7 +399,7 @@ Each benchmark run starts from:
 
 Every playable sample defines at least one change request in its Agent
 authoring change requests section. Examples are a new pickup type in the
-Roll-a-Ball-style sample that awards a different score value, has a distinct
+Marble Rush sample that awards a different score value, has a distinct
 material and collection sound, appears at specified positions, shows a
 score-feedback message, and comes with a test of the awarded score; a new
 hazard in the two-dimensional platformer; and a new interactable in the

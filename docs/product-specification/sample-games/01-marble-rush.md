@@ -1,4 +1,4 @@
-# Sample 1: Roll-a-Ball-Style Arena ("Marble Rush")
+# Sample 1: Marble Arena ("Marble Rush")
 
 ## Overview
 
