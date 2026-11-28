@@ -9,6 +9,7 @@ use unitas_asset::binary_ser::{
 use unitas_asset::meta::GuidIndex;
 use unitas_asset::scene::{assemble_scene_bundle_with_guids, assemble_scene_file};
 use unitas_asset::scene_save::{self, SceneFile, SceneSaveError};
+use unitas_asset::script_fields::{self, FieldRenameMap};
 use unitas_asset::unity_yaml::{self, Node};
 
 type TestResult = Result<(), Box<dyn Error>>;
@@ -1099,45 +1100,6 @@ fn ser001_outcome14_excluded_members_null_inline_serializable_and_closed_generic
     Ok(())
 }
 
-fn resolve_formerly_serialized_as<'a>(
-    body: &'a Node,
-    current_field: &str,
-    former_names: &[&str],
-) -> Option<&'a Node> {
-    if let Some(val) = body.get(current_field) {
-        return Some(val);
-    }
-    for former in former_names {
-        if let Some(val) = body.get(former) {
-            return Some(val);
-        }
-    }
-    None
-}
-
-fn migrate_formerly_serialized_field(
-    node: &mut Node,
-    current_field: &str,
-    former_names: &[&str],
-) -> bool {
-    if let Node::Mapping(entries) = node {
-        if let Some((_, Node::Mapping(mb_entries))) =
-            entries.iter_mut().find(|(k, _)| k == "MonoBehaviour")
-        {
-            if mb_entries.iter().any(|(k, _)| k == current_field) {
-                return true;
-            }
-            for (key, _) in mb_entries.iter_mut() {
-                if former_names.contains(&key.as_str()) {
-                    *key = current_field.to_string();
-                    return true;
-                }
-            }
-        }
-    }
-    false
-}
-
 #[test]
 fn ser001_outcome4_formerly_serialized_as_rename_and_missing_serialize_reference_type_restoration(
 ) -> TestResult {
@@ -1154,7 +1116,7 @@ fn ser001_outcome4_formerly_serialized_as_rename_and_missing_serialize_reference
         .root
         .get("MonoBehaviour")
         .ok_or("missing MonoBehaviour")?;
-    let resolved_shield = resolve_formerly_serialized_as(
+    let resolved_shield = script_fields::resolve_formerly_serialized_as(
         mb_before,
         "shieldCapacity",
         &["m_LegacyShieldPoints", "oldShield"],
@@ -1163,25 +1125,11 @@ fn ser001_outcome4_formerly_serialized_as_rename_and_missing_serialize_reference
     assert_eq!(resolved_shield, Some(320));
 
     let known_runtime_types = ["PatrolTactic", "GuardTactic"];
-    let ref_ids_before = mb_before
-        .get("references")
-        .and_then(|r| r.get("RefIds"))
-        .and_then(Node::as_sequence)
-        .ok_or("missing RefIds")?;
-    let missing_types: Vec<(&str, &str, &str)> = ref_ids_before
-        .iter()
-        .filter_map(|entry| {
-            let t = entry.get("type")?;
-            let class = t.get("class")?.as_str()?;
-            let ns = t.get("ns")?.as_str()?;
-            let asm = t.get("asm")?.as_str()?;
-            if !known_runtime_types.contains(&class) {
-                Some((asm, ns, class))
-            } else {
-                None
-            }
-        })
-        .collect();
+    let missing_types: Vec<(&str, &str, &str)> =
+        script_fields::missing_managed_types(mb_before, &known_runtime_types)
+            .iter()
+            .map(|entry| (entry.asm, entry.ns, entry.class))
+            .collect();
     assert_eq!(
         missing_types,
         vec![("Unitas.Gameplay", "Unitas.Gameplay", "RemovedStealthTactic")]
@@ -1192,12 +1140,13 @@ fn ser001_outcome4_formerly_serialized_as_rename_and_missing_serialize_reference
         &["GameObject", "m_Name"],
         "EvolutionActorEdited"
     ));
-    assert!(migrate_formerly_serialized_field(
-        &mut stream.documents[1].root,
+    let mut renames = FieldRenameMap::new();
+    renames.add_rename(
+        "b2222222222222222222222222222222",
         "shieldCapacity",
-        &["m_LegacyShieldPoints"]
-    ));
-    scene_save::save_stream(&path, &stream)?;
+        &["m_LegacyShieldPoints"],
+    );
+    scene_save::save_stream_with_renames(&path, &mut stream, &renames)?;
 
     let reloaded_while_missing = unity_yaml::parse_file(&path)?;
     let mb_mid = reloaded_while_missing.documents[1]
@@ -1210,24 +1159,17 @@ fn ser001_outcome4_formerly_serialized_as_rename_and_missing_serialize_reference
     );
     assert!(mb_mid.get("m_LegacyShieldPoints").is_none());
 
-    let ref_entry_mid = &mb_mid
-        .get("references")
-        .and_then(|r| r.get("RefIds"))
-        .and_then(Node::as_sequence)
-        .ok_or("missing RefIds after save")?[0];
-    let missing_after_save: Vec<&str> = mb_mid
-        .get("references")
-        .and_then(|r| r.get("RefIds"))
-        .and_then(Node::as_sequence)
-        .ok_or("missing RefIds after save")?
-        .iter()
-        .filter_map(|entry| entry.get("type")?.get("class")?.as_str())
-        .filter(|class| !known_runtime_types.contains(class))
-        .collect();
+    let ref_entry_mid = script_fields::resolve_managed_reference(mb_mid, 2001)
+        .ok_or("missing rid 2001 after save")?;
+    let missing_after_save: Vec<&str> =
+        script_fields::missing_managed_types(mb_mid, &known_runtime_types)
+            .iter()
+            .map(|entry| entry.class)
+            .collect();
     assert_eq!(
         missing_after_save,
         vec!["RemovedStealthTactic"],
-        "the removed type is no longer reported missing after the unrelated edit and save"
+        "the removed type is still reported missing after the unrelated edit and save so the restore path can reinstall it"
     );
     assert_eq!(ref_entry_mid.get("rid").and_then(Node::as_i64), Some(2001));
     assert_eq!(

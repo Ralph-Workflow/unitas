@@ -22,6 +22,7 @@ pub mod project_settings;
 pub mod scene;
 pub mod scene_save;
 pub mod scene_terrain;
+pub mod script_fields;
 pub mod terrain_import;
 pub mod texture;
 pub mod trail;

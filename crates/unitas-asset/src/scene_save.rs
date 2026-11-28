@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 use crate::binary_ser::SerializedAsset;
 use crate::prefab_variant::{PrefabVariantDefinition, ScenePrefabInstance};
 use crate::project::BASELINE_UNITY_VERSION;
+use crate::script_fields::FieldRenameMap;
 use crate::unity_yaml::{Node, Stream};
 
 const MAX_FLOW_ENTRIES: usize = 4;
@@ -71,6 +72,15 @@ impl std::error::Error for SceneSaveError {}
 
 pub fn save_stream(path: &Path, stream: &Stream) -> Result<(), SceneSaveError> {
     save_text(path, stream, false).map(|_| ())
+}
+
+pub fn save_stream_with_renames(
+    path: &Path,
+    stream: &mut Stream,
+    renames: &FieldRenameMap,
+) -> Result<(), SceneSaveError> {
+    crate::script_fields::migrate_stream(stream, renames);
+    save_stream(path, stream)
 }
 
 pub fn save_asset(path: &Path, asset: &SerializedAsset) -> Result<(), SceneSaveError> {

@@ -11,6 +11,7 @@ use crate::prefab;
 use crate::prefab_variant::{
     ScenePrefabInstance, SourceObjectId, StructuralOverrides, TargetedModification,
 };
+use crate::script_fields::FieldRenameMap;
 use crate::trail::{trail_renderer_component, TrailRendererBinding};
 use crate::unity_yaml::{self, Document, Node, Stream, YamlError};
 
@@ -597,14 +598,14 @@ pub fn assemble_scene_with_guids(
 }
 
 pub fn assemble_scene_file(path: &Path) -> Result<SceneGraph, SceneError> {
-    Ok(assemble_file(path, None)?.graph)
+    Ok(assemble_file(path, None, None)?.graph)
 }
 
 pub fn assemble_scene_file_with_guids(
     path: &Path,
     index: &GuidIndex,
 ) -> Result<SceneGraph, SceneError> {
-    Ok(assemble_file(path, Some(index))?.graph)
+    Ok(assemble_file(path, Some(index), None)?.graph)
 }
 
 pub fn assemble_scene_with_physics(
@@ -617,7 +618,7 @@ pub fn assemble_scene_with_physics(
 pub fn assemble_scene_file_with_physics(
     path: &Path,
 ) -> Result<(SceneGraph, Vec<ScriptBinding>, Vec<PhysicsBinding>), SceneError> {
-    let assembly = assemble_file(path, None)?;
+    let assembly = assemble_file(path, None, None)?;
     Ok((assembly.graph, assembly.scripts, assembly.physics))
 }
 
@@ -640,21 +641,21 @@ pub fn assemble_scene_with_index(
 }
 
 pub fn assemble_scene_file_bundle(path: &Path) -> Result<AssembledScene, SceneError> {
-    assemble_file(path, None)
+    assemble_file(path, None, None)
 }
 
 pub fn assemble_scene_file_bundle_with_guids(
     path: &Path,
     index: &GuidIndex,
 ) -> Result<AssembledScene, SceneError> {
-    assemble_file(path, Some(index))
+    assemble_file(path, Some(index), None)
 }
 
 pub fn assemble_scene_file_with_index(
     path: &Path,
     index: &GuidIndex,
 ) -> Result<AssembledScene, SceneError> {
-    assemble_file(path, Some(index))
+    assemble_file(path, Some(index), None)
 }
 
 pub fn assemble_scene_with_audio(
@@ -665,7 +666,15 @@ pub fn assemble_scene_with_audio(
 }
 
 pub fn assemble_scene_file_with_audio(path: &Path) -> Result<AssembledScene, SceneError> {
-    assemble_file(path, None)
+    assemble_file(path, None, None)
+}
+
+pub fn assemble_scene_file_with_renames(
+    path: &Path,
+    index: Option<&GuidIndex>,
+    renames: Option<&FieldRenameMap>,
+) -> Result<AssembledScene, SceneError> {
+    assemble_file(path, index, renames)
 }
 
 fn assemble_stream(
@@ -704,8 +713,15 @@ fn assemble_stream(
     })
 }
 
-fn assemble_file(path: &Path, index: Option<&GuidIndex>) -> Result<AssembledScene, SceneError> {
-    let stream = unity_yaml::parse_file(path)?;
+fn assemble_file(
+    path: &Path,
+    index: Option<&GuidIndex>,
+    renames: Option<&FieldRenameMap>,
+) -> Result<AssembledScene, SceneError> {
+    let mut stream = unity_yaml::parse_file(path)?;
+    if let Some(map) = renames {
+        crate::script_fields::migrate_stream(&mut stream, map);
+    }
     let expand = has_prefab_instances(&stream);
     let resolve_guids = expand
         || has_material_references(&stream)

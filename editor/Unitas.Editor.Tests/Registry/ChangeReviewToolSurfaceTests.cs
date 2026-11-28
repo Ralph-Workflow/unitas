@@ -124,7 +124,7 @@ namespace Unitas.Editor.Tests
                 });
                 return held.ToValue();
             });
-            AddOperation(held!, new JsonObject
+            store.AddOperation(held!, new JsonObject
             {
                 ["tool"] = "test.mutate",
                 ["path"] = "Assets/Dropped.txt",
@@ -318,7 +318,7 @@ namespace Unitas.Editor.Tests
                 });
                 return held.ToValue();
             });
-            AddOperation(held!, new JsonObject
+            store.AddOperation(held!, new JsonObject
             {
                 ["tool"] = "test.mutate",
                 ["path"] = "Assets/Editor/FooTests.cs",
@@ -359,11 +359,6 @@ namespace Unitas.Editor.Tests
                 "surface: the stored item order is unchanged",
                 ChangeRisks.AsString(ChangeRisk.ContentEdit),
                 ChangeRisks.AsString(store.Get(held.Id).Items[0].Risk));
-        }
-
-        private static void AddOperation(ChangeSet set, JsonObject operation)
-        {
-            set.AddOperation(operation);
         }
 
         private static string CreateProject(string label)

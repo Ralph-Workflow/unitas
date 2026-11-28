@@ -15,6 +15,12 @@ namespace Unitas.Editor.Mcp
             ArgumentNullException.ThrowIfNull(host);
             ArgumentNullException.ThrowIfNull(store);
 
+            RegisterReadTools(host, store);
+            RegisterPersonTools(host, store);
+        }
+
+        private static void RegisterReadTools(McpHost host, ChangeSetStore store)
+        {
             host.RegisterTool(
                 new ToolDefinition(
                     "changes.list",
@@ -45,7 +51,10 @@ namespace Unitas.Editor.Mcp
                     },
                     Scope.ReadProject),
                 arguments => HandleShow(store, arguments));
+        }
 
+        private static void RegisterPersonTools(McpHost host, ChangeSetStore store)
+        {
             host.RegisterTool(
                 new ToolDefinition(
                     "changes.approve",

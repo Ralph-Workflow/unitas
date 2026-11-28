@@ -194,11 +194,11 @@ namespace Unitas.Editor.Tests
                     });
                     return held.ToValue();
                 });
-                // The test assembly has no InternalsVisibleTo, and no public tool
-                // can stage a riskier item after a content edit inside one set
-                // (AssetTools' two-item import always puts the riskiest shape
-                // first), so the fixture appends operations the way AssetTools does.
-                AddOperation(held!, new JsonObject
+                // No public tool can stage a riskier item after a content edit
+                // inside one set (AssetTools' two-item import always puts the
+                // riskiest shape first), so the fixture appends operations the
+                // way AssetTools does, through the public store API.
+                store.AddOperation(held!, new JsonObject
                 {
                     ["tool"] = "scene.set_property",
                     ["scene"] = "Assets/Scenes/Main.unity",
@@ -206,7 +206,7 @@ namespace Unitas.Editor.Tests
                     ["before"] = "0.01",
                     ["after"] = "0.5",
                 });
-                AddOperation(held!, new JsonObject
+                store.AddOperation(held!, new JsonObject
                 {
                     ["tool"] = "project.write_file",
                     ["path"] = "Assets/Editor/FooTests.cs",
@@ -577,11 +577,6 @@ namespace Unitas.Editor.Tests
                     ["id"] = changeId,
                     ["personCredential"] = PersonToken,
                 });
-        }
-
-        private static void AddOperation(ChangeSet set, JsonObject operation)
-        {
-            set.AddOperation(operation);
         }
 
         private static string CreateProject(string label)
