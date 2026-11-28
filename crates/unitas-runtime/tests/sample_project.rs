@@ -32,14 +32,14 @@ fn sample_root() -> PathBuf {
         .join("..")
         .join("..")
         .join("samples")
-        .join("roll-a-ball")
+        .join("marble-rush")
 }
 
 fn scene_path() -> PathBuf {
     sample_root()
         .join("Assets")
         .join("Scenes")
-        .join("RollABall.unity")
+        .join("MarbleRush.unity")
 }
 
 fn entity_named(graph: &SceneGraph, name: &str) -> Result<EntityId, Box<dyn Error>> {
@@ -69,10 +69,10 @@ fn scene_loads_with_project_settings_applied() -> TestResult {
     let script_count = runtime.load_scene(&scene_path())?;
     assert_eq!(script_count, 34);
     assert_eq!(runtime.scene_count(), 1);
-    assert_eq!(runtime.scene_name(0), Some("RollABall"));
+    assert_eq!(runtime.scene_name(0), Some("MarbleRush"));
     assert_eq!(runtime.fixed_timestep(), 0.02);
     assert_eq!(runtime.company_name(), Some("Unitas"));
-    assert_eq!(runtime.product_name(), Some("RollABall"));
+    assert_eq!(runtime.product_name(), Some("Marble Rush"));
     assert_eq!(runtime.project_version(), Some("1.0.0"));
 
     let mut guids: Vec<&str> = runtime

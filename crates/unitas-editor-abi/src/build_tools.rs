@@ -215,7 +215,7 @@ fn licensing_record_value(record: &LicensingRecord) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use unitas_build::sample::roll_a_ball_scene_yaml;
+    use unitas_build::sample::marble_rush_scene_yaml;
 
     fn temp_dir(label: &str) -> Result<PathBuf, Box<dyn std::error::Error>> {
         let nanos = std::time::SystemTime::now()
@@ -235,7 +235,7 @@ mod tests {
         let scenes = project.join("Assets").join("Scenes");
         std::fs::create_dir_all(&scenes)?;
         let scene = scenes.join("Main.unity");
-        std::fs::write(&scene, roll_a_ball_scene_yaml())?;
+        std::fs::write(&scene, marble_rush_scene_yaml())?;
         Ok(project)
     }
 

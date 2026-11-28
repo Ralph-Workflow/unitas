@@ -654,7 +654,7 @@ namespace Unitas.Editor.Tests
                     new JsonObject
                     {
                         ["projectPath"] = project,
-                        ["path"] = "Assets/Scenes/RollABall.unity",
+                        ["path"] = "Assets/Scenes/MarbleRush.unity",
                     });
                 host.CallTool(
                     session,
@@ -809,8 +809,8 @@ namespace Unitas.Editor.Tests
             string scenes = Path.Combine(root, "Assets", "Scenes");
             Directory.CreateDirectory(scenes);
             File.Copy(
-                Path.Combine(ResolveRepoRoot(), "samples", "roll-a-ball", "Assets", "Scenes", "RollABall.unity"),
-                Path.Combine(scenes, "RollABall.unity"));
+                Path.Combine(ResolveRepoRoot(), "samples", "marble-rush", "Assets", "Scenes", "MarbleRush.unity"),
+                Path.Combine(scenes, "MarbleRush.unity"));
             return root;
         }
 
@@ -819,7 +819,7 @@ namespace Unitas.Editor.Tests
             DirectoryInfo? directory = new DirectoryInfo(Directory.GetCurrentDirectory());
             for (int depth = 0; depth < 12 && directory != null; depth++)
             {
-                if (Directory.Exists(Path.Combine(directory.FullName, "samples", "roll-a-ball")))
+                if (Directory.Exists(Path.Combine(directory.FullName, "samples", "marble-rush")))
                 {
                     return directory.FullName;
                 }

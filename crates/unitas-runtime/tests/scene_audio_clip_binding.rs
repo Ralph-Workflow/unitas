@@ -25,10 +25,10 @@ fn scene_audio_clip_guid(scene_path: &Path) -> Result<String, Box<dyn std::error
 }
 
 #[test]
-fn roll_a_ball_collect_chime_binds_the_imported_clip() -> Result<(), Box<dyn std::error::Error>> {
+fn marble_rush_collect_chime_binds_the_imported_clip() -> Result<(), Box<dyn std::error::Error>> {
     let mut runtime = Runtime::new()?;
     let scene_path = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../samples/roll-a-ball/Assets/Scenes/RollABall.unity");
+        .join("../../samples/marble-rush/Assets/Scenes/MarbleRush.unity");
     let expected_guid = scene_audio_clip_guid(&scene_path)?;
     runtime.load_scene(&scene_path)?;
 

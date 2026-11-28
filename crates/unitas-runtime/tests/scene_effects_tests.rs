@@ -5,7 +5,7 @@ use unitas_core::EntityId;
 use unitas_runtime::Runtime;
 
 const EFFECTS_FIXTURE_PATH: &str = "tests/fixtures/scene_effects.unity";
-const SAMPLE_SCENE_RELATIVE: &str = "../../samples/roll-a-ball/Assets/Scenes/RollABall.unity";
+const SAMPLE_SCENE_RELATIVE: &str = "../../samples/marble-rush/Assets/Scenes/MarbleRush.unity";
 const BALL_NAME: &str = "PlayerBall";
 
 fn load_effects() -> Result<(Runtime, EntityId), Box<dyn Error>> {

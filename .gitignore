@@ -24,8 +24,8 @@ rustc-ice-*.txt
 #.idea/
 
 PROMPT.md
-# Staged Roll-a-Ball sample bundle produced by `unitas-player --sample roll-a-ball`
-/roll-a-ball/
+# Staged Marble Rush sample bundle produced by `unitas-player --sample marble-rush`
+/marble-rush/
 .agent/
 .agent/ralph-explore/
 .omo/

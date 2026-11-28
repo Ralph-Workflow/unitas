@@ -645,7 +645,7 @@ namespace Unitas.Editor.Tests
                     "project:manifest",
                     new JsonObject
                     {
-                        ["name"] = "RollABall",
+                        ["name"] = "MarbleRush",
                     }));
             return host;
         }

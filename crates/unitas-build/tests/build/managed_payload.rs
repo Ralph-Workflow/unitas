@@ -1,4 +1,4 @@
-//! W3 packaging proof: staging the real `samples/roll-a-ball` project stages a
+//! W3 packaging proof: staging the real `samples/marble-rush` project stages a
 //! `Managed/` payload (game assembly compiled at build time plus the
 //! `Unitas.PlayerHost` host files) and produces a build report with scenes,
 //! sizes, and the build identifier.
@@ -14,7 +14,7 @@ use unitas_build::bundle::{
 use unitas_build::config::{BuildConfiguration, BuildMode};
 use unitas_build::player::ScriptHost;
 use unitas_build::report::{BuildReport, SizeCategoryEntry, SizeContributor};
-use unitas_build::sample::stage_roll_a_ball_bundle_for_host;
+use unitas_build::sample::stage_marble_rush_bundle_for_host;
 use unitas_build::targets::BuildTarget;
 
 const PLAYER_HOST_PAYLOAD_FILENAMES: [&str; 3] = [
@@ -43,15 +43,15 @@ fn sample_config() -> Result<BuildConfiguration, Box<dyn Error>> {
         .ok_or("the crate directory has no repository root")?;
     let scene_path = root
         .join("samples")
-        .join("roll-a-ball")
+        .join("marble-rush")
         .join("Assets")
         .join("Scenes")
-        .join("RollABall.unity");
+        .join("MarbleRush.unity");
     Ok(BuildConfiguration::new(
         vec![scene_path],
         "Unitas",
-        "RollABall",
-        "com.unitas.rollaball",
+        "MarbleRush",
+        "com.unitas.marblerush",
         "1.0.0",
         BuildTarget::MACOS_ARM64,
     )
@@ -72,7 +72,7 @@ fn managed_entry<'a>(
 #[test]
 fn packaged_app_contains_managed_payload_and_build_report() -> TestResult {
     let output_dir = test_output_dir("managed_payload")?;
-    let staged = stage_roll_a_ball_bundle_for_host(&output_dir, None)?;
+    let staged = stage_marble_rush_bundle_for_host(&output_dir, None)?;
     assert_staged_manifest_and_payload(&output_dir, &staged)?;
     assert_managed_build_report(&staged)?;
     let _ = fs::remove_dir_all(&output_dir);
@@ -223,7 +223,7 @@ fn assert_managed_build_report(staged: &unitas_build::StagedBundle) -> TestResul
     .with_managed_payload(managed_payload);
 
     assert_eq!(report.build_identifier, manifest.build_identifier);
-    assert_eq!(report.product_name, "RollABall");
+    assert_eq!(report.product_name, "MarbleRush");
     assert!(!report.included_scenes.is_empty());
     assert!(report.total_size_bytes > 0);
     let json = report.to_json();

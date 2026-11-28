@@ -46,7 +46,7 @@ def test_rust_test_package_concurrency_covers_the_heaviest_package() -> None:
 
 def test_secret_scan_excludes_library_build_output_but_not_sources() -> None:
     assert any(
-        re.search(pattern, "samples/roll-a-ball/Library/UnitasScriptAssemblies/Assembly-CSharp.dll")
+        re.search(pattern, "samples/marble-rush/Library/UnitasScriptAssemblies/Assembly-CSharp.dll")
         for pattern in verify.SECRET_SCAN_EXCLUDES
     )
 
@@ -1267,12 +1267,12 @@ def test_secret_scan_skips_agent_scratch_tree(tmp_path: Path) -> None:
 
 
 def test_secret_scan_skips_generated_player_bundles(tmp_path: Path) -> None:
-    bundle = tmp_path / "roll-a-ball"
+    bundle = tmp_path / "marble-rush"
     bundle.mkdir()
     (bundle / verify.PLAYER_BUNDLE_MANIFEST_FILENAME).write_text("{}\n", encoding="utf-8")
-    (bundle / "RollABall.app").mkdir()
-    (bundle / "RollABall.app" / "Resources").mkdir()
-    (bundle / "RollABall.app" / "Resources" / "bundle.manifest").write_text(
+    (bundle / "MarbleRush.app").mkdir()
+    (bundle / "MarbleRush.app" / "Resources").mkdir()
+    (bundle / "MarbleRush.app" / "Resources" / "bundle.manifest").write_text(
         "{}\n", encoding="utf-8"
     )
     source_dir = tmp_path / "crates"
@@ -1282,7 +1282,7 @@ def test_secret_scan_skips_generated_player_bundles(tmp_path: Path) -> None:
     files = verify.secret_scan_files(tmp_path)
 
     assert "crates/lib.rs" in files
-    assert not any(path.startswith("roll-a-ball/") for path in files)
+    assert not any(path.startswith("marble-rush/") for path in files)
 
 
 def test_secret_scan_keeps_first_party_directories_that_hold_a_bundle_manifest(

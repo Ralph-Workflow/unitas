@@ -12,9 +12,9 @@ namespace Unitas.Editor.Tests.Play
         // The sample's acceptance scenarios for the current twelve-pickup
         // arena; the older collect_all_pickups/restart_recovery documents
         // still describe the pre-marble-rush four-pickup route.
-        private const string CollectScenario = "samples/roll-a-ball/Scenarios/collect_all.json";
-        private const string RestartScenario = "samples/roll-a-ball/Scenarios/retry_clean.json";
-        private const string ScenePath = "samples/roll-a-ball/Assets/Scenes/RollABall.unity";
+        private const string CollectScenario = "samples/marble-rush/Scenarios/collect_all.json";
+        private const string RestartScenario = "samples/marble-rush/Scenarios/retry_clean.json";
+        private const string ScenePath = "samples/marble-rush/Assets/Scenes/MarbleRush.unity";
 
         public static void Run()
         {
@@ -29,10 +29,10 @@ namespace Unitas.Editor.Tests.Play
         private static void CliArgsParsesRunScenarioOption()
         {
             CliArgs parsed = CliArgs.Parse(
-                new[] { "-batchmode", "-runScenario", "samples/roll-a-ball/Scenarios/collect_all.json" });
+                new[] { "-batchmode", "-runScenario", "samples/marble-rush/Scenarios/collect_all.json" });
             Check.Equal(
                 "cli-args: runScenario parsed",
-                "samples/roll-a-ball/Scenarios/collect_all.json",
+                "samples/marble-rush/Scenarios/collect_all.json",
                 parsed.RunScenario ?? string.Empty);
             Check.Equal("cli-args: zero unrecognized arguments with -runScenario", 0, parsed.UnrecognizedArguments.Count);
             Check.Equal("cli-args: zero missing values with -runScenario", 0, parsed.MissingValueArguments.Count);
@@ -42,14 +42,14 @@ namespace Unitas.Editor.Tests.Play
             Check.Equal("cli-args: missing option name is -runScenario", "-runScenario", missing.MissingValueArguments[0]);
         }
 
-        // The scenarios drive the real roll-a-ball project, so the editor can
+        // The scenarios drive the real marble-rush project, so the editor can
         // only load its scripts when the project is compiled. The compiled
         // output is rebuilt from the current sources because a compile state
         // left behind by another lane can name an assembly as current while
         // the file on disk still comes from older sources.
         private static void EnsureSampleProjectScriptsCompiled()
         {
-            string projectRoot = ResolveRepoDirectory("samples/roll-a-ball");
+            string projectRoot = ResolveRepoDirectory("samples/marble-rush");
             ScriptCompilationResult result = ScriptCompilation.CompileProject(
                 projectRoot,
                 new ScriptCompilationOptions());
@@ -129,7 +129,7 @@ namespace Unitas.Editor.Tests.Play
                 host.CallTool(
                     sessionId,
                     "scenario.run",
-                    new JsonObject { ["scenarioPath"] = "samples/roll-a-ball/Scenarios/no_such.scenario.json" });
+                    new JsonObject { ["scenarioPath"] = "samples/marble-rush/Scenarios/no_such.scenario.json" });
             }
             catch (McpError.InvalidRequest)
             {

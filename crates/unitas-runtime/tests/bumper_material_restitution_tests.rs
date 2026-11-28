@@ -17,7 +17,7 @@ fn sample_root() -> PathBuf {
         .join("..")
         .join("..")
         .join("samples")
-        .join("roll-a-ball")
+        .join("marble-rush")
 }
 
 fn scene_path() -> PathBuf {

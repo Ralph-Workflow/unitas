@@ -28,8 +28,8 @@ namespace Unitas.Editor.Tests
         public const string RoundTripMeasurement = "editor_mcp_round_trip";
 
         private const string EditorDllRelativePath = "editor/Unitas.Editor/bin/Release/net8.0/Unitas.Editor.dll";
-        private const string ProjectRelativePath = "samples/roll-a-ball";
-        private const string SceneRelativePath = "Assets/Scenes/RollABall.unity";
+        private const string ProjectRelativePath = "samples/marble-rush";
+        private const string SceneRelativePath = "Assets/Scenes/MarbleRush.unity";
         private const string ScaleFloorSceneRelativePath = "Assets/ScaleFloor.unity";
         private const string PersonCredential = "unitas-perf-person";
         private const int ScaleFloorObjectCount = 100000;

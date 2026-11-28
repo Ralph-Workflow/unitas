@@ -323,11 +323,11 @@ fn failed_build_validation_and_missing_source_scene_produce_failed_build_report(
 fn staged_bundle_cooks_textures_under_cooked_with_manifest_excludes_raw_textures_and_reuses_cache(
 ) -> Result<(), Box<dyn std::error::Error>> {
     use unitas_build::player::install_project_trust;
-    use unitas_build::sample::stage_roll_a_ball_bundle_for_host;
+    use unitas_build::sample::stage_marble_rush_bundle_for_host;
 
     let workspace = temp_dir("cooked_bundle_pipeline")?;
-    let bundle_dir = workspace.join("roll_a_ball_bundle");
-    let staged = stage_roll_a_ball_bundle_for_host(&bundle_dir, None)?;
+    let bundle_dir = workspace.join("marble_rush_bundle");
+    let staged = stage_marble_rush_bundle_for_host(&bundle_dir, None)?;
     install_project_trust(&bundle_dir)?;
 
     assert_staged_cooked_textures_and_meshes(&staged.output_dir)?;
@@ -433,7 +433,7 @@ fn assert_cooked_cache_reuse(
         .and_then(std::path::Path::parent)
         .ok_or("workspace root")?
         .join("samples")
-        .join("roll-a-ball");
+        .join("marble-rush");
     let cache_dir = workspace.join("import_cache");
     let first_out = workspace.join("out_first");
     let (_, first_report) =

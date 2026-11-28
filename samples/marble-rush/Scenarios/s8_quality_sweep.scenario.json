@@ -1,0 +1,19 @@
+{
+  "name": "s8-quality-sweep",
+  "scene": "Assets/Scenes/MarbleRush.unity",
+  "steps": [
+    { "load_scene": { "path": "Assets/Scenes/MarbleRush.unity" } },
+    { "tick": { "frames": 2, "delta_seconds": 0.016666666666666666 } },
+    { "set_quality": { "level": 0 } },
+    { "tick": { "frames": 2, "delta_seconds": 0.016666666666666666 } },
+    { "set_quality": { "level": 1 } },
+    { "tick": { "frames": 2, "delta_seconds": 0.016666666666666666 } },
+    { "set_quality": { "level": 2 } },
+    { "tick": { "frames": 2, "delta_seconds": 0.016666666666666666 } }
+  ],
+  "checkpoints": [
+    { "id": "quality-low", "after_step": 4, "kind": "render_capture", "camera": "Main Camera", "width": 256, "height": 256, "expected_non_background_pixels": 1000, "reference": "../References/s8_quality_low.bmp", "tolerance": 0.005 },
+    { "id": "quality-medium", "after_step": 6, "kind": "render_capture", "camera": "Main Camera", "width": 256, "height": 256, "expected_non_background_pixels": 1000, "reference": "../References/s8_quality_medium.bmp", "tolerance": 0.005 },
+    { "id": "quality-high", "after_step": 8, "kind": "render_capture", "camera": "Main Camera", "width": 256, "height": 256, "expected_non_background_pixels": 1000, "reference": "../References/s8_quality_high.bmp", "tolerance": 0.005 }
+  ]
+}

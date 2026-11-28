@@ -1,0 +1,297 @@
+{
+  "name": "pause_resume",
+  "steps": [
+    {
+      "load_scene": {
+        "path": "Assets/Scenes/MarbleRush.unity"
+      }
+    },
+    {
+      "inject_key": {
+        "key": "W",
+        "pressed": true
+      }
+    },
+    {
+      "tick": {
+        "frames": 10,
+        "delta_seconds": 0.016666666666666666
+      }
+    },
+    {
+      "inject_key": {
+        "key": "W",
+        "pressed": false
+      }
+    },
+    {
+      "inject_key": {
+        "key": "Escape",
+        "pressed": true
+      }
+    },
+    {
+      "tick": {
+        "frames": 1,
+        "delta_seconds": 0.016666666666666666
+      }
+    },
+    {
+      "inject_key": {
+        "key": "Escape",
+        "pressed": false
+      }
+    },
+    {
+      "tick": {
+        "frames": 6,
+        "delta_seconds": 0.016666666666666666
+      }
+    },
+    {
+      "inject_key": {
+        "key": "Tab",
+        "pressed": true
+      }
+    },
+    {
+      "tick": {
+        "frames": 1,
+        "delta_seconds": 0.016666666666666666
+      }
+    },
+    {
+      "inject_key": {
+        "key": "Tab",
+        "pressed": false
+      }
+    },
+    {
+      "inject_gamepad_axis": {
+        "axis": "Vertical",
+        "value": 1.0
+      }
+    },
+    {
+      "tick": {
+        "frames": 1,
+        "delta_seconds": 0.016666666666666666
+      }
+    },
+    {
+      "inject_gamepad_axis": {
+        "axis": "Vertical",
+        "value": 0.0
+      }
+    },
+    {
+      "inject_key": {
+        "key": "W",
+        "pressed": true
+      }
+    },
+    {
+      "inject_key": {
+        "key": "Space",
+        "pressed": true
+      }
+    },
+    {
+      "tick": {
+        "frames": 6,
+        "delta_seconds": 0.016666666666666666
+      }
+    },
+    {
+      "inject_key": {
+        "key": "Space",
+        "pressed": false
+      }
+    },
+    {
+      "inject_key": {
+        "key": "W",
+        "pressed": false
+      }
+    },
+    {
+      "tick": {
+        "frames": 20,
+        "delta_seconds": 0.016666666666666666
+      }
+    },
+    {
+      "inject_pointer": {
+        "x": 400.0,
+        "y": 370.0
+      }
+    },
+    {
+      "tick": {
+        "frames": 1,
+        "delta_seconds": 0.016666666666666666
+      }
+    },
+    {
+      "inject_mouse_button": {
+        "button": 0,
+        "pressed": true
+      }
+    },
+    {
+      "tick": {
+        "frames": 1,
+        "delta_seconds": 0.016666666666666666
+      }
+    },
+    {
+      "inject_mouse_button": {
+        "button": 0,
+        "pressed": false
+      }
+    },
+    {
+      "tick": {
+        "frames": 1,
+        "delta_seconds": 0.016666666666666666
+      }
+    },
+    {
+      "inject_key": {
+        "key": "W",
+        "pressed": true
+      }
+    },
+    {
+      "inject_key": {
+        "key": "A",
+        "pressed": true
+      }
+    },
+    {
+      "tick": {
+        "frames": 45,
+        "delta_seconds": 0.016666666666666666
+      }
+    }
+  ],
+  "checkpoints": [
+    {
+      "id": "pickup_collected_before_pause",
+      "after_step": 3,
+      "kind": "log",
+      "severity": "log",
+      "contains": "Pickup collected score 1"
+    },
+    {
+      "id": "game_paused",
+      "after_step": 6,
+      "kind": "log",
+      "severity": "log",
+      "contains": "Game paused"
+    },
+    {
+      "id": "pause_overlay_shown",
+      "after_step": 6,
+      "kind": "log",
+      "severity": "log",
+      "contains": "Pause overlay shown active=True focus=ResumeButton"
+    },
+    {
+      "id": "pause_focus_open",
+      "after_step": 6,
+      "kind": "log",
+      "severity": "log",
+      "contains": "Pause focus ResumeButton source=open"
+    },
+    {
+      "id": "pause_audio_gameplay_silenced_menu_playing",
+      "after_step": 6,
+      "kind": "log",
+      "severity": "log",
+      "contains": "Pause audio cue=pause gameplay_state=Paused gameplay_silence=Paused menu_state=Playing menu_silence=None"
+    },
+    {
+      "id": "marble_frozen_while_paused",
+      "after_step": 8,
+      "kind": "log",
+      "severity": "log",
+      "contains": "Marble frozen while paused"
+    },
+    {
+      "id": "pause_focus_navigation",
+      "after_step": 10,
+      "kind": "log",
+      "severity": "log",
+      "contains": "Pause focus ResumeButton source=navigation"
+    },
+    {
+      "id": "pause_audio_focus_menu_playing",
+      "after_step": 10,
+      "kind": "log",
+      "severity": "log",
+      "contains": "Pause audio cue=focus gameplay_state=Paused gameplay_silence=Paused menu_state=Playing menu_silence=None"
+    },
+    {
+      "id": "pause_focus_gamepad",
+      "after_step": 13,
+      "kind": "log",
+      "severity": "log",
+      "contains": "Pause focus ResumeButton source=gamepad"
+    },
+    {
+      "id": "non_resume_input_ignored_while_paused",
+      "after_step": 17,
+      "kind": "log",
+      "severity": "log",
+      "contains": "Pause held non-resume input ignored active=True timeScale=0.0"
+    },
+    {
+      "id": "marble_still_frozen_after_non_resume_input",
+      "after_step": 20,
+      "kind": "transform_position",
+      "object": "PlayerBall",
+      "expected": [
+        0.0,
+        0.5,
+        1.35
+      ],
+      "tolerance": 0.2
+    },
+    {
+      "id": "menu_timer_elapsed_while_paused",
+      "after_step": 20,
+      "kind": "log",
+      "severity": "log",
+      "contains": "Menu timer elapsed"
+    },
+    {
+      "id": "pause_resume_clicked",
+      "after_step": 26,
+      "kind": "log",
+      "severity": "log",
+      "contains": "Pause resume clicked"
+    },
+    {
+      "id": "pause_overlay_hidden",
+      "after_step": 26,
+      "kind": "log",
+      "severity": "log",
+      "contains": "Pause overlay hidden active=False"
+    },
+    {
+      "id": "game_resumed",
+      "after_step": 26,
+      "kind": "log",
+      "severity": "log",
+      "contains": "Game resumed"
+    },
+    {
+      "id": "play_continues_after_resume",
+      "after_step": 29,
+      "kind": "log",
+      "severity": "log",
+      "contains": "Pickup collected score 2"
+    }
+  ]
+}

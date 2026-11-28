@@ -6,13 +6,13 @@ use crate::bundle::{stage_bundle_for_host, BundleError, StagedBundle};
 use crate::config::{BuildConfiguration, BuildMode};
 use crate::targets::BuildTarget;
 
-pub const ROLL_A_BALL_SCENE_FILENAME: &str = "RollABall.unity";
-pub const ROLL_A_BALL_PRODUCT_NAME: &str = "RollABall";
-pub const ROLL_A_BALL_COMPANY_NAME: &str = "Unitas";
-pub const ROLL_A_BALL_APPLICATION_ID: &str = "com.unitas.rollaball";
-pub const ROLL_A_BALL_VERSION: &str = "1.0.0";
+pub const MARBLE_RUSH_SCENE_FILENAME: &str = "MarbleRush.unity";
+pub const MARBLE_RUSH_PRODUCT_NAME: &str = "MarbleRush";
+pub const MARBLE_RUSH_COMPANY_NAME: &str = "Unitas";
+pub const MARBLE_RUSH_APPLICATION_ID: &str = "com.unitas.marblerush";
+pub const MARBLE_RUSH_VERSION: &str = "1.0.0";
 
-const ROLL_A_BALL_SCENE_YAML: &str = concat!(
+const MARBLE_RUSH_SCENE_YAML: &str = concat!(
     r"%YAML 1.1
 %TAG !u! tag:unity3d.com,2011:
 --- !u!1 &1000
@@ -269,18 +269,18 @@ SphereCollider:
 "
 );
 
-pub fn roll_a_ball_scene_yaml() -> &'static str {
-    ROLL_A_BALL_SCENE_YAML
+pub fn marble_rush_scene_yaml() -> &'static str {
+    MARBLE_RUSH_SCENE_YAML
 }
 
-pub fn stage_roll_a_ball_bundle(output_dir: &Path) -> Result<StagedBundle, BundleError> {
-    stage_roll_a_ball_bundle_for_host(output_dir, BuildTarget::current_host())
+pub fn stage_marble_rush_bundle(output_dir: &Path) -> Result<StagedBundle, BundleError> {
+    stage_marble_rush_bundle_for_host(output_dir, BuildTarget::current_host())
 }
 
-/// The build configuration the roll-a-ball sample stages and packages with:
+/// The build configuration the marble-rush sample stages and packages with:
 /// its committed scene, scripts compiled at build time, and the managed
 /// player-host payload behind the signature the player shell already calls.
-pub fn roll_a_ball_build_configuration(
+pub fn marble_rush_build_configuration(
     host: Option<BuildTarget>,
 ) -> Result<BuildConfiguration, BundleError> {
     let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
@@ -293,40 +293,40 @@ pub fn roll_a_ball_build_configuration(
         })?;
     let scene_path = workspace_root
         .join("samples")
-        .join("roll-a-ball")
+        .join("marble-rush")
         .join("Assets")
         .join("Scenes")
-        .join(ROLL_A_BALL_SCENE_FILENAME);
+        .join(MARBLE_RUSH_SCENE_FILENAME);
 
     let target = host.unwrap_or_else(BuildTarget::host);
     Ok(BuildConfiguration::new(
         vec![scene_path],
-        ROLL_A_BALL_COMPANY_NAME,
-        ROLL_A_BALL_PRODUCT_NAME,
-        ROLL_A_BALL_APPLICATION_ID,
-        ROLL_A_BALL_VERSION,
+        MARBLE_RUSH_COMPANY_NAME,
+        MARBLE_RUSH_PRODUCT_NAME,
+        MARBLE_RUSH_APPLICATION_ID,
+        MARBLE_RUSH_VERSION,
         target,
     )
     .with_mode(BuildMode::Development))
 }
 
-pub fn stage_roll_a_ball_bundle_for_host(
+pub fn stage_marble_rush_bundle_for_host(
     output_dir: &Path,
     host: Option<BuildTarget>,
 ) -> Result<StagedBundle, BundleError> {
-    stage_roll_a_ball_bundle_for_host_with_script_debugging(output_dir, host, false)
+    stage_marble_rush_bundle_for_host_with_script_debugging(output_dir, host, false)
 }
 
-/// The roll-a-ball sample staged with its `Managed/` payload compiled with
+/// The marble-rush sample staged with its `Managed/` payload compiled with
 /// script debugging, so a debugger can attach to the running scripts.
-pub fn stage_roll_a_ball_bundle_for_host_with_script_debugging(
+pub fn stage_marble_rush_bundle_for_host_with_script_debugging(
     output_dir: &Path,
     host: Option<BuildTarget>,
     script_debugging: bool,
 ) -> Result<StagedBundle, BundleError> {
     let target = host.unwrap_or_else(BuildTarget::host);
     let config =
-        roll_a_ball_build_configuration(Some(target))?.with_script_debugging(script_debugging);
+        marble_rush_build_configuration(Some(target))?.with_script_debugging(script_debugging);
     stage_bundle_for_host(&config, output_dir, Some(target))
 }
 
@@ -400,11 +400,11 @@ mod tests {
     }
 
     #[test]
-    fn roll_a_ball_bundle_stages_and_loads_into_runtime() -> Result<(), Box<dyn std::error::Error>>
+    fn marble_rush_bundle_stages_and_loads_into_runtime() -> Result<(), Box<dyn std::error::Error>>
     {
         let workspace = temp_dir("stage_sample")?;
-        let bundle = stage_roll_a_ball_bundle(&workspace)?;
-        assert_eq!(bundle.manifest.product_name, ROLL_A_BALL_PRODUCT_NAME);
+        let bundle = stage_marble_rush_bundle(&workspace)?;
+        assert_eq!(bundle.manifest.product_name, MARBLE_RUSH_PRODUCT_NAME);
         let scene_path = workspace.join(&bundle.manifest.startup_scene_staged_path);
         assert!(scene_path.is_file());
 

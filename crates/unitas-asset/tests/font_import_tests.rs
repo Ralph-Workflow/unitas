@@ -19,7 +19,7 @@ const GLYPH_A: u16 = 36;
 const KERN_AV_UNITS: f32 = -40.0;
 
 fn sample_root() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../samples/roll-a-ball")
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../samples/marble-rush")
 }
 
 fn sample_font_bytes() -> TestResult<Vec<u8>> {

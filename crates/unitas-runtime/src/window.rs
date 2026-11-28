@@ -832,7 +832,7 @@ mod tests {
     use unitas_core::{EntityId, Transform};
     use unitas_render::{Mat4, cube};
 
-    const SAMPLE_SCENE: &str = "samples/roll-a-ball/Assets/Scenes/RollABall.unity";
+    const SAMPLE_SCENE: &str = "samples/marble-rush/Assets/Scenes/MarbleRush.unity";
 
     fn sample_scene_path() -> PathBuf {
         Path::new(env!("CARGO_MANIFEST_DIR"))

@@ -3,8 +3,8 @@ use std::error::Error;
 use std::path::Path;
 use std::sync::Mutex;
 
-#[path = "roll_a_ball_tests.rs"]
-mod roll_a_ball_tests;
+#[path = "marble_rush_tests.rs"]
+mod marble_rush_tests;
 
 use unitas_runtime::{
     Callbacks, LoadSceneMode, Runtime, RuntimeError, test_read_query_buffer,

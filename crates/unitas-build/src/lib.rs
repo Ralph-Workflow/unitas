@@ -51,10 +51,10 @@ pub use report::{
     DESKTOP_PACKAGE_STATE_EXTERNALLY_UNAVAILABLE, DESKTOP_PACKAGE_STATE_PACKAGED, STARTUP_BASIS,
 };
 pub use sample::{
-    imported_gem_mesh, roll_a_ball_build_configuration, roll_a_ball_scene_yaml,
-    stage_roll_a_ball_bundle, stage_roll_a_ball_bundle_for_host, ROLL_A_BALL_APPLICATION_ID,
-    ROLL_A_BALL_COMPANY_NAME, ROLL_A_BALL_PRODUCT_NAME, ROLL_A_BALL_SCENE_FILENAME,
-    ROLL_A_BALL_VERSION,
+    imported_gem_mesh, marble_rush_build_configuration, marble_rush_scene_yaml,
+    stage_marble_rush_bundle, stage_marble_rush_bundle_for_host, MARBLE_RUSH_APPLICATION_ID,
+    MARBLE_RUSH_COMPANY_NAME, MARBLE_RUSH_PRODUCT_NAME, MARBLE_RUSH_SCENE_FILENAME,
+    MARBLE_RUSH_VERSION,
 };
 pub use targets::{BuildTarget, TargetArch, TargetOs, TargetStatus};
 pub use toolchain::{

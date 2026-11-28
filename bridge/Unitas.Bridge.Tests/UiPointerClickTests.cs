@@ -11,7 +11,7 @@ namespace Unitas.Bridge.Tests
     /// A scenario-injected pointer click over a scene button must reach the
     /// managed uGUI button and fire its <c>onClick</c> listeners.
     ///
-    /// The scene here is shaped like the title screen of the roll-a-ball
+    /// The scene here is shaped like the title screen of the marble-rush
     /// sample: a canvas with a scaler, a panel that sits off the middle of the
     /// canvas and a button that sits off the middle of the panel. The sample
     /// injects the pointer at the button and expects the button's handler to
@@ -136,7 +136,7 @@ namespace Unitas.Bridge.Tests
 
         // A canvas of 800 by 600 reference pixels that holds a panel off the
         // middle of the canvas and a button off the middle of the panel: the
-        // shape the title screen of the roll-a-ball sample states.
+        // shape the title screen of the marble-rush sample states.
         private const string TitleScreenSceneYaml = @"%YAML 1.1
 %TAG !u! tag:unity3d.com,2011:
 --- !u!1 &1

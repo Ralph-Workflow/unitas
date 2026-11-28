@@ -25,7 +25,7 @@ fn scene_path() -> PathBuf {
         .join("..")
         .join("..")
         .join("samples")
-        .join("roll-a-ball")
+        .join("marble-rush")
         .join("Assets")
         .join("Scenes")
         .join("PhysicsLab.unity")

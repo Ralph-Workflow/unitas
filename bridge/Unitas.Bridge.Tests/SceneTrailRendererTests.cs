@@ -7,7 +7,7 @@ namespace Unitas.Bridge.Tests
 {
     public static class SceneTrailRendererTests
     {
-        private const string SceneRelativePath = "samples/roll-a-ball/Assets/Scenes/RollABall.unity";
+        private const string SceneRelativePath = "samples/marble-rush/Assets/Scenes/MarbleRush.unity";
         private const string PlayerName = "PlayerBall";
 
         public static void Run()

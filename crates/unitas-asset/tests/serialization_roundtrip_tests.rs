@@ -12,7 +12,7 @@ use unitas_asset::unity_yaml::{self, Node, Stream};
 
 type TestResult = Result<(), Box<dyn Error>>;
 
-const SCENE: &str = "Assets/Scenes/RollABall.unity";
+const SCENE: &str = "Assets/Scenes/MarbleRush.unity";
 const PHYSICS_SCENE: &str = "Assets/Scenes/PhysicsLab.unity";
 const PREFAB: &str = "Assets/Prefabs/Pickup.prefab";
 const VARIANT: &str = "Assets/Prefabs/PickupGold.prefab";
@@ -54,7 +54,7 @@ const VARIANT_AURA_RENDERER: i64 = 2300002;
 const VARIANT_AURA_BEHAVIOUR: i64 = 5400003;
 
 fn sample_root() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../samples/roll-a-ball")
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../samples/marble-rush")
 }
 
 fn sample(relative: &str) -> PathBuf {

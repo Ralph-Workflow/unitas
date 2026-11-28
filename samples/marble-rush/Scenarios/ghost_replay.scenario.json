@@ -1,0 +1,340 @@
+{
+  "name": "ghost_replay",
+  "steps": [
+    {
+      "load_scene": {
+        "path": "Assets/Scenes/MarbleRush.unity"
+      }
+    },
+    {
+      "inject_key": {
+        "key": "Return",
+        "pressed": true
+      }
+    },
+    {
+      "tick": {
+        "frames": 2,
+        "delta_seconds": 0.016666666666666666
+      }
+    },
+    {
+      "inject_key": {
+        "key": "Return",
+        "pressed": false
+      }
+    },
+    {
+      "inject_key": {
+        "key": "W",
+        "pressed": true
+      }
+    },
+    {
+      "tick": {
+        "frames": 26,
+        "delta_seconds": 0.016666666666666666
+      }
+    },
+    {
+      "inject_key": {
+        "key": "W",
+        "pressed": false
+      }
+    },
+    {
+      "tick": {
+        "frames": 25,
+        "delta_seconds": 0.016666666666666666
+      }
+    },
+    {
+      "inject_key": {
+        "key": "A",
+        "pressed": true
+      }
+    },
+    {
+      "tick": {
+        "frames": 12,
+        "delta_seconds": 0.016666666666666666
+      }
+    },
+    {
+      "tick": {
+        "frames": 14,
+        "delta_seconds": 0.016666666666666666
+      }
+    },
+    {
+      "inject_key": {
+        "key": "A",
+        "pressed": false
+      }
+    },
+    {
+      "tick": {
+        "frames": 25,
+        "delta_seconds": 0.016666666666666666
+      }
+    },
+    {
+      "inject_key": {
+        "key": "S",
+        "pressed": true
+      }
+    },
+    {
+      "tick": {
+        "frames": 24,
+        "delta_seconds": 0.016666666666666666
+      }
+    },
+    {
+      "tick": {
+        "frames": 24,
+        "delta_seconds": 0.016666666666666666
+      }
+    },
+    {
+      "tick": {
+        "frames": 14,
+        "delta_seconds": 0.016666666666666666
+      }
+    },
+    {
+      "inject_key": {
+        "key": "S",
+        "pressed": false
+      }
+    },
+    {
+      "tick": {
+        "frames": 25,
+        "delta_seconds": 0.016666666666666666
+      }
+    },
+    {
+      "inject_key": {
+        "key": "D",
+        "pressed": true
+      }
+    },
+    {
+      "tick": {
+        "frames": 24,
+        "delta_seconds": 0.016666666666666666
+      }
+    },
+    {
+      "tick": {
+        "frames": 24,
+        "delta_seconds": 0.016666666666666666
+      }
+    },
+    {
+      "tick": {
+        "frames": 14,
+        "delta_seconds": 0.016666666666666666
+      }
+    },
+    {
+      "inject_key": {
+        "key": "D",
+        "pressed": false
+      }
+    },
+    {
+      "tick": {
+        "frames": 25,
+        "delta_seconds": 0.016666666666666666
+      }
+    },
+    {
+      "inject_key": {
+        "key": "W",
+        "pressed": true
+      }
+    },
+    {
+      "tick": {
+        "frames": 24,
+        "delta_seconds": 0.016666666666666666
+      }
+    },
+    {
+      "tick": {
+        "frames": 24,
+        "delta_seconds": 0.016666666666666666
+      }
+    },
+    {
+      "tick": {
+        "frames": 14,
+        "delta_seconds": 0.016666666666666666
+      }
+    },
+    {
+      "inject_key": {
+        "key": "W",
+        "pressed": false
+      }
+    },
+    {
+      "tick": {
+        "frames": 25,
+        "delta_seconds": 0.016666666666666666
+      }
+    },
+    {
+      "inject_key": {
+        "key": "A",
+        "pressed": true
+      }
+    },
+    {
+      "tick": {
+        "frames": 24,
+        "delta_seconds": 0.016666666666666666
+      }
+    },
+    {
+      "inject_key": {
+        "key": "A",
+        "pressed": false
+      }
+    },
+    {
+      "tick": {
+        "frames": 25,
+        "delta_seconds": 0.016666666666666666
+      }
+    },
+    {
+      "tick": {
+        "frames": 20,
+        "delta_seconds": 0.016666666666666666
+      }
+    },
+    {
+      "inject_key": {
+        "key": "R",
+        "pressed": true
+      }
+    },
+    {
+      "tick": {
+        "frames": 5,
+        "delta_seconds": 0.016666666666666666
+      }
+    },
+    {
+      "inject_key": {
+        "key": "R",
+        "pressed": false
+      }
+    },
+    {
+      "tick": {
+        "frames": 15,
+        "delta_seconds": 0.016666666666666666
+      }
+    },
+    {
+      "load_scene": {
+        "path": "Assets/Scenes/MarbleRush.unity"
+      }
+    },
+    {
+      "tick": {
+        "frames": 340,
+        "delta_seconds": 0.016666666666666666
+      }
+    }
+  ],
+  "checkpoints": [
+    {
+      "id": "ghost_file_written",
+      "after_step": 33,
+      "kind": "log",
+      "severity": "log",
+      "contains": "Ghost written version 2 steps 245 bytes 1996 first -3.150 0.500 3.300 last 2.250 0.500 3.300"
+    },
+    {
+      "id": "ghost_file_round_trip_compared",
+      "after_step": 33,
+      "kind": "log",
+      "severity": "log",
+      "contains": "Ghost replay max deviation"
+    },
+    {
+      "id": "ghost_file_round_trip_within_1cm",
+      "after_step": 33,
+      "kind": "log",
+      "severity": "log",
+      "contains": "Ghost replay within 0.01 m"
+    },
+    {
+      "id": "arena1_finished",
+      "after_step": 33,
+      "kind": "log",
+      "severity": "log",
+      "contains": "All 12 pickups collected, press R to play again."
+    },
+    {
+      "id": "next_attempt_reset",
+      "after_step": 38,
+      "kind": "log",
+      "severity": "log",
+      "contains": "Retry complete score 0 pickups 12 multiplier x1"
+    },
+    {
+      "id": "next_attempt_origin",
+      "after_step": 38,
+      "kind": "transform_position",
+      "object": "PlayerBall",
+      "expected": [
+        0,
+        0.5,
+        0
+      ],
+      "tolerance": 0.01
+    },
+    {
+      "id": "next_attempt_scene_reloaded",
+      "after_step": 41,
+      "kind": "transform_position",
+      "object": "PlayerBall",
+      "expected": [
+        0,
+        0.5,
+        0
+      ],
+      "tolerance": 0.01
+    },
+    {
+      "id": "ghost_route_compared",
+      "after_step": 42,
+      "kind": "log",
+      "severity": "log",
+      "contains": "Ghost attempt replay max deviation"
+    },
+    {
+      "id": "ghost_replay_within_1cm",
+      "after_step": 42,
+      "kind": "log",
+      "severity": "log",
+      "contains": "Ghost attempt replay within 0.01 m"
+    },
+    {
+      "id": "frames_under_30s",
+      "after_step": 42,
+      "kind": "frame_count",
+      "expected": 796
+    }
+  ],
+  "absent_logs": [
+    "Ghost replay failed",
+    "Ghost attempt replay failed"
+  ]
+}

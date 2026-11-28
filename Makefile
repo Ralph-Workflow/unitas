@@ -137,7 +137,7 @@ dotnet-test: runtime-build
 
 dotnet-test-run:
 	@rc=0; staging=""; \
-	if [ ! -f "$(EDITOR_TEST_BUNDLE)/bundle.manifest" ] || [ -n "$$(find samples/roll-a-ball/Assets bridge/Unitas.PlayerHost/bin/Release/net8.0 -type f -newer "$(EDITOR_TEST_BUNDLE)/bundle.manifest" -print -quit 2>/dev/null)" ]; then \
+	if [ ! -f "$(EDITOR_TEST_BUNDLE)/bundle.manifest" ] || [ -n "$$(find samples/marble-rush/Assets bridge/Unitas.PlayerHost/bin/Release/net8.0 -type f -newer "$(EDITOR_TEST_BUNDLE)/bundle.manifest" -print -quit 2>/dev/null)" ]; then \
 		rm -rf "$(EDITOR_TEST_BUNDLE)"; \
 		"$(CURDIR)/target/debug/unitas-player" --sample "$(EDITOR_TEST_BUNDLE)" --frames 1 > /dev/null 2>&1 & staging=$$!; \
 	fi; \
@@ -173,7 +173,7 @@ editor-test-shards:
 	exit $$rc
 
 editor-shell-run: dotnet-build
-	@UNITAS_RUNTIME_LIBRARY="$(CURDIR)/target/debug/libunitas_runtime.dylib" UNITAS_EDITOR_ABI_LIBRARY="$(CURDIR)/target/debug/libunitas_editor_abi.dylib" dotnet editor/Unitas.Editor/bin/Release/net8.0/Unitas.Editor.dll --shell --project "$(CURDIR)/samples/roll-a-ball"
+	@UNITAS_RUNTIME_LIBRARY="$(CURDIR)/target/debug/libunitas_runtime.dylib" UNITAS_EDITOR_ABI_LIBRARY="$(CURDIR)/target/debug/libunitas_editor_abi.dylib" dotnet editor/Unitas.Editor/bin/Release/net8.0/Unitas.Editor.dll --shell --project "$(CURDIR)/samples/marble-rush"
 
 verify-unsafe:
 	@echo "owner: editor and engine proof"

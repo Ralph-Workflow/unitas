@@ -65,7 +65,7 @@ fn private_bundle(name: &str) -> Result<Option<(PathBuf, PathBuf)>, Box<dyn Erro
     }
     let root = temp_dir(name)?;
     let bundle = root.join("bundle");
-    unitas_build::sample::stage_roll_a_ball_bundle(&bundle)?;
+    unitas_build::sample::stage_marble_rush_bundle(&bundle)?;
     Ok(Some((root, bundle)))
 }
 

@@ -59,15 +59,16 @@ The domain spans the UI and text subsystems, the platform layer, and scripting, 
   description of each control.
 * **Platform preferences.** Screen-reader presence, reduced motion, high contrast, text scale,
   and caption preferences are read by the platform layer and delivered to scripts as
-  main-thread notifications at a frame boundary. * **Localization.** The Localization package
-  is unitas's own implementation of its public API ([Independent
-  implementation](architecture.md#independent-implementation)). Below scripting the engine
-  supplies culture and plural data for every locale on every target, including ahead-of-time
-  and browser targets; shaping and bidirectional layout through the text subsystem; and
-  asynchronous loading of cooked tables and assets. A locale change is a main-thread event;
-  layout re-runs only for text whose content changed. Editor locale preview runs in the worker
-  and writes no project content, and localization diagnostics (overflow, clipping, missing
-  glyphs, missing shaping data) come from the text subsystem's own layout results.
+  main-thread notifications at a frame boundary.
+* **Localization.** The Localization package is unitas's own implementation of its public API
+  ([Independent implementation](architecture.md#independent-implementation)). Below scripting
+  the engine supplies culture and plural data for every locale on every target, including
+  ahead-of-time and browser targets; shaping and bidirectional layout through the text
+  subsystem; and asynchronous loading of cooked tables and assets. A locale change is a
+  main-thread event; layout re-runs only for text whose content changed. Editor locale preview
+  runs in the worker and writes no project content, and localization diagnostics (overflow,
+  clipping, missing glyphs, missing shaping data) come from the text subsystem's own layout
+  results.
 * **Storage roots.** Project assets, project settings, editor preferences, player preferences,
   and game data each live in a distinct storage root with one owner; clearing one root never
   touches another. Each isolated play session has its own player-preference and

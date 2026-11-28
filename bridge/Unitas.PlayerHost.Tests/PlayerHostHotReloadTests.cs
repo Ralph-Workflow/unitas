@@ -56,7 +56,7 @@ namespace Unitas.PlayerHost.Tests
             string tempRoot = Path.Combine(
                 Path.GetTempPath(),
                 "unitas-playerhost-hotreload-" + Guid.NewGuid().ToString("N", CultureInfo.InvariantCulture));
-            string bundleRoot = Path.Combine(tempRoot, "roll-a-ball");
+            string bundleRoot = Path.Combine(tempRoot, "marble-rush");
             string managedDir = Path.Combine(bundleRoot, "Managed");
             string persistRoot = Path.Combine(tempRoot, "persist");
             Directory.CreateDirectory(managedDir);
@@ -207,7 +207,7 @@ namespace Unitas.PlayerHost.Tests
         {
             ulong runtimeHandle = RuntimeInterop.unitas_runtime_new();
             Check.That("native runtime handle created", runtimeHandle != 0UL);
-            string scenePath = Path.Combine(bundleRoot, "Assets", "Scenes", "RollABall.unity");
+            string scenePath = Path.Combine(bundleRoot, "Assets", "Scenes", "MarbleRush.unity");
             IntPtr bundlePtr = Marshal.StringToCoTaskMemUTF8(bundleRoot);
             IntPtr persistPtr = Marshal.StringToCoTaskMemUTF8(persistRoot);
             IntPtr scenePtr = Marshal.StringToCoTaskMemUTF8(scenePath);

@@ -16,8 +16,8 @@ use unitas_build::{
     DEFAULT_DEVICE_VERIFY_HEIGHT, DEFAULT_DEVICE_VERIFY_WIDTH,
 };
 use unitas_build::{
-    launch_bundle, load_and_validate_bundle_manifest, roll_a_ball_build_configuration,
-    sample::stage_roll_a_ball_bundle_for_host_with_script_debugging, WindowedLaunchOptions,
+    launch_bundle, load_and_validate_bundle_manifest, marble_rush_build_configuration,
+    sample::stage_marble_rush_bundle_for_host_with_script_debugging, WindowedLaunchOptions,
 };
 
 const USAGE: &str = "usage: unitas-player [<bundle-dir> | --sample] [--windowed] [--frames <N>] [--dt <seconds>] [--verify-device <ref.bmp>] [--capture-reference <out.bmp>] [--control-stdio] [--package-sample <dir>] [--debug]";
@@ -192,7 +192,7 @@ fn parse_dimension(raw: &str, flag: &str) -> Result<u32, String> {
 }
 
 fn run_package_sample(output_dir: &Path, script_debugging: bool) -> ExitCode {
-    let config = match roll_a_ball_build_configuration(None) {
+    let config = match marble_rush_build_configuration(None) {
         Ok(config) => config.with_script_debugging(script_debugging),
         Err(error) => {
             eprintln!("unitas-player packaging failed: {error}");
@@ -286,7 +286,7 @@ fn resolve_bundle_dir(cli: &CliOptions) -> Result<(PathBuf, Option<PathBuf>), Ex
     let mut temp_sample_dir: Option<PathBuf> = None;
     let resolved_bundle_dir = match cli.bundle_dir {
         Some(ref dir) if cli.sample && !dir.exists() => {
-            if let Err(error) = stage_roll_a_ball_bundle_for_host_with_script_debugging(
+            if let Err(error) = stage_marble_rush_bundle_for_host_with_script_debugging(
                 dir,
                 None,
                 cli.script_debugging,
@@ -302,7 +302,7 @@ fn resolve_bundle_dir(cli: &CliOptions) -> Result<(PathBuf, Option<PathBuf>), Ex
                 "unitas_player_sample_bundle_{}",
                 std::process::id()
             ));
-            if let Err(error) = stage_roll_a_ball_bundle_for_host_with_script_debugging(
+            if let Err(error) = stage_marble_rush_bundle_for_host_with_script_debugging(
                 &temp_dir,
                 None,
                 cli.script_debugging,
@@ -512,7 +512,7 @@ fn resolve_control_scene(cli: &CliOptions) -> Result<(PathBuf, PathBuf, Option<P
                 "unitas_player_control_bundle_{}",
                 std::process::id()
             ));
-            let staged = stage_roll_a_ball_bundle_for_host_with_script_debugging(
+            let staged = stage_marble_rush_bundle_for_host_with_script_debugging(
                 &staged_dir,
                 None,
                 cli.script_debugging,

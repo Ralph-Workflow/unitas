@@ -8,8 +8,8 @@ namespace Unitas.Editor.Tests
 {
     public static class WorkspaceStateTests
     {
-        private const string SampleSceneRelative = "samples/roll-a-ball/Assets/Scenes/RollABall.unity";
-        private const string ProjectSceneRelative = "Assets/Scenes/RollABall.unity";
+        private const string SampleSceneRelative = "samples/marble-rush/Assets/Scenes/MarbleRush.unity";
+        private const string ProjectSceneRelative = "Assets/Scenes/MarbleRush.unity";
         private const long PickupFileId = 1000000091L;
         private const long ArenaFileId = 1000000021L;
 
@@ -36,12 +36,12 @@ namespace Unitas.Editor.Tests
 
                 state.InitializeProject(host, session, project);
 
-                Check.Equal("workspace-init: active scene path is RollABall.unity", ProjectSceneRelative, state.ActiveScenePath);
+                Check.Equal("workspace-init: active scene path is MarbleRush.unity", ProjectSceneRelative, state.ActiveScenePath);
                 Check.That("workspace-init: hierarchy entries populated from scene.hierarchy", state.HierarchyEntries.Count > 5);
                 Check.That(
                     "workspace-init: first object is selected by default",
                     !string.IsNullOrWhiteSpace(state.SelectedObjectId) && !string.IsNullOrWhiteSpace(state.SelectedObjectName));
-                Check.That("workspace-init: title text names active scene", state.TitleText.Contains("RollABall.unity", StringComparison.Ordinal));
+                Check.That("workspace-init: title text names active scene", state.TitleText.Contains("MarbleRush.unity", StringComparison.Ordinal));
                 Check.That(
                     "workspace-init: hierarchy rows capped at 12 and first row has selected marker",
                     state.HierarchyRows.Count <= WorkspaceState.MaxHierarchyRows
@@ -460,7 +460,7 @@ namespace Unitas.Editor.Tests
                 "unitas-workspace-test-" + label + "-" + Guid.NewGuid().ToString("N"));
             string scenes = Path.Combine(root, "Assets", "Scenes");
             Directory.CreateDirectory(scenes);
-            File.Copy(ResolveSampleScenePath(), Path.Combine(scenes, "RollABall.unity"));
+            File.Copy(ResolveSampleScenePath(), Path.Combine(scenes, "MarbleRush.unity"));
             return root;
         }
 

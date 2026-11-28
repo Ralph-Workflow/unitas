@@ -232,19 +232,20 @@ Matrix rules:
   that resolves an earlier line of a listed package (for example URP 10.x or
   12.x) has that package's serialized content migrated as SER-005 defines and is
   assessed against the listed line; behavior of the earlier line that differs
-  from the listed line is not matched. * A package, or a package version, that
-  the matrix does not list is Unknown until it is assessed. A Unity-published
-  package outside the matrix is reported Unknown and its published code is never
-  compiled in its place. Preview, experimental, and prerelease versions are
-  Unknown unless the matrix lists them.
-* A package takes the tier of its owning catalog feature. * A Supported package
-  is one whose unitas implementation provides the documented public behavior of
-  the listed version, subject to the limitations its owning specification
-  states; for a package whose owning feature is in the Familiar or Native tier,
-  the owning specification defines the behavior where it says so. Behavior that
-  the owning specification neither names nor excludes is Unknown until assessed
-  and is reported as such. A Partially supported package names its excluded
-  behavior in the matrix.
+  from the listed line is not matched.
+* A package, or a package version, that the matrix does not list is Unknown
+  until it is assessed. A Unity-published package outside the matrix is reported
+  Unknown and its published code is never compiled in its place. Preview,
+  experimental, and prerelease versions are Unknown unless the matrix lists
+  them.
+* A package takes the tier of its owning catalog feature.
+* A Supported package is one whose unitas implementation provides the documented
+  public behavior of the listed version, subject to the limitations its owning
+  specification states; for a package whose owning feature is in the Familiar or
+  Native tier, the owning specification defines the behavior where it says so.
+  Behavior that the owning specification neither names nor excludes is Unknown
+  until assessed and is reported as such. A Partially supported package names
+  its excluded behavior in the matrix.
 * Packages that a listed version requires as dependencies are covered to the
   extent the listed package's behavior depends on them. Project code that uses a
   dependency's own API directly is assessed on its own and is Unknown until

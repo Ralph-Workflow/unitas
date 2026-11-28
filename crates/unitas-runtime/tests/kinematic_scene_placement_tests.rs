@@ -5,7 +5,7 @@ use unitas_core::EntityId;
 use unitas_physics::BodyRole;
 use unitas_runtime::Runtime;
 
-const SAMPLE_SCENE_RELATIVE: &str = "../../samples/roll-a-ball/Assets/Scenes/PhysicsLab.unity";
+const SAMPLE_SCENE_RELATIVE: &str = "../../samples/marble-rush/Assets/Scenes/PhysicsLab.unity";
 const KINEMATIC_NAME: &str = "KinematicPlatform";
 const DYNAMIC_NAME: &str = "DynamicMarble";
 const SAMPLE_KINEMATIC_NAME: &str = "RotatingPlatform";

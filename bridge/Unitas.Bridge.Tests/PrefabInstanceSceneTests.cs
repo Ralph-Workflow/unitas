@@ -40,7 +40,7 @@ namespace Unitas.Bridge.Tests
 
     public static class PrefabInstanceSceneTests
     {
-        internal const string SampleSceneRelativePath = "samples/roll-a-ball/Assets/Scenes/RollABall.unity";
+        internal const string SampleSceneRelativePath = "samples/marble-rush/Assets/Scenes/MarbleRush.unity";
         internal const string PickupScriptGuid = "b2c3d4e5f60718293a4b5c6d7e8f90a1";
 
         public static void Run()

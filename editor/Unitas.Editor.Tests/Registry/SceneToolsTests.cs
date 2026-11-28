@@ -8,8 +8,8 @@ namespace Unitas.Editor.Tests
 {
     public static class SceneToolsTests
     {
-        private const string SampleScene = "samples/roll-a-ball/Assets/Scenes/RollABall.unity";
-        private const string ScenePath = "Assets/Scenes/RollABall.unity";
+        private const string SampleScene = "samples/marble-rush/Assets/Scenes/MarbleRush.unity";
+        private const string ScenePath = "Assets/Scenes/MarbleRush.unity";
         private const long PickupFileId = 1000000091;
         private const long PickupTransformFileId = 1000000092;
         private const long ArenaFileId = 1000000021;
@@ -203,7 +203,7 @@ namespace Unitas.Editor.Tests
                     NameOf(afterRedo, PickupFileId));
 
                 host.CallTool(session, "scene.save", new JsonObject());
-                string saved = File.ReadAllText(Path.Combine(project, "Assets", "Scenes", "RollABall.unity"));
+                string saved = File.ReadAllText(Path.Combine(project, "Assets", "Scenes", "MarbleRush.unity"));
                 Check.That(
                     "scene: the saved scene holds the new value",
                     saved.Contains("m_Name: Pickup_1 Renamed", StringComparison.Ordinal));
@@ -774,7 +774,7 @@ namespace Unitas.Editor.Tests
                 "unitas-u2b-" + label + "-" + Guid.NewGuid().ToString("N"));
             string scenes = Path.Combine(root, "Assets", "Scenes");
             Directory.CreateDirectory(scenes);
-            File.Copy(ResolveRepoPath(SampleScene), Path.Combine(scenes, "RollABall.unity"));
+            File.Copy(ResolveRepoPath(SampleScene), Path.Combine(scenes, "MarbleRush.unity"));
             return root;
         }
 
@@ -791,7 +791,7 @@ namespace Unitas.Editor.Tests
             DirectoryInfo? directory = new DirectoryInfo(Directory.GetCurrentDirectory());
             for (int depth = 0; depth < 12 && directory != null; depth++)
             {
-                if (Directory.Exists(Path.Combine(directory.FullName, "samples", "roll-a-ball")))
+                if (Directory.Exists(Path.Combine(directory.FullName, "samples", "marble-rush")))
                 {
                     return directory.FullName;
                 }

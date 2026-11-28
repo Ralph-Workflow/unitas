@@ -581,7 +581,7 @@ mod tests {
 
     fn sample_scene() -> PathBuf {
         PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("../../samples/roll-a-ball/Assets/Scenes/RollABall.unity")
+            .join("../../samples/marble-rush/Assets/Scenes/MarbleRush.unity")
     }
 
     fn session(random_seed: u64) -> Result<ControlSession, String> {

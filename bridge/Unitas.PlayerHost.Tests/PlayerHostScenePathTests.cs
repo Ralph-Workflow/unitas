@@ -12,11 +12,11 @@ namespace Unitas.PlayerHost.Tests
         public static void Run()
         {
             string repoRoot = PlayerHostBootTests.FindRepoRoot();
-            string sampleRoot = Path.Combine(repoRoot, "samples", "roll-a-ball");
+            string sampleRoot = Path.Combine(repoRoot, "samples", "marble-rush");
             string tempRoot = Path.Combine(
                 Path.GetTempPath(),
                 "unitas-playerhost-scene-" + Guid.NewGuid().ToString("N"));
-            string bundleRoot = Path.Combine(tempRoot, "roll-a-ball");
+            string bundleRoot = Path.Combine(tempRoot, "marble-rush");
             string managedDir = Path.Combine(bundleRoot, "Managed");
             Directory.CreateDirectory(managedDir);
             try

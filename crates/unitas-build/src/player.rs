@@ -39,7 +39,7 @@ use crate::report::{
     DESKTOP_PACKAGE_STATE_PACKAGED, STARTUP_BASIS,
 };
 #[cfg(feature = "device")]
-use crate::sample::stage_roll_a_ball_bundle;
+use crate::sample::stage_marble_rush_bundle;
 use crate::targets::{BuildTarget, TargetOs};
 use crate::toolchain::{probe_target_availability, target_availability_report, TargetAvailability};
 
@@ -839,7 +839,7 @@ pub fn capture_sample_reference_bmp(
 ) -> Result<Image, PlayerStartupError> {
     let temp_bundle_dir =
         std::env::temp_dir().join(format!("unitas_sample_ref_capture_{}", std::process::id()));
-    let staged = stage_roll_a_ball_bundle(&temp_bundle_dir).map_err(|source| {
+    let staged = stage_marble_rush_bundle(&temp_bundle_dir).map_err(|source| {
         PlayerStartupError::ManifestLoad {
             bundle_dir: temp_bundle_dir.clone(),
             source,
@@ -920,7 +920,7 @@ pub fn run_device_verification(
         "unitas_device_verify_bundle_{}",
         std::process::id()
     ));
-    let staged = stage_roll_a_ball_bundle(&temp_bundle_dir).map_err(|source| {
+    let staged = stage_marble_rush_bundle(&temp_bundle_dir).map_err(|source| {
         PlayerStartupError::ManifestLoad {
             bundle_dir: temp_bundle_dir.clone(),
             source,

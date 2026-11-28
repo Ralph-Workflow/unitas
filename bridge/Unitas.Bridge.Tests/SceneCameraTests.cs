@@ -9,7 +9,7 @@ namespace Unitas.Bridge.Tests
 {
     public static class SceneCameraTests
     {
-        private const string SceneRelativePath = "samples/roll-a-ball/Assets/Scenes/RollABall.unity";
+        private const string SceneRelativePath = "samples/marble-rush/Assets/Scenes/MarbleRush.unity";
         private const string CameraName = "Main Camera";
         private const int CaptureSize = 64;
 

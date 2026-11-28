@@ -1,0 +1,68 @@
+{
+  "name": "bonus_pickup_acceptance",
+  "steps": [
+    {
+      "load_scene": {
+        "path": "Assets/Scenes/MarbleRush.unity"
+      }
+    },
+    {
+      "tick": {
+        "frames": 2,
+        "delta_seconds": 0.016666666666666666
+      }
+    },
+    {
+      "inject_key": {
+        "key": "S",
+        "pressed": true
+      }
+    },
+    {
+      "tick": {
+        "frames": 30,
+        "delta_seconds": 0.016666666666666666
+      }
+    },
+    {
+      "inject_key": {
+        "key": "S",
+        "pressed": false
+      }
+    },
+    {
+      "tick": {
+        "frames": 10,
+        "delta_seconds": 0.016666666666666666
+      }
+    }
+  ],
+  "checkpoints": [
+    {
+      "id": "bonus_pickup_position",
+      "after_step": 2,
+      "kind": "transform_position",
+      "object": "BonusPickup_1",
+      "expected": [
+        0,
+        0.75,
+        -2.25
+      ],
+      "tolerance": 0.05
+    },
+    {
+      "id": "bonus_pickup_collected",
+      "after_step": 6,
+      "kind": "log",
+      "severity": "log",
+      "contains": "Bonus pickup collected +5 total 5"
+    },
+    {
+      "id": "bonus_pickup_ui_feedback",
+      "after_step": 6,
+      "kind": "log",
+      "severity": "log",
+      "contains": "UI feedback: Bonus +5!"
+    }
+  ]
+}

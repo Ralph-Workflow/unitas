@@ -43,7 +43,7 @@ fn settings_dir() -> PathBuf {
 }
 
 fn sample_root() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../samples/roll-a-ball")
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../samples/marble-rush")
 }
 
 #[test]
@@ -1213,7 +1213,7 @@ fn quality_settings_handles_missing_file_missing_document_and_invalid_level_inde
 fn sample_quality_settings_asset_is_unity_2022_3_on_disk_and_reports_per_target_levels(
 ) -> TestResult {
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../samples/roll-a-ball/ProjectSettings/QualitySettings.asset");
+        .join("../../samples/marble-rush/ProjectSettings/QualitySettings.asset");
     let text = fs::read_to_string(&path)?;
     let parsed = unity_yaml::parse(&text)?;
     assert_eq!(

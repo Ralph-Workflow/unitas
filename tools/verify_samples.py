@@ -17,7 +17,7 @@ if TYPE_CHECKING:
     from collections.abc import Sequence
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-SAMPLE_ROOT = REPO_ROOT / "samples" / "roll-a-ball"
+SAMPLE_ROOT = REPO_ROOT / "samples" / "marble-rush"
 SCENARIO_DIR = SAMPLE_ROOT / "Scenarios"
 EDITOR_CLI = (
     REPO_ROOT / "editor" / "Unitas.Editor" / "bin" / "Release" / "net8.0" / "Unitas.Editor.dll"

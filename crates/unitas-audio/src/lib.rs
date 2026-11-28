@@ -2780,7 +2780,7 @@ mod tests {
     #[test]
     fn shipped_collect_chime_asset_decodes_and_mixes_audible_samples() -> Result<(), AudioError> {
         let path = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../samples/roll-a-ball/Assets/Audio/PickupChime.wav");
+            .join("../../samples/marble-rush/Assets/Audio/PickupChime.wav");
         let bytes = std::fs::read(&path).map_err(|err| AudioError::Io(err.to_string()))?;
         let clip = parse_wav(&bytes)?;
         assert!(clip.frame_count() > 0);

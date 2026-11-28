@@ -10,7 +10,7 @@ namespace Unitas.Editor.Tests
 {
     public static class SceneTests
     {
-        private const string RollABallScene = "samples/roll-a-ball/Assets/Scenes/RollABall.unity";
+        private const string MarbleRushScene = "samples/marble-rush/Assets/Scenes/MarbleRush.unity";
 
         public static void Run()
         {
@@ -44,8 +44,8 @@ namespace Unitas.Editor.Tests
 
         private static void SetPropertyInverseRestoresBytes()
         {
-            byte[] original = File.ReadAllBytes(ResolveRepoPath(RollABallScene));
-            SceneDocument document = SceneDocument.Open(ResolveRepoPath(RollABallScene));
+            byte[] original = File.ReadAllBytes(ResolveRepoPath(MarbleRushScene));
+            SceneDocument document = SceneDocument.Open(ResolveRepoPath(MarbleRushScene));
             SceneObject pickup = FindObject(document, "Pickup_1");
             long transformFileId = pickup.ComponentFileIds[0];
 
@@ -66,8 +66,8 @@ namespace Unitas.Editor.Tests
 
         private static void CreateThenInverseRestoresBytes()
         {
-            byte[] original = File.ReadAllBytes(ResolveRepoPath(RollABallScene));
-            SceneDocument document = SceneDocument.Open(ResolveRepoPath(RollABallScene));
+            byte[] original = File.ReadAllBytes(ResolveRepoPath(MarbleRushScene));
+            SceneDocument document = SceneDocument.Open(ResolveRepoPath(MarbleRushScene));
             int before = document.Objects.Count;
 
             SceneOp op = SceneOp.CreateGameObject("Unit Test Cube", 0);
@@ -91,8 +91,8 @@ namespace Unitas.Editor.Tests
 
         private static void DestroyThenInverseRestoresBytes()
         {
-            byte[] original = File.ReadAllBytes(ResolveRepoPath(RollABallScene));
-            SceneDocument document = SceneDocument.Open(ResolveRepoPath(RollABallScene));
+            byte[] original = File.ReadAllBytes(ResolveRepoPath(MarbleRushScene));
+            SceneDocument document = SceneDocument.Open(ResolveRepoPath(MarbleRushScene));
             int before = document.Objects.Count;
 
             SceneOp op = SceneOp.DestroyGameObject(1000000091);
@@ -116,8 +116,8 @@ namespace Unitas.Editor.Tests
 
         private static void ReparentThenInverseRestoresBytes()
         {
-            byte[] original = File.ReadAllBytes(ResolveRepoPath(RollABallScene));
-            SceneDocument document = SceneDocument.Open(ResolveRepoPath(RollABallScene));
+            byte[] original = File.ReadAllBytes(ResolveRepoPath(MarbleRushScene));
+            SceneDocument document = SceneDocument.Open(ResolveRepoPath(MarbleRushScene));
 
             SceneOp op = SceneOp.Reparent(1000000091, 1000000021);
             SceneOp inverse = document.Apply(op);
@@ -135,8 +135,8 @@ namespace Unitas.Editor.Tests
 
         private static void ReparentRefusesACycle()
         {
-            SceneDocument document = SceneDocument.Open(ResolveRepoPath(RollABallScene));
-            byte[] original = File.ReadAllBytes(ResolveRepoPath(RollABallScene));
+            SceneDocument document = SceneDocument.Open(ResolveRepoPath(MarbleRushScene));
+            byte[] original = File.ReadAllBytes(ResolveRepoPath(MarbleRushScene));
 
             bool cycleRefused = false;
             try
@@ -170,8 +170,8 @@ namespace Unitas.Editor.Tests
 
         private static void SetActiveThenInverseRestoresBytes()
         {
-            byte[] original = File.ReadAllBytes(ResolveRepoPath(RollABallScene));
-            SceneDocument document = SceneDocument.Open(ResolveRepoPath(RollABallScene));
+            byte[] original = File.ReadAllBytes(ResolveRepoPath(MarbleRushScene));
+            SceneDocument document = SceneDocument.Open(ResolveRepoPath(MarbleRushScene));
 
             SceneOp op = SceneOp.SetActive(1000000091, false);
             SceneOp inverse = document.Apply(op);
@@ -188,8 +188,8 @@ namespace Unitas.Editor.Tests
 
         private static void DuplicateThenInverseRestoresBytes()
         {
-            byte[] original = File.ReadAllBytes(ResolveRepoPath(RollABallScene));
-            SceneDocument document = SceneDocument.Open(ResolveRepoPath(RollABallScene));
+            byte[] original = File.ReadAllBytes(ResolveRepoPath(MarbleRushScene));
+            SceneDocument document = SceneDocument.Open(ResolveRepoPath(MarbleRushScene));
             int before = document.Objects.Count;
 
             SceneOp op = SceneOp.DuplicateGameObject(1000000091, "Pickup_1 Copy", -1);
@@ -215,7 +215,7 @@ namespace Unitas.Editor.Tests
 
         private static void InspectReportsTheComponentsAndProperties()
         {
-            SceneDocument document = SceneDocument.Open(ResolveRepoPath(RollABallScene));
+            SceneDocument document = SceneDocument.Open(ResolveRepoPath(MarbleRushScene));
             SceneInspection inspection = document.Inspect(1000000091);
 
             Check.Equal("scene: the inspection names the object", "Pickup_1", inspection.Name);
@@ -268,12 +268,12 @@ namespace Unitas.Editor.Tests
             bool raised = false;
             try
             {
-                SceneDocument.Parse("samples/roll-a-ball/Broken.unity", text);
+                SceneDocument.Parse("samples/marble-rush/Broken.unity", text);
             }
             catch (SceneParseException error)
             {
                 raised = true;
-                Check.Equal("scene: the parse error names the file", "samples/roll-a-ball/Broken.unity", error.FilePath);
+                Check.Equal("scene: the parse error names the file", "samples/marble-rush/Broken.unity", error.FilePath);
                 Check.Equal("scene: the parse error names the line", 6, error.Line);
                 Check.That("scene: the parse error gives a reason", error.Reason.Length > 0);
             }
@@ -287,7 +287,7 @@ namespace Unitas.Editor.Tests
 
         private static void HierarchyMatchesTheSampleScene()
         {
-            SceneDocument document = SceneDocument.Open(ResolveRepoPath(RollABallScene));
+            SceneDocument document = SceneDocument.Open(ResolveRepoPath(MarbleRushScene));
 
             SceneObject arena = document.Find(1000000021);
             Check.Equal("scene: the arena keeps its name", "Arena", arena.Name);
@@ -374,7 +374,7 @@ namespace Unitas.Editor.Tests
             DirectoryInfo? directory = new DirectoryInfo(Directory.GetCurrentDirectory());
             for (int depth = 0; depth < 12 && directory != null; depth++)
             {
-                if (Directory.Exists(Path.Combine(directory.FullName, "samples", "roll-a-ball")))
+                if (Directory.Exists(Path.Combine(directory.FullName, "samples", "marble-rush")))
                 {
                     return directory.FullName;
                 }

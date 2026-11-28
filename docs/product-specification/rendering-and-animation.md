@@ -593,13 +593,13 @@ The following ShaderLab and shader-program forms are translated and Supported:
   has no compute stage, they follow the compute rule of the Web target in [Web
   target](web-target.md#render-pipelines-and-features-on-the-web). A shader
   whose target level exceeds the device's capability falls through to the next
-  subshader or its `Fallback`. * Built-in includes (`UnityCG.cginc`,
-  `Lighting.cginc`, `AutoLight.cginc`, `UnityShaderVariables.cginc`, and the
-  other Built-in shader includes), the URP 14.x and HDRP 14.x ShaderLibrary, and
-  the Scriptable Render Pipeline Core 14.x shader includes. unitas provides its
-  own include files under those paths, written independently, with the
-  documented macros, functions, and variables that project shaders use; Unity's
-  include files are never used.
+  subshader or its `Fallback`.
+* Built-in includes (`UnityCG.cginc`, `Lighting.cginc`, `AutoLight.cginc`,
+  `UnityShaderVariables.cginc`, and the other Built-in shader includes), the URP
+  14.x and HDRP 14.x ShaderLibrary, and the Scriptable Render Pipeline Core 14.x
+  shader includes. unitas provides its own include files under those paths,
+  written independently, with the documented macros, functions, and variables
+  that project shaders use; Unity's include files are never used.
 * Ray tracing shaders (`.raytrace` assets and ray tracing passes in
   ShaderLab) on devices with ray tracing hardware. On a device without it,
   `SystemInfo.supportsRayTracing` returns false and ray tracing work is

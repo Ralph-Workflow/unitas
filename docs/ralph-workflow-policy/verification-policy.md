@@ -324,7 +324,7 @@ The named non-default profiles, each with the five required fields:
   assertions and control-stdio replay, and lane exit status; fails hard when
   run; last run 2026-11-26, recorded in this tree by the re-approved
   directional-shadow S8 reference baselines under
-  `samples/roll-a-ball/References/` and the lane exit status of that run;
+  `samples/marble-rush/References/` and the lane exit status of that run;
   staleness horizon one milestone.
 - `make verify-benchmark` — owner: editor and engine proof; trigger: changes
   to the editor's MCP tool surface, the agent-authoring benchmark, or the
@@ -351,7 +351,7 @@ The named non-default profiles, each with the five required fields:
   proven; the window sustained 34.2 FPS under shared-host contention and 38.9 FPS
   on an idle run against the 30.0 FPS interactive floor (`MIN_SUSTAINED_FPS`);
   the durable source for the shadow evidence is also the re-approved
-  S8 reference set under `samples/roll-a-ball/References/`; staleness horizon
+  S8 reference set under `samples/marble-rush/References/`; staleness horizon
   one milestone.
 - `make verify-perf` — owner: content and simulation (lane runner); trigger:
   every milestone touching import, scene load, physics, animation, scripting,
@@ -370,7 +370,7 @@ The named non-default profiles, each with the five required fields:
   512-frame buffer at 48 kHz with eight active stereo voices against the
   10.667 ms buffer period ceiling), and the five editor and MCP
   measurements `editor_startup` (editor process start to a responsive MCP
-  state), `editor_project_open` (opening `samples/roll-a-ball` through the
+  state), `editor_project_open` (opening `samples/marble-rush` through the
   editor's MCP surface), `editor_hierarchy_search_100k` (the hierarchy query at
   the 100,000-GameObject scale floor), `editor_property_edit_undo` (the
   property edit and its undo), and `editor_mcp_round_trip` (the MCP round
@@ -389,8 +389,8 @@ The named non-default profiles, each with the five required fields:
 
 | Profile | Last run | Durable source |
 |---|---|---|
-| `make verify-samples` | 2026-11-26 | the re-approved directional-shadow S8 reference baselines under `samples/roll-a-ball/References/` |
-| `make verify-benchmark` | 2026-11-26 | this gate-lane review entry and the benchmark inputs under `samples/roll-a-ball/Benchmarks/agent-authoring/bonus-pickup/` |
+| `make verify-samples` | 2026-11-26 | the re-approved directional-shadow S8 reference baselines under `samples/marble-rush/References/` |
+| `make verify-benchmark` | 2026-11-26 | this gate-lane review entry and the benchmark inputs under `samples/marble-rush/Benchmarks/agent-authoring/bonus-pickup/` |
 | `make verify-device` | 2026-11-26 | this gate-lane review entry; `tools/approved_gpu_reference.bmp` was re-approved on 2026-11-26 against the real shadowed device frame: the staged player's bundle now carries the project's `ProjectSettings/` directory next to `Assets/`, so the runtime resolves the `Standalone` quality level and the device frame carries the directional shadow instead of the shadows-off fallback; the approved file is the exact capture the lane produces today (two consecutive captures differ in 0 of 76 800 pixels; the fresh capture matches the approved file with max_diff=0), and against the prior pre-shadow baseline the shadowed capture differs in 3 834 of 76 800 pixels (4.99 %); the lane also asserts that the presented window frame carries the scene's uGUI canvas and the project shadows |
 | `make verify-perf` | 2026-11-26 | this gate-lane review entry |
 | `make verify-unsafe` | 2026-11-26 | this gate-lane review entry; the zone-test stage passed and the miri stage reported that the miri toolchain is not installed |

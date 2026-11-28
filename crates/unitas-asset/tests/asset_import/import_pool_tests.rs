@@ -34,7 +34,7 @@ fn temp_dir(name: &str) -> std::io::Result<PathBuf> {
 }
 
 fn sample_project_root() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../samples/roll-a-ball")
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../samples/marble-rush")
 }
 
 fn generated_candidate(index: usize) -> ImportCandidate {

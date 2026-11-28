@@ -66,7 +66,7 @@ Material:
     - _EmissionColor: {r: 0.9, g: 0.8, b: 0.7, a: 1}
 ";
 
-const SAMPLE_ROOT: &str = "../../samples/roll-a-ball";
+const SAMPLE_ROOT: &str = "../../samples/marble-rush";
 const SAMPLE_PICKUP_MATERIAL: &str = "Assets/Materials/Pickup.mat";
 const SAMPLE_GOLD_MATERIAL: &str = "Assets/Materials/Gold.mat";
 const SAMPLE_PICKUP_TEXTURE_META: &str = "Assets/Textures/Pickup.png.meta";

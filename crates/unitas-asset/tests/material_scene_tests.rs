@@ -6,8 +6,8 @@ use unitas_asset::scene::assemble_scene_file_with_index;
 
 type TestResult = Result<(), Box<dyn Error>>;
 
-const SAMPLE_ROOT: &str = "../../samples/roll-a-ball";
-const SAMPLE_SCENE: &str = "Assets/Scenes/RollABall.unity";
+const SAMPLE_ROOT: &str = "../../samples/marble-rush";
+const SAMPLE_SCENE: &str = "Assets/Scenes/MarbleRush.unity";
 const SAMPLE_PICKUP_MATERIAL: &str = "Assets/Materials/Pickup.mat";
 const SAMPLE_PICKUP_TEXTURE: &str = "Assets/Textures/Pickup.png";
 const SAMPLE_PICKUP_NORMAL_TEXTURE: &str = "Assets/Textures/PickupNormal.png";

@@ -23,11 +23,11 @@ namespace Unitas.PlayerHost.Tests
         public static int Main()
         {
             string repoRoot = PlayerHostBootTests.FindRepoRoot();
-            string sampleRoot = Path.Combine(repoRoot, "samples", "roll-a-ball");
+            string sampleRoot = Path.Combine(repoRoot, "samples", "marble-rush");
             string tempRoot = Path.Combine(
                 Path.GetTempPath(),
                 "unitas-playerhost-shared-" + Guid.NewGuid().ToString("N"));
-            string bundleRoot = Path.Combine(tempRoot, "roll-a-ball");
+            string bundleRoot = Path.Combine(tempRoot, "marble-rush");
             string managedDir = Path.Combine(bundleRoot, "Managed");
             Directory.CreateDirectory(managedDir);
             try
@@ -169,11 +169,11 @@ namespace Unitas.PlayerHost.Tests
         public static void Run()
         {
             string repoRoot = FindRepoRoot();
-            string sampleRoot = Path.Combine(repoRoot, "samples", "roll-a-ball");
+            string sampleRoot = Path.Combine(repoRoot, "samples", "marble-rush");
             string tempRoot = Path.Combine(
                 Path.GetTempPath(),
                 "unitas-playerhost-" + Guid.NewGuid().ToString("N"));
-            string bundleRoot = Path.Combine(tempRoot, "roll-a-ball");
+            string bundleRoot = Path.Combine(tempRoot, "marble-rush");
             string managedDir = Path.Combine(bundleRoot, "Managed");
             Directory.CreateDirectory(managedDir);
             try
@@ -201,7 +201,7 @@ namespace Unitas.PlayerHost.Tests
 
                 IntPtr bundlePtr = Marshal.StringToCoTaskMemUTF8(bundleRoot);
                 IntPtr persistPtr = Marshal.StringToCoTaskMemUTF8(persistRoot);
-                string scenePath = Path.Combine(bundleRoot, "Assets", "Scenes", "RollABall.unity");
+                string scenePath = Path.Combine(bundleRoot, "Assets", "Scenes", "MarbleRush.unity");
                 IntPtr scenePtr = Marshal.StringToCoTaskMemUTF8(scenePath);
                 int initResult;
                 try
@@ -319,7 +319,7 @@ namespace Unitas.PlayerHost.Tests
             while (!string.IsNullOrEmpty(current))
             {
                 if (File.Exists(Path.Combine(current, "Makefile"))
-                    && Directory.Exists(Path.Combine(current, "samples", "roll-a-ball")))
+                    && Directory.Exists(Path.Combine(current, "samples", "marble-rush")))
                 {
                     return current;
                 }
@@ -379,7 +379,7 @@ namespace Unitas.PlayerHost.Tests
             {
                 ulong runtimeHandle = RuntimeInterop.unitas_runtime_new();
                 Check.That("collectible session native runtime handle created", runtimeHandle != 0UL);
-                string scenePath = Path.Combine(bundleRoot, "Assets", "Scenes", "RollABall.unity");
+                string scenePath = Path.Combine(bundleRoot, "Assets", "Scenes", "MarbleRush.unity");
                 IntPtr bundlePtr = Marshal.StringToCoTaskMemUTF8(bundleRoot);
                 IntPtr persistPtr = Marshal.StringToCoTaskMemUTF8(persistRoot);
                 IntPtr scenePtr = Marshal.StringToCoTaskMemUTF8(scenePath);

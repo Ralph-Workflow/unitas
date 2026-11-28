@@ -6,7 +6,7 @@ use unitas_build::bundle::{stage_bundle_for_host, PROJECT_SETTINGS_DIR_NAME};
 use unitas_build::config::{BuildConfiguration, BuildMode};
 use unitas_build::licensing::licensing_record;
 use unitas_build::package::package_windows_app;
-use unitas_build::sample::stage_roll_a_ball_bundle_for_host;
+use unitas_build::sample::stage_marble_rush_bundle_for_host;
 use unitas_build::targets::BuildTarget;
 use unitas_render::ShadowSettings;
 use unitas_runtime::presenter::{shadow_settings_for_runtime, DESKTOP_QUALITY_TARGET_GROUP};
@@ -35,7 +35,7 @@ fn fixture_scene(name: &str) -> PathBuf {
 #[test]
 fn bundled_player_carries_project_quality_settings() -> TestResult {
     let output_dir = test_output_dir("project_settings_bundle")?;
-    let staged = stage_roll_a_ball_bundle_for_host(&output_dir, None)?;
+    let staged = stage_marble_rush_bundle_for_host(&output_dir, None)?;
 
     let quality_asset = output_dir
         .join(PROJECT_SETTINGS_DIR_NAME)
@@ -70,7 +70,7 @@ fn bundled_player_carries_project_quality_settings() -> TestResult {
 #[test]
 fn packaged_player_carries_project_quality_settings() -> TestResult {
     let output_dir = test_output_dir("packaged_player_settings")?;
-    let staged = stage_roll_a_ball_bundle_for_host(&output_dir, None)?;
+    let staged = stage_marble_rush_bundle_for_host(&output_dir, None)?;
     let player_binary = output_dir.join("unitas-player-dummy");
     fs::write(&player_binary, b"unitas dummy player binary")?;
     let licensing = licensing_record(&staged.manifest.application_identifier);

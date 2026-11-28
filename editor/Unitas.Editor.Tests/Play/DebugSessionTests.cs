@@ -10,12 +10,12 @@ namespace Unitas.Editor.Tests.Play
     /// <summary>
     /// The end-to-end DIA-002 proof: the real MCP registry drives a real player
     /// worker, the worker serves a real debug adapter, and an agent breaks in the
-    /// real roll-a-ball sample, reads the stop, and lets the session run on.
+    /// real marble-rush sample, reads the stop, and lets the session run on.
     /// </summary>
     public static class DebugSessionTests
     {
         private const string SampleScriptRelativePath =
-            "samples/roll-a-ball/Assets/Scripts/PlayerController.cs";
+            "samples/marble-rush/Assets/Scripts/PlayerController.cs";
 
         // The instrumented build probes this statement of PlayerController.Update
         // on every frame, with moveX and moveZ in scope at the probe.

@@ -519,7 +519,7 @@ fn renderer_without_mesh_reports_diagnostic() -> Result<(), Box<dyn Error>> {
 
 fn sample_asset(relative: &str) -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../samples/roll-a-ball/Assets")
+        .join("../../samples/marble-rush/Assets")
         .join(relative)
 }
 
@@ -572,7 +572,7 @@ fn channel_difference(left: [u8; 3], right: [u8; 3]) -> i32 {
 #[test]
 fn scene_renderables_carry_the_authored_material_maps_and_floats() -> Result<(), Box<dyn Error>> {
     let mut runtime = Runtime::new()?;
-    runtime.load_scene(&sample_asset("Scenes/RollABall.unity"))?;
+    runtime.load_scene(&sample_asset("Scenes/MarbleRush.unity"))?;
     let (albedo_width, albedo_height) = png_size(&sample_asset("Textures/Pickup.png"))?;
     let (normal_width, normal_height) = png_size(&sample_asset("Textures/PickupNormal.png"))?;
     let material_text = std::fs::read_to_string(sample_asset("Materials/Pickup.mat"))?;
@@ -638,9 +638,9 @@ fn scene_renderables_carry_the_authored_material_maps_and_floats() -> Result<(),
 }
 
 #[test]
-fn roll_a_ball_capture_draws_the_pickup_with_its_material_maps() -> Result<(), Box<dyn Error>> {
+fn marble_rush_capture_draws_the_pickup_with_its_material_maps() -> Result<(), Box<dyn Error>> {
     let mut runtime = Runtime::new()?;
-    runtime.load_scene(&sample_asset("Scenes/RollABall.unity"))?;
+    runtime.load_scene(&sample_asset("Scenes/MarbleRush.unity"))?;
     let Ok(renderer) = Renderer::new() else {
         return Ok(());
     };

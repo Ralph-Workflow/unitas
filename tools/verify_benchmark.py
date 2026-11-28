@@ -35,14 +35,14 @@ EDITOR_DLL = (
 )
 SOLUTION = REPO_ROOT / "bridge" / "Unitas.sln"
 RUNTIME_LIBRARY = REPO_ROOT / "target" / "debug" / "libunitas_runtime.dylib"
-DATA_RELATIVE = Path("samples/roll-a-ball/Benchmarks/agent-authoring/bonus-pickup")
+DATA_RELATIVE = Path("samples/marble-rush/Benchmarks/agent-authoring/bonus-pickup")
 DATA_DIR = REPO_ROOT / DATA_RELATIVE
 WORKSPACE_DATA_DIR = WORKSPACE_ROOT / DATA_RELATIVE
 REQUEST_NAME = "REQUEST.md"
 PLAN_NAME = "agent-steps.json"
 ACCEPTANCE_NAME = "acceptance.scenario.json"
 EXPECTED_FILES_NAME = "expected-files.json"
-DATA_PREFIX = "samples/roll-a-ball/Benchmarks/"
+DATA_PREFIX = "samples/marble-rush/Benchmarks/"
 CREDENTIAL_VARIABLE = "UNITAS_PERSON_CREDENTIAL"
 BUILD_BUDGET_SECONDS = 900.0
 BENCHMARK_BUDGET_SECONDS = 900.0
@@ -250,7 +250,7 @@ def collect_asset_paths(node: object, paths: set[str]) -> None:
     if isinstance(node, str):
         normalized = normalize_path(node)
         if normalized.startswith("Assets/"):
-            normalized = "samples/roll-a-ball/" + normalized
+            normalized = "samples/marble-rush/" + normalized
         if ASSET_PATH_PATTERN.match(normalized) and not normalized.startswith(DATA_PREFIX):
             paths.add(normalized)
         return
@@ -518,8 +518,8 @@ def check_report_criteria(criteria: list[Criterion], report: dict[str, object]) 
 
 
 def rerun_sample_scenarios(env: dict[str, str]) -> tuple[bool, str]:
-    verify_samples.SAMPLE_ROOT = WORKSPACE_SAMPLES / "roll-a-ball"
-    verify_samples.SCENARIO_DIR = WORKSPACE_SAMPLES / "roll-a-ball" / "Scenarios"
+    verify_samples.SAMPLE_ROOT = WORKSPACE_SAMPLES / "marble-rush"
+    verify_samples.SCENARIO_DIR = WORKSPACE_SAMPLES / "marble-rush" / "Scenarios"
     verify_samples.REPORT_DIR = SCENARIO_REPORT_DIR
     if PERSIST_DIR.exists():
         shutil.rmtree(PERSIST_DIR)

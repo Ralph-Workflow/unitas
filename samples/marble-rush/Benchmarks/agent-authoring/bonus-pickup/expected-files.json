@@ -1,0 +1,17 @@
+{
+  "files": [
+    "samples/marble-rush/Assets/Audio/BonusChime.wav",
+    "samples/marble-rush/Assets/Audio/BonusChime.wav.meta",
+    "samples/marble-rush/Assets/Materials/BonusPickup.mat",
+    "samples/marble-rush/Assets/Materials/BonusPickup.mat.meta",
+    "samples/marble-rush/Assets/Scripts/BonusPickup.cs",
+    "samples/marble-rush/Assets/Scripts/BonusPickup.cs.meta",
+    "samples/marble-rush/Assets/Scripts/ScoreManager.cs",
+    "samples/marble-rush/Assets/Scripts/HudController.cs",
+    "samples/marble-rush/Assets/Scenes/MarbleRush.unity",
+    "samples/marble-rush/Assets/Tests/MarbleRush.Tests.asmdef",
+    "samples/marble-rush/Assets/Tests/MarbleRush.Tests.asmdef.meta",
+    "samples/marble-rush/Assets/Tests/BonusPickupTests.cs",
+    "samples/marble-rush/Assets/Tests/BonusPickupTests.cs.meta"
+  ]
+}

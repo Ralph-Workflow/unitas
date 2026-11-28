@@ -681,7 +681,7 @@ namespace Unitas.Editor.Tests
                     Scope.ReadProject),
                 () => ResourceContent.Untrusted(
                     "project:manifest",
-                    new JsonObject { ["name"] = "RollABall" }));
+                    new JsonObject { ["name"] = "MarbleRush" }));
             return host;
         }
 

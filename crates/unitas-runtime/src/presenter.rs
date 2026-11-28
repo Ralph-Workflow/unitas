@@ -1496,7 +1496,7 @@ mod tests {
         let Ok(mut runtime) = Runtime::new() else {
             return;
         };
-        let scene_path = Path::new("../../samples/roll-a-ball/Assets/Scenes/RollABall.unity");
+        let scene_path = Path::new("../../samples/marble-rush/Assets/Scenes/MarbleRush.unity");
         let Ok(_) = runtime.load_scene(scene_path) else {
             return;
         };
@@ -1635,11 +1635,11 @@ mod tests {
     }
 
     #[test]
-    fn quality_settings_loaded_from_roll_a_ball_scene() {
+    fn quality_settings_loaded_from_marble_rush_scene() {
         let Ok(mut runtime) = Runtime::new() else {
             return;
         };
-        let scene_path = Path::new("../../samples/roll-a-ball/Assets/Scenes/RollABall.unity");
+        let scene_path = Path::new("../../samples/marble-rush/Assets/Scenes/MarbleRush.unity");
         let load_result = runtime.load_scene(scene_path);
         assert!(load_result.is_ok());
         assert_eq!(runtime.quality_settings().levels.len(), 3);

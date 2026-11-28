@@ -2,11 +2,11 @@ use super::*;
 use unitas_audio::{AudioClip, AudioMixerGroup, SilenceReason};
 
 #[test]
-fn roll_a_ball_scene_binds_collect_chime_audio_source_clip()
+fn marble_rush_scene_binds_collect_chime_audio_source_clip()
 -> Result<(), Box<dyn std::error::Error>> {
     let mut runtime = Runtime::new()?;
     let scene_path = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../samples/roll-a-ball/Assets/Scenes/RollABall.unity");
+        .join("../../samples/marble-rush/Assets/Scenes/MarbleRush.unity");
     runtime.load_scene(&scene_path)?;
 
     let scene_text = std::fs::read_to_string(&scene_path)?;

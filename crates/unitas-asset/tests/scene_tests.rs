@@ -1759,7 +1759,7 @@ fn renderer_material_color_comes_from_the_project_material() -> TestResult {
 }
 
 fn sample_project_root() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../samples/roll-a-ball")
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../samples/marble-rush")
 }
 
 #[test]
