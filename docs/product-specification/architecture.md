@@ -80,6 +80,28 @@ no affiliation with, or endorsement by, their owner.
   ahead-of-time compilation is unitas's own toolchain on the hosted .NET
   runtime.
 
+### Unity-authored files inside a project
+
+Some Unity-authored files arrive inside a project's own folders: the resources
+a package imports into `Assets/` (for example TextMeshPro's Essential
+Resources), the samples a package copies into the project, and Unity's
+standard assets. unitas treats them by what they are:
+
+* **Code and shaders:** scripts, shaders, shader includes, and compute
+  shaders that Unity authored are never compiled or run. unitas recognizes
+  them by package origin, GUID, and name, and uses its own implementation
+  under the same names and GUIDs, so every reference to them resolves and
+  behaves as the project expects. The project's copy stays on disk untouched,
+  and the project compatibility report lists each substitution.
+* **Data:** fonts, textures, meshes, and other data assets are read as
+  ordinary project content when their license permits it, such as fonts under
+  the SIL Open Font License. Data whose license does not permit use outside
+  Unity is replaced by unitas's own equivalent under the same GUID, and the
+  substitution is reported.
+* **unitas's own copies:** when unitas imports such resources into a project,
+  for example on the first use of TextMeshPro, it writes its own files under
+  the GUIDs and paths the project expects.
+
 ### Unity-built content
 
 Content that Unity built, such as AssetBundles, Addressables content,
