@@ -57,6 +57,7 @@ fn callbacks() -> Callbacks {
         destroy: noop_handle,
         collision: record_collision,
         trigger: record_trigger,
+        ..Callbacks::default()
     }
 }
 

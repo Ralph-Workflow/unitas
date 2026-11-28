@@ -85,6 +85,7 @@ use crate::player_loop::{self, CustomSystemPosition};
 pub use crate::runtime::CharacterMoveRequest;
 use crate::runtime::{
     Callbacks, LoadSceneMode, QueryRecord, QueryRecord2D, RenderCameraParams, Runtime,
+    per_phase_script_dispatch,
 };
 
 const QUERY_RECORD_SIZE: usize = 64;
@@ -783,7 +784,24 @@ pub extern "C" fn unitas_runtime_set_callbacks(
             destroy,
             collision,
             trigger,
+            script_batch_dispatch: per_phase_script_dispatch,
         });
+        state.clear_error();
+        0
+    }) {
+        Ok(code) => code,
+        Err(code) => code,
+    }
+}
+}
+
+ffi_export! {
+pub extern "C" fn unitas_runtime_set_script_batch_dispatch(
+    runtime: u64,
+    cb: extern "C" fn(u32, *const u64, *const f64, u64),
+) -> i32 {
+    match with_runtime_state(runtime, |state| {
+        state.runtime.set_script_batch_dispatch(cb);
         state.clear_error();
         0
     }) {

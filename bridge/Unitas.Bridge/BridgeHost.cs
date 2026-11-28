@@ -178,6 +178,8 @@ namespace Unitas.Bridge
                 throw new InvalidOperationException("Failed to set callbacks on native runtime (error code " + result.ToString(CultureInfo.InvariantCulture) + "): " + error);
             }
 
+            RegisterScriptBatchDispatch();
+
             Physics.Provider = this;
             Physics2D.Provider = this;
             CharacterController.Provider = this;
@@ -493,6 +495,10 @@ namespace Unitas.Bridge
                 _runtimeBodySnapshots.Clear();
                 _runtimeCreatedEntities.Clear();
                 _lastCreatedScript = null;
+                if (ReferenceEquals(_scriptBatchDispatchHost, this))
+                {
+                    _scriptBatchDispatchHost = null;
+                }
                 _materializedSceneEntities.Clear();
                 DropMaterializedSceneCameras();
                 _sceneObjectNames.Clear();

@@ -17,6 +17,9 @@ enum NodeState {
 struct Node {
     entity: Entity,
     transform: Transform,
+    // Cached world transform; valid only while `world_dirty` is false.
+    world: Transform,
+    world_dirty: bool,
     version: u64,
     state: NodeState,
 }
@@ -149,10 +152,22 @@ impl SceneGraph {
         let entity_id = *id.borrow();
         let index = *self.index.get(&entity_id)?;
         self.record(index, ChangeKind::TransformChanged, None);
+        // Pessimistic checkout marking: the caller may rewrite parent/children
+        // fields too, so the whole subtree must be invalidated.
+        self.mark_subtree_dirty(index);
         Some(&mut self.nodes[index].transform)
     }
 
     pub fn world_transform(&self, id: impl Borrow<EntityId>) -> Option<Transform> {
+        let index = *self.index.get(id.borrow())?;
+        if !self.nodes[index].world_dirty {
+            // Steady state: invalidation always marks whole subtrees, so a clean
+            // node's cache is valid and needs no ancestor walk.
+            return Some(self.nodes[index].world.clone());
+        }
+
+        // Self-heal: recompose only the dirty suffix below the deepest clean
+        // ancestor. The result is identical to a full brute-force recomposition.
         let mut chain: Vec<usize> = Vec::new();
         let mut current = *id.borrow();
         loop {
@@ -167,21 +182,62 @@ impl SceneGraph {
             }
         }
 
-        let mut world: Option<Transform> = None;
-        for index in chain.into_iter().rev() {
+        let mut base: Option<Transform> = None;
+        let mut suffix: Vec<usize> = Vec::new();
+        for &index in chain.iter().rev() {
+            if suffix.is_empty() && !self.nodes[index].world_dirty {
+                base = Some(self.nodes[index].world.clone());
+            } else {
+                suffix.push(index);
+            }
+        }
+
+        let mut world = base;
+        for &index in &suffix {
             let local = &self.nodes[index].transform;
             world = Some(match world {
-                None => Transform {
-                    translation: local.translation,
-                    rotation: usable_rotation(local.rotation),
-                    scale: local.scale,
-                    parent: None,
-                    children: Vec::new(),
-                },
+                None => local_world(local),
                 Some(parent_world) => compose_world(&parent_world, local),
             });
         }
         world
+    }
+
+    /// Bulk fast path for the once-per-frame tick: recomputes every dirty
+    /// node's cached world, parents before children, and returns how many
+    /// nodes were recomputed. Clean subtrees are untouched.
+    pub fn recompute_dirty_transforms(&mut self) -> usize {
+        // Roots-first traversal: a node always appears after its parent, so a
+        // parent's cache is final before its children compose on top of it.
+        let mut order = Vec::with_capacity(self.index.len());
+        let mut stack: Vec<usize> = self
+            .nodes
+            .iter()
+            .enumerate()
+            .filter(|(_, node)| node.state == NodeState::Live && node.transform.parent.is_none())
+            .map(|(index, _)| index)
+            .collect();
+        while let Some(index) = stack.pop() {
+            order.push(index);
+            for &child in &self.nodes[index].transform.children {
+                if let Some(&child_index) = self.index.get(&child) {
+                    if self.nodes[child_index].state == NodeState::Live {
+                        stack.push(child_index);
+                    }
+                }
+            }
+        }
+
+        let mut recomputed = 0;
+        for &index in &order {
+            if !self.nodes[index].world_dirty {
+                continue;
+            }
+            self.nodes[index].world = self.world_from_parent(index);
+            self.nodes[index].world_dirty = false;
+            recomputed += 1;
+        }
+        recomputed
     }
 
     pub fn parent(&self, id: impl Borrow<EntityId>) -> Option<EntityId> {
@@ -248,6 +304,7 @@ impl SceneGraph {
         self.detach_from_parent(child);
         self.nodes[child_index].transform.parent = Some(parent);
         self.nodes[parent_index].transform.children.push(child);
+        self.mark_subtree_dirty(child_index);
         if previous_parent != Some(parent) {
             self.record(child_index, ChangeKind::Reparented, Some(parent));
         }
@@ -263,6 +320,7 @@ impl SceneGraph {
             return Ok(());
         }
         self.detach_from_parent(child);
+        self.mark_subtree_dirty(index);
         self.record(index, ChangeKind::Reparented, None);
         Ok(())
     }
@@ -308,6 +366,8 @@ impl SceneGraph {
                     name: String::new(),
                 },
                 transform: Transform::default(),
+                world: Transform::default(),
+                world_dirty: true,
                 version: 0,
                 state: NodeState::Vacant,
             };
@@ -364,6 +424,8 @@ impl SceneGraph {
         let node = Node {
             entity: Entity { id, name },
             transform: Transform::default(),
+            world: Transform::default(),
+            world_dirty: true,
             version: 0,
             state: NodeState::Live,
         };
@@ -406,6 +468,29 @@ impl SceneGraph {
         }
     }
 
+    fn mark_subtree_dirty(&mut self, root: usize) {
+        let mut stack = vec![root];
+        while let Some(index) = stack.pop() {
+            self.nodes[index].world_dirty = true;
+            for &child in &self.nodes[index].transform.children {
+                if let Some(&child_index) = self.index.get(&child) {
+                    stack.push(child_index);
+                }
+            }
+        }
+    }
+
+    fn world_from_parent(&self, index: usize) -> Transform {
+        match self.nodes[index]
+            .transform
+            .parent
+            .and_then(|parent| self.index.get(&parent).copied())
+        {
+            Some(parent_index) => compose_world(&self.nodes[parent_index].world, &self.nodes[index].transform),
+            None => local_world(&self.nodes[index].transform),
+        }
+    }
+
     fn record(&mut self, index: usize, kind: ChangeKind, parent: Option<EntityId>) {
         let node = &mut self.nodes[index];
         node.version += 1;
@@ -436,5 +521,15 @@ impl SceneGraph {
 impl Default for SceneGraph {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+fn local_world(local: &Transform) -> Transform {
+    Transform {
+        translation: local.translation,
+        rotation: usable_rotation(local.rotation),
+        scale: local.scale,
+        parent: None,
+        children: Vec::new(),
     }
 }

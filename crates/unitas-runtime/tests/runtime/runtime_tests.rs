@@ -128,6 +128,7 @@ fn runtime_lifecycle_order_over_two_ticks_and_shutdown() -> Result<(), Box<dyn E
         destroy: lc_destroy,
         collision: lc_collision,
         trigger: lc_trigger,
+        ..Callbacks::default()
     });
     runtime.tick(0.02)?;
     runtime.tick(0.02)?;
@@ -189,6 +190,7 @@ fn runtime_fixed_step_accumulator_accumulates_and_dispatches() -> Result<(), Box
         destroy: accum_noop_u64,
         collision: accum_collision,
         trigger: accum_trigger,
+        ..Callbacks::default()
     });
     runtime.tick(0.02)?;
     let count0 = match ACCUM_FIXED_COUNTS.lock() {
@@ -689,6 +691,7 @@ fn runtime_load_scene_applies_project_settings_timestep_and_gravity() -> Result<
         destroy: accum_noop_u64,
         collision: accum_collision,
         trigger: accum_trigger,
+        ..Callbacks::default()
     });
 
     runtime.tick(0.0)?;
@@ -868,6 +871,7 @@ fn run_time_scale_scene(time_scale: f64, ticks: usize) -> Result<TimeScaleRun, B
         destroy: timescale_noop_u64,
         collision: timescale_collision,
         trigger: timescale_trigger,
+        ..Callbacks::default()
     });
     let ball_id = entity_id_for(&runtime, "Ball")?;
     let graph = match runtime.scene_graph() {
@@ -1032,6 +1036,7 @@ fn scene_callbacks() -> Callbacks {
         destroy: scene_destroy,
         collision: scene_collision,
         trigger: scene_trigger,
+        ..Callbacks::default()
     }
 }
 

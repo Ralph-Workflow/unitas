@@ -62,6 +62,7 @@ fn scenario_callbacks() -> Callbacks {
         destroy: scenario_noop_handle,
         collision: scenario_noop_collision,
         trigger: scenario_record_trigger,
+        ..Callbacks::default()
     }
 }
 

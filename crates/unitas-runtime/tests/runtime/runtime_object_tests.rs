@@ -127,6 +127,7 @@ fn obj_callbacks() -> Callbacks {
         destroy: obj_destroy,
         collision: obj_collision,
         trigger: obj_trigger,
+        ..Callbacks::default()
     }
 }
 

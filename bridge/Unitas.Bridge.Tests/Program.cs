@@ -128,6 +128,8 @@ namespace Unitas.Bridge.Tests
                 () => EditorMenuTests.Run(),
                 () => LifecycleMessageTests.Run(),
                 () => ExecutionOrderDispatchTests.Run(),
+                () => ScriptBatchDispatchTests.Run(),
+                () => TransformPositionSetterTests.Run(),
                 () => PlayerLoopTests.Run(),
                 () => ExecutionOrderSettingsTests.Run(),
                 () => UnityStyleMessagingTests.Run(),

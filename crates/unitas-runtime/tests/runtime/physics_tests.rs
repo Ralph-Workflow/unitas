@@ -87,6 +87,7 @@ fn physics_callbacks() -> Callbacks {
         destroy: noop_handle,
         collision: record_physics_collision,
         trigger: record_physics_trigger,
+        ..Callbacks::default()
     }
 }
 
@@ -103,6 +104,7 @@ fn trigger_callbacks() -> Callbacks {
         destroy: noop_handle,
         collision: record_trigger_collision,
         trigger: record_trigger_event,
+        ..Callbacks::default()
     }
 }
 
@@ -119,6 +121,7 @@ fn script_callbacks() -> Callbacks {
         destroy: noop_handle,
         collision: record_script_collision,
         trigger: record_script_trigger,
+        ..Callbacks::default()
     }
 }
 

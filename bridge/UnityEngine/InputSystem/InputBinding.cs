@@ -18,7 +18,7 @@ namespace UnityEngine.InputSystem
         Canceled = 4
     }
 
-    public readonly struct InputBinding : IEquatable<InputBinding>
+    public struct InputBinding : IEquatable<InputBinding>
     {
         public InputBinding(
             string path,
@@ -38,6 +38,7 @@ namespace UnityEngine.InputSystem
             this.name = name ?? string.Empty;
             this.isComposite = isComposite;
             this.isPartOfComposite = isPartOfComposite;
+            overridePath = string.Empty;
             id = Guid.NewGuid().ToString("D");
         }
 
@@ -59,7 +60,10 @@ namespace UnityEngine.InputSystem
 
         public bool isPartOfComposite { get; }
 
-        public string effectivePath => path;
+        /// <summary>Path that replaces <see cref="path"/> while a rebind override is applied.</summary>
+        public string overridePath { get; internal set; }
+
+        public string effectivePath => string.IsNullOrEmpty(overridePath) ? path : overridePath;
 
         public static implicit operator InputBinding(string path)
         {

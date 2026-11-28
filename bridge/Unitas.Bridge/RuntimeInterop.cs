@@ -196,6 +196,10 @@ namespace Unitas.Bridge
             CollisionCallback collision,
             TriggerCallback trigger);
 
+        // Contract C2 batch entry; registered separately so the callbacks table ABI stays stable.
+        [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
+        public static extern int unitas_runtime_set_script_batch_dispatch(ulong runtime, IntPtr scriptBatchDispatch);
+
         // deltaSeconds is the unscaled wall delta; the runtime applies its own time scale.
         [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
         public static extern int unitas_runtime_tick(ulong runtime, double deltaSeconds);

@@ -251,6 +251,48 @@ pub struct Callbacks {
     pub destroy: extern "C" fn(u64),
     pub collision: extern "C" fn(u64, u64, u32),
     pub trigger: extern "C" fn(u64, u64, u32),
+    pub script_batch_dispatch: extern "C" fn(u32, *const u64, *const f64, u64),
+}
+
+pub const SCRIPT_PHASE_FIXED_UPDATE: u32 = 0;
+pub const SCRIPT_PHASE_UPDATE: u32 = 1;
+pub const SCRIPT_PHASE_LATE_UPDATE: u32 = 2;
+
+pub extern "C" fn per_phase_script_dispatch(
+    _kind: u32,
+    _handles: *const u64,
+    _deltas: *const f64,
+    _len: u64,
+) {
+}
+
+extern "C" fn noop_create_script(_entity: u64, _guid_hi: u64, _guid_lo: u64) -> u64 {
+    0
+}
+
+extern "C" fn noop_script_callback(_handle: u64) {}
+
+extern "C" fn noop_timed_callback(_handle: u64, _delta: f64) {}
+
+extern "C" fn noop_phase_callback(_first: u64, _second: u64, _phase: u32) {}
+
+impl Default for Callbacks {
+    fn default() -> Self {
+        Self {
+            create_script: noop_create_script,
+            awake: noop_script_callback,
+            on_enable: noop_script_callback,
+            start: noop_script_callback,
+            fixed_update: noop_timed_callback,
+            update: noop_timed_callback,
+            late_update: noop_timed_callback,
+            on_disable: noop_script_callback,
+            destroy: noop_script_callback,
+            collision: noop_phase_callback,
+            trigger: noop_phase_callback,
+            script_batch_dispatch: per_phase_script_dispatch,
+        }
+    }
 }
 
 pub(crate) struct PhysicsMessages {
@@ -346,6 +388,8 @@ pub struct Runtime {
     pub(crate) collision_payloads: HashMap<(u64, u64), CollisionPayload>,
     pub(crate) collision_payloads_2d: HashMap<(u64, u64), CollisionPayload2D>,
     pub(crate) callbacks: Option<Callbacks>,
+    pub(crate) script_batch_handles: Vec<u64>,
+    pub(crate) script_batch_deltas: Vec<f64>,
     pub(crate) fixed_timestep: f64,
     pub(crate) maximum_delta_time: f64,
     pub(crate) time_scale: f64,
@@ -404,6 +448,8 @@ impl Runtime {
             collision_payloads: HashMap::new(),
             collision_payloads_2d: HashMap::new(),
             callbacks: None,
+            script_batch_handles: Vec::new(),
+            script_batch_deltas: Vec::new(),
             fixed_timestep: DEFAULT_FIXED_TIMESTEP,
             maximum_delta_time: DEFAULT_MAXIMUM_DELTA_TIME,
             time_scale: 1.0,
@@ -1328,6 +1374,15 @@ impl Runtime {
         self.callbacks = Some(callbacks);
     }
 
+    pub fn set_script_batch_dispatch(
+        &mut self,
+        batch: extern "C" fn(u32, *const u64, *const f64, u64),
+    ) {
+        self.callbacks
+            .get_or_insert_with(Callbacks::default)
+            .script_batch_dispatch = batch;
+    }
+
     pub fn player_loop(&self) -> &PlayerLoop {
         &self.player_loop
     }
@@ -1386,6 +1441,7 @@ impl Runtime {
     where
         H: FnMut(&mut Self, &mut dyn FnMut()),
     {
+        self.recompute_dirty_scene_transforms();
         if self.first_tick {
             self.first_tick = false;
             if let Some(callbacks) = self.callbacks {
@@ -1407,6 +1463,12 @@ impl Runtime {
         let scaled_delta = delta_seconds * self.time_scale;
         self.run_player_loop(scaled_delta, delta_seconds, &mut hook)?;
         Ok(())
+    }
+
+    fn recompute_dirty_scene_transforms(&mut self) {
+        for scene in &mut self.scenes {
+            scene.graph.recompute_dirty_transforms();
+        }
     }
 
     fn run_player_loop<H>(
@@ -1489,17 +1551,43 @@ impl Runtime {
         Ok(())
     }
 
-    fn invoke_script_delta_callback<H>(
-        &mut self,
-        delta: f64,
-        cb: extern "C" fn(u64, f64),
-        hook: &mut H,
-    ) where
+    fn invoke_script_delta_callback<H>(&mut self, kind: u32, delta: f64, hook: &mut H)
+    where
         H: FnMut(&mut Self, &mut dyn FnMut()),
     {
-        for handle in self.all_script_handles() {
-            hook(self, &mut || cb(handle, delta));
+        let Some(callbacks) = self.callbacks else {
+            return;
+        };
+        let handles = self.all_script_handles();
+        self.script_batch_handles.clear();
+        self.script_batch_handles.extend(handles);
+        self.script_batch_deltas.clear();
+        self.script_batch_deltas
+            .resize(self.script_batch_handles.len(), delta);
+        if self.script_batch_handles.is_empty() {
+            return;
         }
+        let len = self.script_batch_handles.len() as u64;
+        let batch = callbacks.script_batch_dispatch;
+        if std::ptr::fn_addr_eq(
+            batch,
+            per_phase_script_dispatch as extern "C" fn(u32, *const u64, *const f64, u64),
+        ) {
+            let phase = match kind {
+                SCRIPT_PHASE_FIXED_UPDATE => callbacks.fixed_update,
+                SCRIPT_PHASE_UPDATE => callbacks.update,
+                _ => callbacks.late_update,
+            };
+            for index in 0..self.script_batch_handles.len() {
+                let handle = self.script_batch_handles[index];
+                let phase_delta = self.script_batch_deltas[index];
+                hook(self, &mut || phase(handle, phase_delta));
+            }
+            return;
+        }
+        let handles = self.script_batch_handles.as_ptr();
+        let deltas = self.script_batch_deltas.as_ptr();
+        hook(self, &mut || batch(kind, handles, deltas, len));
     }
 
     fn run_vfx_update(&mut self, scaled_delta: f64) {
@@ -1537,14 +1625,14 @@ impl Runtime {
             BuiltinWork::PhysicsUpdateStep3D => self.run_physics_update_3d(scaled_delta, hook)?,
             BuiltinWork::Physics2DUpdateStep => self.run_physics_update_2d(scaled_delta, hook),
             BuiltinWork::ScriptRunBehaviourFixedUpdate => {
-                if let Some(cb) = self.callbacks {
-                    self.invoke_script_delta_callback(self.fixed_timestep, cb.fixed_update, hook);
-                }
+                self.invoke_script_delta_callback(
+                    SCRIPT_PHASE_FIXED_UPDATE,
+                    self.fixed_timestep,
+                    hook,
+                );
             }
             BuiltinWork::ScriptRunBehaviourUpdate => {
-                if let Some(cb) = self.callbacks {
-                    self.invoke_script_delta_callback(scaled_delta, cb.update, hook);
-                }
+                self.invoke_script_delta_callback(SCRIPT_PHASE_UPDATE, scaled_delta, hook);
             }
             BuiltinWork::LegacyAnimationUpdate => self.step_animators(scaled_delta),
             BuiltinWork::VFXUpdate => self.run_vfx_update(scaled_delta),
@@ -1555,9 +1643,7 @@ impl Runtime {
             }
             BuiltinWork::UpdateCanvas => self.route_ui_pointer(),
             BuiltinWork::ScriptLateUpdate => {
-                if let Some(cb) = self.callbacks {
-                    self.invoke_script_delta_callback(scaled_delta, cb.late_update, hook);
-                }
+                self.invoke_script_delta_callback(SCRIPT_PHASE_LATE_UPDATE, scaled_delta, hook);
             }
             BuiltinWork::InitPendingScripts => {
                 if self.pending_scripts {

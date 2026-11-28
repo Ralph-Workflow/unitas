@@ -68,6 +68,7 @@ fn callbacks(
         destroy: noop_handle,
         collision,
         trigger,
+        ..Callbacks::default()
     }
 }
 

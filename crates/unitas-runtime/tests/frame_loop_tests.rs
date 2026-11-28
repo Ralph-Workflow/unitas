@@ -72,6 +72,7 @@ fn frame_callbacks() -> Callbacks {
         destroy: frame_noop_u64,
         collision: frame_collision,
         trigger: frame_trigger,
+        ..Callbacks::default()
     }
 }
 

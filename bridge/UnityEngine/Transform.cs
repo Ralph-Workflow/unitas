@@ -18,6 +18,7 @@ namespace UnityEngine
         private Quaternion _localRotation = Quaternion.identity;
         private Vector3 _localScale = Vector3.one;
         private bool _hasChanged = true;
+        private Rigidbody? _cachedPositionBody;
 
         public Transform()
         {
@@ -746,7 +747,7 @@ namespace UnityEngine
                     runtimeProvider.SetRuntimeTransform(owner.NativeEntityId, position, rotation, lossyScale);
                 }
             }
-            Rigidbody? body = owner.GetComponent<Rigidbody>();
+            Rigidbody? body = ResolvePositionBody(owner);
             if (body == null)
             {
                 return;
@@ -756,6 +757,21 @@ namespace UnityEngine
             {
                 provider.TrySetBodyPosition(owner.NativeEntityId, position);
             }
+        }
+
+        // Positive-result cache: only a found Rigidbody is cached, so a body added later is
+        // re-resolved on the next set. The fake-null operator and owner check catch destroyed or
+        // re-owned bodies, keeping add/remove correct without a GetComponent scan on every set.
+        private Rigidbody? ResolvePositionBody(GameObject owner)
+        {
+            Rigidbody? cached = _cachedPositionBody;
+            if (cached != null && ReferenceEquals(cached.OwnerOrNull, owner))
+            {
+                return cached;
+            }
+
+            _cachedPositionBody = owner.GetComponent<Rigidbody>();
+            return _cachedPositionBody;
         }
 
         private void PushRotationToNative()

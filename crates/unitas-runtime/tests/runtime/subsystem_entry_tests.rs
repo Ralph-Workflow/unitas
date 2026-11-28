@@ -487,6 +487,7 @@ fn subsystem_entry_callbacks() -> Callbacks {
         destroy: subsystem_entry_noop_handle,
         collision: subsystem_entry_collision,
         trigger: subsystem_entry_trigger,
+        ..Callbacks::default()
     }
 }
 

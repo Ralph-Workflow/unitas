@@ -23,6 +23,7 @@ type CreateScriptCallback = extern "C" fn(u64, u64, u64) -> u64;
 type ScriptCallback = extern "C" fn(u64);
 type TimedCallback = extern "C" fn(u64, f64);
 type PhaseCallback = extern "C" fn(u64, u64, u32);
+type BatchDispatchCallback = extern "C" fn(u32, *const u64, *const f64, u64);
 
 const _: fn(&Callbacks) = assert_callback_signatures;
 
@@ -38,6 +39,7 @@ fn assert_callback_signatures(callbacks: &Callbacks) {
     let _: ScriptCallback = callbacks.destroy;
     let _: PhaseCallback = callbacks.collision;
     let _: PhaseCallback = callbacks.trigger;
+    let _: BatchDispatchCallback = callbacks.script_batch_dispatch;
 }
 
 #[test]
@@ -93,7 +95,8 @@ fn script_callbacks_are_function_pointer_shaped() {
     assert_function_pointer::<ScriptCallback>();
     assert_function_pointer::<TimedCallback>();
     assert_function_pointer::<PhaseCallback>();
-    assert_eq!(size_of::<Callbacks>(), 11 * size_of::<*mut u8>());
+    assert_function_pointer::<BatchDispatchCallback>();
+    assert_eq!(size_of::<Callbacks>(), 12 * size_of::<*mut u8>());
 }
 
 fn assert_function_pointer<T>() {

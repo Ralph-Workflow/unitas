@@ -33,6 +33,7 @@ fn callbacks() -> Callbacks {
         destroy: rec_noop_u64,
         collision: rec_collision,
         trigger: rec_trigger,
+        ..Callbacks::default()
     }
 }
 

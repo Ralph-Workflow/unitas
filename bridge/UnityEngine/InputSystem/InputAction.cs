@@ -183,6 +183,34 @@ namespace UnityEngine.InputSystem
             RefreshResolvedControls();
         }
 
+        /// <summary>Overrides the path of one binding; the override stays until it is removed.</summary>
+        public void ApplyBindingOverride(int bindingIndex, string path)
+        {
+            if (bindingIndex < 0 || bindingIndex >= _bindings.Count)
+            {
+                throw new ArgumentOutOfRangeException(nameof(bindingIndex));
+            }
+
+            InputBinding binding = _bindings[bindingIndex];
+            binding.overridePath = path ?? string.Empty;
+            _bindings[bindingIndex] = binding;
+            RefreshResolvedControls();
+        }
+
+        /// <summary>Restores the original path of one binding.</summary>
+        public void RemoveBindingOverride(int bindingIndex)
+        {
+            if (bindingIndex < 0 || bindingIndex >= _bindings.Count)
+            {
+                throw new ArgumentOutOfRangeException(nameof(bindingIndex));
+            }
+
+            InputBinding binding = _bindings[bindingIndex];
+            binding.overridePath = string.Empty;
+            _bindings[bindingIndex] = binding;
+            RefreshResolvedControls();
+        }
+
         public void Enable()
         {
             if (_enabled)
@@ -448,7 +476,7 @@ namespace UnityEngine.InputSystem
                 }
                 else
                 {
-                    current = EvaluateSingleBinding(binding.path);
+                    current = EvaluateSingleBinding(binding.effectivePath);
                     index++;
                 }
 
@@ -500,7 +528,7 @@ namespace UnityEngine.InputSystem
             while (nextIndex < _bindings.Count && _bindings[nextIndex].isPartOfComposite)
             {
                 InputBinding part = _bindings[nextIndex];
-                SampleResult partSample = EvaluateSingleBinding(part.path);
+                SampleResult partSample = EvaluateSingleBinding(part.effectivePath);
                 if (partSample.Magnitude > activePartMag && partSample.Control != null)
                 {
                     activePartMag = partSample.Magnitude;
@@ -589,7 +617,7 @@ namespace UnityEngine.InputSystem
                 {
                     continue;
                 }
-                InputControl? control = InputSystem.FindControl(_bindings[i].path);
+                InputControl? control = InputSystem.FindControl(_bindings[i].effectivePath);
                 if (control != null && !_resolvedControls.Contains(control))
                 {
                     _resolvedControls.Add(control);
