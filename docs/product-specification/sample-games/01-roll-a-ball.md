@@ -13,34 +13,46 @@ longer.
 This is an original, redistributable unitas sample inspired by the familiar
 rolling-ball learning scenario. It is distinct from any official Unity sample
 and makes no claim to redistribute or modify Unity-owned sample content. It is
-the first game in the suite. It proves the complete loop from opening a Unity
-project to playing a packaged build. It is not the end goal of the engine.
+one of the demonstrations of the loop from opening a Unity project to playing a
+packaged build; that loop's acceptance is owned by the domain specifications it
+cites.
 
 Compatibility tiers follow the [Feature catalog](../feature-catalog.md). This
 document owns this game's acceptance under SMP-001.
 
 ## Targets and Input Modes
 
-* **Targets:** macOS, Windows, and Linux desktop players, and the web player
-  (WebAssembly with WebGPU, and WebGL 2 as the fallback) in current Chrome, Edge,
-  Firefox, and Safari on desktop and mobile. Also the editor's play mode and the
-  headless editor.
-* **Web budgets:** the web build meets the engine web budgets in the "Web target"
-  section of [Builds, platforms, XR, and networking](../build-platforms-xr-networking.md).
-  That means at most 15 MB compressed transfer, a first interactive frame within
-  3 s on a cold cache and within 1 s on a warm cache, and 60 fps at 1080p on the
-  reference laptop and phone. Every scenario that runs in a packaged player also
-  runs in the web player.
-* **Render pipelines:** the project ships in two variants that are otherwise
-  identical, one on the Built-in Render Pipeline and one on URP 14.x (Forward).
-  Both variants are accepted.
-* **Input modes:** keyboard, mouse (menus only), and gamepad. The movement code
-  exists in two variants: legacy `Input` axes (INP-001) and an Input System 1.x
-  action map (INP-002). Both variants are accepted.
+### Targets
+
+* **Automated:** macOS, Windows, and Linux desktop players, and the Web target
+  ([Web target](../web-target.md)) in current
+  Chrome, Edge, Firefox, and Safari on desktop and mobile.
+* **Capability-reported:** none.
+* **Editor play mode:** yes.
+* **Headless editor:** yes.
+
+The Web build meets the engine web budgets that the
+[Web target](../web-target.md#engine-web-budgets) section
+declares; this document does not restate them.
+
+### Render pipelines
+
+The project ships in two variants that are otherwise identical, one on the
+Built-in Render Pipeline and one on URP 14.x (Forward). Both variants are
+accepted.
+
+### Input modes and devices
+
+Keyboard, mouse (menus only), and gamepad. The movement code exists in two
+variants: legacy `Input` axes (INP-001) and an Input System 1.x action map
+(INP-002). Both variants are accepted.
+
+Headless runs use synthetic devices marked synthetic; haptic and feel
+checkpoints need physical hardware and are otherwise unevaluable.
 
 ## Game Design
 
-### Core loop
+### Core loop and flow
 
 1. The title screen shows Play, Settings, and Quit. Behind the menu, the best
    ghost of Arena 1 rolls through its route as an attract mode.
@@ -55,8 +67,9 @@ document owns this game's acceptance under SMP-001.
    time. The results panel then shows time, score, the best combo, the medal
    earned, and whether a new record was set. Its buttons are Retry, Next Arena,
    and Arena Select.
+6. Quit on the title screen, or the window's close button, exits the player.
 
-### Mechanics
+### Rules and mechanics
 
 * **Momentum movement.** Input applies force to a Rigidbody marble with mass 2,
   and a physic material gives it grip on the floor and bounce off walls. Top
@@ -75,51 +88,37 @@ document owns this game's acceptance under SMP-001.
   and it does not count toward the twelve required pickups. Reaching it usually
   means a risky dash or a jump-pad launch.
 * **Boost pads.** These push the marble along their arrow to 16 m/s.
-* **Bumpers.** These bounce the marble off with a restitution of 1.4 and give a
-  small camera shake.
+* **Bumpers.** The bumper's script sets the marble's outgoing speed to 1.4 times
+  its incoming speed along the contact normal, and triggers a small camera
+  shake. The bumper's physic material has a bounciness within Unity's range; the
+  speed-up comes from the script.
 * **Jump pads.** These launch the marble on a fixed arc to a raised platform.
 * **Hazards.** Rotating sweeper arms (Arena 2) and moving blocks (Arena 3) are
   kinematic bodies that knock the marble around. Falling off a raised platform
   drops the marble to the lower floor of the same arena. The marble keeps its
   pickups but loses its combo. The marble never leaves the arena.
 
-### Arenas and escalation
+### Levels and progression
 
-| Arena | Layout | What it teaches |
-|---|---|---|
-| 1. Courtyard | flat floor, one ramp, two boost pads, a ring of pickups around a fountain | momentum, combos, the ramp launch in the first 10 seconds |
-| 2. Clockwork | rotating platforms, four bumpers, two sweeper arms, a lower floor | timing, using bumpers as shortcuts, recovering from knock-backs |
-| 3. Sky Garden | narrow raised paths, jump pads, moving blocks, a gold pickup above a gap | precision, dash control, the gold-pickup gamble |
+| Arena | Layout | What it teaches | Medal times (bronze, silver, gold) |
+|---|---|---|---|
+| 1. Courtyard | flat floor, one ramp, two boost pads, a ring of pickups around a fountain | momentum, combos, the ramp launch in the first 10 seconds | 60 s, 40 s, 30 s |
+| 2. Clockwork | rotating platforms, four bumpers, two sweeper arms, a lower floor | timing, using bumpers as shortcuts, recovering from knock-backs | 75 s, 55 s, 40 s |
+| 3. Sky Garden | narrow raised paths, jump pads, moving blocks, a gold pickup above a gap | precision, dash control, the gold-pickup gamble | 90 s, 65 s, 50 s |
 
-### What makes it fun
+A medal is earned when the arena's finishing time is at or below its threshold.
 
-* **Hook.** Within the first 10 seconds of Arena 1, a ramp launches the marble
-  through a ring of four pickups. The chime rises one semitone per combo step,
-  so a beginner hears a x4 chain right away.
-* **Mastery curve.** A skilled player chains all twelve pickups at x5, uses
-  bumpers and dashes to cut corners, and finishes Arena 1 in under 30 seconds.
-  A new player takes about 60 seconds.
-* **Risk and reward.** The gold pickup is worth up to 25 points, but chasing it
-  can break the route or drop the marble to the lower floor. Dashing early
-  speeds up a route, but leaves no dash for recovery.
-* **Escalation.** Each arena adds one new kind of element and combines it with
-  the ones before.
-* **Game feel.**
-  * A burst of particles and a short scale pop on each collection.
-  * A speed trail behind the marble above 10 m/s.
-  * A camera field-of-view kick on each boost.
-  * A light camera shake on each bumper hit.
-  * A dust puff on landing.
-  * A rising chime pitch per combo step.
-  * A short controller rumble on bumps, on gamepads that support it.
-  * A slow-motion finish on the last pickup.
-* **Replay.**
-  * Bronze, silver, and gold medals per arena, at fixed time thresholds (for
-    Arena 1: 60, 40, and 30 seconds).
-  * Best score and best time records.
-  * A translucent ghost of the player's best run in every attempt, which can be
-    turned off.
-  * Unlocking the next arena.
+### Scoring, failure, and edge rules
+
+* Each required pickup is worth 1 point times the multiplier; the gold pickup is
+  worth 5 points times the multiplier.
+* The marble cannot leave an arena. Walls, floors, and continuous collision
+  detection keep it inside at every supported frame rate and at boost speed.
+* A pickup can be collected only once. This holds even when the marble touches
+  it on two consecutive physics steps, and even during the frame it is
+  destroyed.
+* An instant retry resets the arena, the timer, the combo, and the gold-pickup
+  state within one frame.
 
 ### Controls
 
@@ -133,16 +132,17 @@ document owns this game's acceptance under SMP-001.
 | Confirm | Enter, Space | South button | Left click |
 | Back | Escape | East button | — |
 
-### Pause
+### Pause, focus, and lifecycle
 
-Pause sets `Time.timeScale` to zero. It shows a pause panel with Resume, Retry,
-Settings, and Quit to arena select. Gameplay sounds stop while menu sounds keep
-playing. Pickups, platforms, and the combo bar freeze. Resume restores the
-previous time scale.
+* Pause sets `Time.timeScale` to zero. It shows a pause panel with Resume,
+  Retry, Settings, and Quit to arena select. Pickups, platforms, and the combo
+  bar freeze. Resume restores the previous time scale.
+* While paused, the game's scripts pause the gameplay mixer group and keep the
+  menu group playing.
+* Losing window focus pauses the game. Regaining focus leaves it paused until
+  the player resumes.
 
 ### Settings
-
-The settings are:
 
 * master, music, and effects volume
 * fullscreen or windowed mode, resolution, and vertical sync
@@ -150,24 +150,45 @@ The settings are:
 * ghost on or off
 * camera shake on or off
 * reduced motion
+* assist mode (combo window 2.5 seconds; records set with it are marked)
 
 All settings persist through `PlayerPrefs` and take effect immediately.
 
-### Failure and edge rules
+### What makes it fun
 
-* The marble cannot leave an arena. Walls, floors, and continuous collision
-  detection keep it inside at every supported frame rate and at boost speed.
-* A pickup can be collected only once. This holds even when the marble touches
-  it on two consecutive physics steps, and even during the frame it is
-  destroyed.
-* Losing window focus pauses the game. Regaining focus leaves it paused until
-  the player resumes.
-* An instant retry resets the arena, the timer, the combo, and the gold-pickup
-  state within one frame.
+* **Hook.** Within the first 10 seconds of Arena 1, a ramp launches the marble
+  through a ring of four pickups. The chime rises one semitone per combo step,
+  so a beginner hears a x4 chain right away.
+* **Mastery curve.** A skilled player chains all twelve pickups at x5, uses
+  bumpers and dashes to cut corners, and finishes Arena 1 in under 30 seconds.
+  A new player takes about 60 seconds.
+* **Risk and reward.** The gold pickup is worth up to 25 points, but chasing it
+  can break the route or drop the marble to the lower floor. Dashing early
+  speeds up a route, but leaves no dash for recovery.
+* **Variety and escalation.** Each arena adds one new kind of element and
+  combines it with the ones before.
+* **Game feel.**
+  * A burst of particles and a short scale pop on each collection.
+  * A speed trail behind the marble above 10 m/s.
+  * A camera field-of-view kick on each boost.
+  * A light camera shake on each bumper hit.
+  * A dust puff on landing.
+  * A rising chime pitch per combo step.
+  * A short controller rumble on bumps, on gamepads that support it.
+  * A slow-motion finish on the last pickup.
+* **Replay.**
+  * Bronze, silver, and gold medals per arena, at the thresholds in
+    [Levels and progression](#levels-and-progression).
+  * Best score and best time records.
+  * A translucent ghost of the player's best run in every attempt, which can be
+    turned off.
+  * Unlocking the next arena.
 
 ## Content
 
-| Asset | Source format | What matters on import |
+### Assets
+
+| Asset | Source format | Import settings that matter |
 |---|---|---|
 | `Title.unity`, `ArenaSelect.unity`, `Arena1.unity`, `Arena2.unity`, `Arena3.unity` | Unity YAML scene | object identity, prefab instances, references, lighting settings |
 | `Pickup.prefab`, `Wall.prefab`, `BoostPad.prefab`, `Bumper.prefab`, `JumpPad.prefab`, `Sweeper.prefab` | Unity YAML prefab | nested prefabs, instance overrides of transform, material, and fields |
@@ -181,14 +202,26 @@ All settings persist through `PlayerPrefs` and take effect immediately.
 | Combo chimes (five pitches), bumper, boost, dash, and results sounds | WAV and OGG | decompress-on-load and compressed-in-memory load types |
 | Music, one track per arena | OGG, streaming | streaming load type, seamless looping |
 | Fonts | TrueType font with a TextMeshPro SDF font asset | SDF atlas, fallback font |
-| Physic materials | `.physicMaterial` | marble grip, bumper bounce, wall bounce |
+| Physic materials | `.physicMaterial` | marble grip, bumper and wall bounce within Unity's range |
 | `ProjectSettings/` | Unity YAML | tags, layers, physics settings, quality levels, input axes, time step |
 
-Packages: uGUI 1.0.x, TextMeshPro 3.0.x, Input System 1.x (for the input
-variant), and URP 14.x (for the URP variant).
+### Packages
 
-Save data: medals, records, and arena unlocks go in `PlayerPrefs`. Each arena's
-best-run ghost goes in a binary file under `Application.persistentDataPath`.
+uGUI 1.0.x, TextMeshPro 3.0.x, Input System 1.x (for the input variant), and URP
+14.x (for the URP variant), at the version lines CMP-002 lists. Packages are
+resolved from their registry when the project opens and are never vendored in
+the sample repository.
+
+### Save data
+
+Medals, records, and arena unlocks go in `PlayerPrefs`. Each arena's best-run
+ghost goes in a versioned binary file under `Application.persistentDataPath`.
+
+### Licences and provenance
+
+Every asset family's source, author, and licence is recorded in
+`Licenses/content-licenses.json`. Unity packages' licence terms are recorded in
+the build's licence report.
 
 ## Feature Coverage
 
@@ -198,7 +231,9 @@ best-run ghost goes in a binary file under `Application.persistentDataPath`.
 | PRJ-003 | GUIDs and local identifiers of scenes, prefabs, and materials stay stable | S1, S9 |
 | PRJ-004 | Textures, normal maps, primitive and FBX meshes, WAV and OGG clips, fonts | S1, S8 |
 | PRJ-007 | Physics, quality, time, tags and layers, input axes | S1, S6 |
-| SER-001, SER-002, SER-003 | Scene loads, nested prefabs, a prefab variant, serialized field values | S1, S2, S9 |
+| SER-001 | Serialized field values | S1, S9 |
+| SER-002 | Scene loads | S1, S2 |
+| SER-003 | Nested prefabs and a prefab variant | S1, S2 |
 | RUN-001 | Activation, `Destroy`, `Instantiate` of the gold pickup, transforms | S2, S4, S13 |
 | RUN-002 | Ordinary `MonoBehaviour` scripts compile from `Assets/` | S1 |
 | RUN-003 | `Awake`, `OnEnable`, `Start`, `Update`, `FixedUpdate`, `OnTriggerEnter`, `OnCollisionEnter`, `OnApplicationFocus` | S2, S5, S12 |
@@ -206,7 +241,8 @@ best-run ghost goes in a binary file under `Application.persistentDataPath`.
 | RUN-005 | Single-scene loading for title, arena select, arenas, and retry | S4 |
 | RUN-009 | `Application.persistentDataPath` for ghost files | S14 |
 | PHY-001 | Rigidbody, sphere and box colliders, triggers, kinematic platforms and sweepers, physic materials, impulses, continuous collision detection | S2, S3, S11, S15 |
-| INP-001, INP-002 | Legacy axes and Input System actions, keyboard and gamepad, gamepad rumble | S2, S7 |
+| INP-001 | Legacy axes, keyboard and gamepad | S7 |
+| INP-002 | Input System actions, keyboard and gamepad, gamepad rumble | S2, S7 |
 | REN-001 | Perspective follow camera with field-of-view kick, resolution and aspect changes | S6 |
 | REN-002 | Primitive and FBX meshes, Standard and URP Lit materials, textures, normal maps, a translucent ghost material | S8, S14 |
 | REN-003 | A directional light with real-time shadows, ambient light, skybox, quality levels | S6, S8 |
@@ -214,211 +250,326 @@ best-run ghost goes in a binary file under `Application.persistentDataPath`.
 | REN-007 | Vertical sync, frame pacing, windowed and fullscreen modes | S3, S6 |
 | UI-001 | Canvas, buttons, focus, keyboard and gamepad navigation, the combo bar | S2, S7, S12 |
 | TXT-001 | TextMeshPro score, multiplier, and results text | S2, S8 |
-| AUD-001 | Pitched one-shot effects, streamed music, volume groups, pause behavior | S2, S5, S12 |
+| AUD-001 | Pitched one-shot effects, streamed music, mixer groups | S2, S5, S12 |
 | SAV-001 | Settings, medals, unlocks, records, and ghost files persist | S6, S14 |
-| BLD-001 | Packaged desktop players with a build report | S10 |
-| BLD-002 | Headless runs of every scenario | all |
+| BLD-001 | Packaged desktop and Web players with a build report | S10 |
+| BLD-002 | Headless runs of every scenario that lists the headless editor | S1–S9, S11–S16 |
 | TST-002 | Scenarios, checkpoints, approved references, input replay | all |
 | EDT-004 | Play, pause, step, and stop with edit-state restoration in the editor | S9 |
-| AUT-002 | Agents play, inspect, and capture the game in editor play sessions through the editor's MCP interface | all |
+| AUT-002 | Agents play, inspect, and capture the game in editor play sessions through the editor's MCP interface | S1–S9, S11–S16 |
 | ACC-001 | Reduced motion, camera-shake toggle, keyboard-only play | S7, S16 |
 
 ## Engine Behavior This Game Depends On
 
+Only engine and package behavior, each tied to a catalog ID. Game rules are
+defined under Game Design and implemented by the sample's own scripts; the
+engine contains no code specific to this game. Package behavior comes from the
+package's own code at the pinned version line, compiled and run unmodified
+(CMP-002). Agents reach the game only through the editor's generic MCP object,
+property, method-invocation, input, and capture commands, with no
+game-specific command.
+
 ### Scripting and runtime
 
 * Scripts in `Assets/Scripts/` compile without changes. Each one attaches to its
-  component through its script GUID.
+  component through its script GUID. (RUN-002)
 * `OnTriggerEnter` runs once for each pickup contact, after the physics step and
   before `Update`, as it does in Unity. `OnCollisionEnter` reports bumper and
-  hazard hits with contact points and impulse.
+  hazard hits with contact points, normal, and impulse. (RUN-003, PHY-001)
 * `Destroy` takes effect at the end of the frame. A destroyed pickup no longer
   receives trigger messages, and a comparison of a destroyed object to `null`
-  returns `true`.
+  returns `true`. (RUN-001)
 * `Time.timeScale` values of 0 and 0.25 scale `FixedUpdate`, `deltaTime`, and
   coroutines that wait on scaled time. `WaitForSecondsRealtime` advances in real
-  time.
+  time. (RUN-004)
 * Reloading a scene destroys every object of the previous load and leaves no
-  static state, unless the game's scripts keep it.
+  static state, unless the game's scripts keep it. (RUN-005)
 
 ### Project and content
 
 * The project opens without a converted copy. Reopening an unchanged project
-  produces the same identities.
+  produces the same identities. (PRJ-001, PRJ-003)
 * The prefab variant applies its overrides to every instance of it. Nested
-  prefab instances keep their overrides.
+  prefab instances keep their overrides. (SER-003)
 
 ### Simulation
 
-* The marble's `AddForce` motion, dash impulses, rolling, friction, and bounce
-  follow the project's physics settings and physic materials. Bumper restitution
-  is greater than 1 and produces a larger outgoing speed.
-* Kinematic platforms and sweepers move the marble through contact, and a
-  rotating platform carries the marble around with it.
-* Continuous collision detection keeps the marble inside the arenas at 30, 60,
-  144, and 240 frames per second, with a fixed time step of 0.02 s or 0.01 s,
-  and at boost speed.
-* Physics with fixed time steps is deterministic for the same inputs on the
-  same target. As a result, replaying a recorded input sequence reproduces the
-  run's pickup order and time.
+* `AddForce`, impulses, rolling, friction, and bounce follow the project's
+  physics settings and physic materials. Setting `Rigidbody.velocity` from
+  `OnCollisionEnter` takes effect on the next physics step. (PHY-001)
+* Kinematic bodies moved with `MovePosition` and `MoveRotation` push dynamic
+  bodies through contact, and a rotating kinematic platform carries a resting
+  body around with it. (PHY-001)
+* Continuous collision detection keeps a fast sphere inside closed geometry at
+  every frame rate in [S3](#s3-frame-rate-independence), with a fixed time step
+  of 0.02 s or 0.01 s. (PHY-001)
+* Physics with fixed time steps produces the same results for the same inputs
+  on the same target, so replayed input reproduces a run's pickup order and
+  time. (PHY-001, TST-002)
 
 ### Rendering and animation
 
-* The arenas render lit, with real-time shadows from one directional light on
-  both pipelines. Each pipeline matches its own approved references.
-* Emissive pickups and pads, the normal-mapped marble, tiled textures, particle
-  bursts, the speed trail, and the translucent ghost are visible at every
-  quality level. Shadow resolution and distance follow the quality level.
-* The follow camera keeps the marble in view without jitter at every frame rate.
-  It interpolates the marble between physics steps.
+* Lit scenes render with real-time shadows from one directional light on both
+  pipelines, and each pipeline matches its own approved references.
+  (REN-002, REN-003)
+* Emissive materials, normal maps, tiled textures, particle bursts, trail
+  renderers, and transparent materials are visible at every quality level.
+  Shadow resolution and distance follow the quality level. (REN-002, REN-003,
+  REN-004)
+* Rigidbody interpolation presents the body between physics steps, so a camera
+  following it in `LateUpdate` sees a frame-to-frame screen-space offset of the
+  body from the camera's target point of at most 2 pixels at 1080p during
+  steady rolling. (PHY-001, REN-001)
 
-### Audio
+### Audio and video
 
-* The collect chime starts within one frame of collection, at a pitch that
-  depends on the combo step.
-* Music streams and loops without a gap.
-* Volume settings change the mixer group levels. Pausing silences gameplay
-  sounds while menu sounds keep playing.
+* A one-shot started from a script plays within one frame of the call, at the
+  pitch the script sets. (AUD-001)
+* A streamed OGG clip loops without a gap. (AUD-001)
+* Mixer group volumes and `AudioMixerGroup` pause states set from script take
+  effect on the next audio buffer. (AUD-001)
 
 ### Input
 
-* Keyboard and gamepad produce the same movement and dash. Connecting or
+* Keyboard and gamepad bindings produce the same action values. Connecting or
   disconnecting a gamepad during play does not interrupt keyboard input.
+  (INP-001, INP-002)
 * Rumble runs on gamepads that support it and is silently skipped on others.
+  (INP-002)
 * Input stops when the window loses focus and resumes cleanly when focus
-  returns, with no stuck keys.
+  returns, with no stuck keys. (INP-001, INP-002)
 
 ### UI and text
 
-* Every menu works with keyboard, gamepad, and pointer, and the focus is always
-  visible.
-* Text is crisp at every supported resolution. The score, multiplier, and combo
-  bar update on the frame of collection.
+* uGUI navigation works with keyboard, gamepad, and pointer, and the selected
+  element's visual state is always shown. (UI-001)
+* TextMeshPro text renders from its SDF atlas at every supported resolution and
+  matches the approved text checkpoints. Text set during a frame renders that
+  frame. (TXT-001)
 
 ### Player and build
 
-* The packaged player starts on the title screen, keeps settings and progress
-  between launches, and exits cleanly from Quit and from the window's close
-  button.
+* The packaged player starts on the first scene in the build, keeps
+  `PlayerPrefs` and persistent files between launches, and exits cleanly from
+  `Application.Quit` and from the window's close button. (BLD-001, SAV-001)
 * The build report lists the included scenes, assets, sizes, and the build
-  identifier.
+  identifier. (BLD-001)
 
 ### Editor and automation
 
 * The game plays in editor play mode. Stopping play restores every edited scene
-  value.
-* An agent can do all of the following through the editor's MCP interface: open the project, start
-  play, send input, read score, multiplier, and timer state, capture frames, and
-  stop play.
+  value. (EDT-004)
+* Through the editor's generic MCP commands, an agent opens the project, starts
+  play, sends input, reads any component field (such as the score script's
+  fields), captures frames, and stops play. (AUT-002)
 
 ## Presentation and Performance
 
-* **Visual checkpoints**, each with a unitas-approved reference for each
-  pipeline:
-  * the title screen with the attract ghost
-  * each arena at its countdown
-  * Arena 1 at x5 multiplier with the speed trail visible
-  * the results panel with a gold medal
-* **Audio checkpoints:** the collect chime occurs within one frame of the
-  collection event. Its pitch rises one semitone per combo step in the captured
-  audio stream.
-* **Project-declared expectations:** 60 frames per second or more at 1080p on
-  the declared reference desktop class, start to the title screen in under 3
-  seconds, arena load in under 1 second, and instant retry in under 100 ms.
-  These are the sample's own expectations, not the PRF-002 engine budgets.
+### Visual checkpoints
+
+Each has a unitas-approved reference for each pipeline:
+
+* the title screen with the attract ghost
+* each arena at its countdown
+* Arena 1 at x5 multiplier with the speed trail visible
+* the results panel with a gold medal
+
+### Audio checkpoints
+
+The collect chime occurs within one frame of the collection event. Its pitch
+rises one semitone per combo step in the captured audio stream.
+
+### Project-declared expectations
+
+On the declared reference desktop class: 60 frames per second or more at 1080p,
+start to the title screen in under 3 seconds, arena load in under 1 second, and
+instant retry in under 100 ms. Expectations are evaluated only on the declared
+class; other runs record the measurement and report the expectation as
+unevaluable (TST-002). These are the sample's own expectations, not the PRF-002
+engine budgets.
+
+### PRF-002 measurements
+
+None.
 
 ## Acceptance Scenarios
 
-Every scenario runs in editor play mode, in a packaged player, and headless
-through the editor's MCP interface, unless it says otherwise.
+Outcomes use the TST-002 vocabulary: passed, failed, skipped, unevaluable, and
+awaiting human review. Each perturbation names its mechanism: a TST-002
+replay-stream event, a harness action outside the player, or a
+development-build debug command implemented in the sample's scripts.
 
-* **S1. Open and inspect.** Precondition: no import cache exists. Open the
-  project.
-  * Expected: all assets import with no errors, and the compatibility report
-    lists no unsupported item. Reopening yields identical GUIDs and local
-    identifiers.
-  * (PRJ-001, PRJ-003, PRJ-004, PRJ-007, SER-002)
-* **S2. Happy path.** From the title screen, enter Arena 1 and drive a recorded
-  input path that collects all twelve pickups.
-  * Expected: the pickup count reads 1 to 12 in order, and each collection plays
-    a chime. The results panel appears after the twelfth pickup.
-  * (RUN-003, PHY-001, INP-002, UI-001, TXT-001, AUD-001)
-* **S3. Frame-rate independence.** Repeat S2 at 30, 60, 144, and 240 frames per
-  second, with the same input timing.
-  * Expected: every pickup is collected exactly once, the marble never leaves
-    the arena, and the final time differs by no more than one fixed step.
-  * (PHY-001, RUN-004, REN-007)
-* **S4. Retry without leftover state.** Collect five pickups at x3, then press
-  instant retry.
-  * Expected: within one frame, the score is 0, the multiplier is x1, all twelve
-    pickups exist, no gold pickup exists, the timer reads 0, and no object from
-    the previous attempt remains.
-  * (RUN-001, RUN-005)
-* **S5. Focus loss and recovery.** During play, remove and then restore window
-  focus.
-  * Expected: the game pauses, gameplay audio stops, no input is stuck
-    afterwards, and play resumes only after Resume.
-  * (RUN-003, AUD-001, INP-002)
-* **S6. Settings and persistence.** Change every setting, earn a medal, quit,
-  and relaunch.
-  * Expected: every setting, the medal, the unlocks, and the records are
-    restored. A resolution or quality change applies immediately and keeps the
-    marble in view.
-  * (SAV-001, REN-001, REN-003, REN-007, PRJ-007)
-* **S7. Input modes.** Complete S2 once with keyboard only and once with gamepad
-  only, and use the menus with the pointer. Repeat with the legacy-input
-  variant.
-  * Expected: the same outcome every time.
-  * (INP-001, INP-002, UI-001, ACC-001)
-* **S8. Visual checkpoints.** Capture every visual checkpoint on both pipelines
-  at every quality level.
-  * Expected: each capture matches its approved reference within that
-    reference's tolerance.
-  * (REN-002, REN-003, REN-004, TXT-001, TST-002)
-* **S9. Edit and restore.** In the editor, change a pickup's score value in the
-  Inspector, enter play mode, move a bumper during play, and stop play.
-  * Expected: the Inspector change persists, the bumper returns to its edited
-    position, and the saved scene stays readable by Unity 2022.3 LTS.
-  * (EDT-004, SER-001, PRJ-003)
-* **S10. Package.** Build players for each desktop target.
-  * Expected: each player launches and completes S2 through replayed input. Its
-    build report lists scenes, assets, sizes, and the build identifier.
-  * (BLD-001)
-* **S11. Collision edge.** Dash the marble from a boost pad into a wall corner,
-  then into a bumper.
-  * Expected: no tunneling, and the bounces follow each physic material. The
-    bumper produces an outgoing speed greater than the incoming speed.
-  * (PHY-001)
-* **S12. Combo multiplier.** Collect five pickups, each within 1.5 seconds of
-  the previous one. Then wait 2 seconds and collect a sixth.
-  * Expected: the multiplier reads x1, x2, x3, x4, x5, then x1. The awarded
-    points are 1, 2, 3, 4, 5, and 1. The chime pitch rises one semitone per
-    step. The combo bar empties exactly 1.5 seconds after the fifth pickup.
-  * (RUN-003, UI-001, AUD-001, REN-004)
-* **S13. Gold pickup window.** Reach x3 in Arena 3, then reach the gold pickup
-  within 4 seconds. In a second run, let it expire.
-  * Expected: the gold pickup appears at its fixed spot on reaching x3 and
-    awards 5 times the multiplier, refilling the combo bar. If not collected, it
-    disappears after exactly 4 seconds of scaled time. It never counts toward
-    the twelve pickups.
-  * (RUN-001, RUN-004)
-* **S14. Medals, records, and ghost.** Finish Arena 1 in under 30 seconds through
-  replayed input, then start Arena 1 again.
-  * Expected: a gold medal and a new record are awarded and saved, and Arena 2
-    unlocks. The ghost file is written. On the next attempt, a translucent ghost
-    follows the recorded route, matching the recorded positions within 1 cm at
-    every fixed step.
-  * (SAV-001, RUN-009, REN-002, PHY-001)
-* **S15. Dash and cooldown.** Dash, then press Dash again at 1.0 and 2.1 seconds.
-  * Expected: the first dash applies an 8 m/s impulse. The press at 1.0 seconds
-    is ignored and the press at 2.1 seconds dashes. The cooldown ring matches
-    the remaining time.
-  * (PHY-001, INP-002)
-* **S16. Reduced motion.** Enable reduced motion and turn camera shake off, then
-  hit a bumper and boost.
-  * Expected: no camera shake, no field-of-view kick, and no slow-motion finish.
-    The gameplay outcome is the same as without the options.
-  * (ACC-001)
+### S1. Open and inspect
+
+* **Runs in:** headless editor; editor play mode.
+* **Preconditions:** no import cache exists.
+* **Steps:** open the project; reopen it.
+* **Expected:** all assets import with no errors, and the compatibility report
+  lists no unsupported item. Reopening yields identical GUIDs and local
+  identifiers.
+* **Demonstrates:** PRJ-001, PRJ-003, PRJ-004, PRJ-007, SER-002
+
+### S2. Happy path
+
+* **Runs in:** editor play mode; headless editor; packaged players on every
+  automated target.
+* **Preconditions:** a fresh save.
+* **Steps:** from the title screen, enter Arena 1 and drive a recorded input
+  path that collects all twelve pickups.
+* **Expected:** the pickup count reads 1 to 12 in order, and each collection
+  plays a chime. The results panel appears after the twelfth pickup.
+* **Demonstrates:** RUN-003, PHY-001, INP-002, UI-001, TXT-001, AUD-001
+
+### S3. Frame-rate independence
+
+* **Runs in:** headless editor; desktop packaged players. The Web target runs
+  it at rates up to the display refresh.
+* **Preconditions:** a fresh save.
+* **Steps:** repeat S2 at 30, 60, 144, and 240 frames per second (desktop and
+  headless) with the same input timing.
+* **Expected:** every pickup is collected exactly once, the marble never leaves
+  the arena, and the final time differs by no more than one fixed step.
+* **Demonstrates:** PHY-001, RUN-004, REN-007
+
+### S4. Retry without leftover state
+
+* **Runs in:** editor play mode; headless editor; packaged players.
+* **Preconditions:** Arena 1 started.
+* **Steps:** collect five pickups at x3, then press instant retry.
+* **Expected:** within one frame, the score is 0, the multiplier is x1, all
+  twelve pickups exist, no gold pickup exists, the timer reads 0, and no object
+  from the previous attempt remains.
+* **Demonstrates:** RUN-001, RUN-005
+
+### S5. Focus loss and recovery
+
+* **Runs in:** editor play mode; headless editor; desktop packaged players.
+* **Preconditions:** Arena 1 in play.
+* **Steps:** remove and then restore window focus, through a focus event in the
+  replay stream (headless and editor) or a harness action that changes the OS
+  window focus (packaged players).
+* **Expected:** the game pauses, gameplay audio stops, no input is stuck
+  afterwards, and play resumes only after Resume.
+* **Demonstrates:** RUN-003, AUD-001, INP-002
+
+### S6. Settings and persistence
+
+* **Runs in:** packaged players on every automated target; headless editor
+  with a play-session restart.
+* **Preconditions:** a fresh save.
+* **Steps:** change every setting, earn a medal, then quit and relaunch: a
+  harness action that ends and restarts the player process, or, headless, ends
+  the play session and starts a new one with the same storage root.
+* **Expected:** every setting, the medal, the unlocks, and the records are
+  restored. A resolution or quality change applies immediately and keeps the
+  marble in view.
+* **Demonstrates:** SAV-001, REN-001, REN-003, REN-007, PRJ-007
+
+### S7. Input modes
+
+* **Runs in:** editor play mode; headless editor; packaged players.
+* **Preconditions:** a fresh save; both input variants built.
+* **Steps:** complete S2 once with keyboard only and once with gamepad only, and
+  use the menus with the pointer. Repeat with the legacy-input variant.
+* **Expected:** the same outcome every time.
+* **Demonstrates:** INP-001, INP-002, UI-001, ACC-001
+
+### S8. Visual checkpoints
+
+* **Runs in:** headless editor; packaged players on every automated target.
+* **Preconditions:** each saved state needed by a checkpoint.
+* **Steps:** capture every visual checkpoint on both pipelines at every quality
+  level.
+* **Expected:** each capture matches its approved reference within that
+  reference's tolerance.
+* **Demonstrates:** REN-002, REN-003, REN-004, TXT-001, TST-002
+
+### S9. Edit and restore
+
+* **Runs in:** editor play mode, visual and headless.
+* **Preconditions:** Arena 1 open in the editor.
+* **Steps:** change a pickup's score value in the Inspector, enter play mode,
+  move a bumper during play, and stop play.
+* **Expected:** the Inspector change persists and the bumper returns to its
+  edited position. Where Unity 2022.3 LTS is available, the saved scene opens
+  in it unchanged; otherwise that check is unevaluable.
+* **Demonstrates:** EDT-004, SER-001, PRJ-003
+
+### S10. Package
+
+* **Runs in:** headless editor (build) and packaged players on every automated
+  target.
+* **Preconditions:** none.
+* **Steps:** build players for each desktop target and for the Web target.
+* **Expected:** each player launches and completes S2 through replayed input.
+  Its build report lists scenes, assets, sizes, and the build identifier.
+* **Demonstrates:** BLD-001
+
+### S11. Collision edge
+
+* **Runs in:** editor play mode; headless editor; packaged players.
+* **Preconditions:** Arena 2 started.
+* **Steps:** dash the marble from a boost pad into a wall corner, then into a
+  bumper.
+* **Expected:** no tunneling, and wall bounces follow each physic material. The
+  bumper produces an outgoing speed 1.4 times the incoming speed along the
+  contact normal.
+* **Demonstrates:** PHY-001
+
+### S12. Combo multiplier
+
+* **Runs in:** editor play mode; headless editor; packaged players.
+* **Preconditions:** Arena 1 started.
+* **Steps:** collect five pickups, each within 1.5 seconds of the previous one.
+  Then wait 2 seconds and collect a sixth.
+* **Expected:** the multiplier reads x1, x2, x3, x4, x5, then x1. The awarded
+  points are 1, 2, 3, 4, 5, and 1. The chime pitch rises one semitone per step.
+  The combo bar empties exactly 1.5 seconds after the fifth pickup.
+* **Demonstrates:** RUN-003, UI-001, AUD-001, REN-004
+
+### S13. Gold pickup window
+
+* **Runs in:** editor play mode; headless editor; packaged players.
+* **Preconditions:** the saved state "Arena 3 at x3".
+* **Steps:** reach the gold pickup within 4 seconds. In a second run, let it
+  expire.
+* **Expected:** the gold pickup appears at its fixed spot on reaching x3 and
+  awards 5 times the multiplier, refilling the combo bar. If not collected, it
+  disappears after exactly 4 seconds of scaled time. It never counts toward the
+  twelve pickups.
+* **Demonstrates:** RUN-001, RUN-004
+
+### S14. Medals, records, and ghost
+
+* **Runs in:** editor play mode; headless editor; packaged players.
+* **Preconditions:** a fresh save.
+* **Steps:** finish Arena 1 in under 30 seconds through replayed input, then
+  start Arena 1 again.
+* **Expected:** a gold medal and a new record are awarded and saved, and Arena 2
+  unlocks. The ghost file is written. On the next attempt, a translucent ghost
+  follows the recorded route, matching the recorded positions within 1 cm at
+  every fixed step.
+* **Demonstrates:** SAV-001, RUN-009, REN-002, PHY-001
+
+### S15. Dash and cooldown
+
+* **Runs in:** editor play mode; headless editor; packaged players.
+* **Preconditions:** Arena 1 in play.
+* **Steps:** dash, then press Dash again at 1.0 and 2.1 seconds.
+* **Expected:** the first dash applies an 8 m/s impulse. The press at 1.0
+  seconds is ignored and the press at 2.1 seconds dashes. The cooldown ring
+  matches the remaining time.
+* **Demonstrates:** PHY-001, INP-002
+
+### S16. Reduced motion
+
+* **Runs in:** editor play mode; headless editor; packaged players.
+* **Preconditions:** a fresh save.
+* **Steps:** enable reduced motion and turn camera shake off, then hit a bumper
+  and boost.
+* **Expected:** no camera shake, no field-of-view kick, and no slow-motion
+  finish. The gameplay outcome is the same as without the options.
+* **Demonstrates:** ACC-001
 
 ## Manual Playtest Guidance
 
@@ -435,57 +586,54 @@ awaiting human review, never as passed:
 
 ## Agent Authoring Change Requests
 
-The reference change request, as defined under the Agent Authoring Benchmark in
-the [suite index](INDEX.md), adds a new pickup type. The pickup awards a
-different score value, has a distinct material and collection sound, appears at
-specified positions in an arena, and shows a score-feedback message in the UI
-when collected. The request includes a test that checks the awarded score.
+### CR1. New pickup type
 
-Status of the reference change request: the benchmark lane (`make verify-benchmark`)
-runs the change request against a copy of this sample, creates and imports the
-request's distinct material and binary collection sound through the
-`assets.import` MCP command, and demonstrates that the project compiles with no
-errors, that the test the request adds and the sample's existing tests pass,
-that the request's acceptance scenario passes in editor play mode, that the
-scenarios that passed at the starting revision still pass, that the change set
-holds only the changes the request allows, and that rejecting the change set
-returns the copy to its starting content. The run does not demonstrate that the
-acceptance scenario passes in a player on a declared target, because it builds
-no player, and it does not demonstrate that the changed project opens in Unity
-2022.3 LTS, because that editor is not present in the environment the run
-executes in.
+* **Request:** add a new pickup type. It awards a different score value, has a
+  distinct material and collection sound, appears at specified positions in an
+  arena, and shows a score-feedback message in the UI when collected.
+* **Acceptance scenario:** in Arena 1 with the new pickups placed, collecting
+  one awards its score value times the multiplier, plays its sound, and shows
+  the feedback message; all existing scenarios still pass.
+* **Test:** a test that checks the awarded score.
 
-A second change request adds a magnet power-up. For 5 seconds, it pulls pickups
-within 3 m toward the marble. The request includes a scenario proving that
-pulled pickups are still collected exactly once.
+### CR2. Magnet power-up
+
+* **Request:** add a magnet power-up. For 5 seconds, it pulls pickups within 3 m
+  toward the marble.
+* **Acceptance scenario:** with the magnet active, pulled pickups are still
+  collected exactly once, and pickups farther than 3 m do not move.
+* **Test:** a test that counts collection events per pickup while the magnet is
+  active.
 
 ## Accessibility
 
-Every action can be performed with the keyboard. Menus expose accessibility
-names. Text meets contrast requirements against its background. Reduced motion
-stops pickup rotation, camera shake, field-of-view kicks, and the slow-motion
-finish. An optional assist mode extends the combo window to 2.5 seconds and is
-marked on records set with it.
+* Every action can be performed with the keyboard (S7).
+* Menus expose accessibility names (S7).
+* Text has a contrast ratio of at least 4.5:1 against its background (S8).
+* Reduced motion stops pickup rotation, camera shake, field-of-view kicks, and
+  the slow-motion finish (S16).
+* The assist mode setting extends the combo window to 2.5 seconds and marks
+  records set with it (S12 with assist mode on).
 
 ## Saved and Reproducible States
 
-* Arena 1 with eleven pickups collected at x4, with the marble beside the last
-  one.
-* Arena 3 at x3, with the gold pickup just spawned.
-* Arena 2, paused, with the settings panel open.
-* A save with all three arenas unlocked and Arena 1 at a gold medal.
+| State | How it is reached | Used by |
+|---|---|---|
+| Arena 1 with eleven pickups collected at x4, the marble beside the last one | save file | S8 |
+| Arena 3 at x3, with the gold pickup just spawned | save file | S13 |
+| Arena 2, paused, with the settings panel open | save file | S8 |
+| All three arenas unlocked and Arena 1 at a gold medal | save file | S8, S14 |
 
 ## Known Limitations and Unsupported Conditions
 
-None declared. Any behavior this document requires that is not demonstrated is
-reported with its real compatibility state.
+None. Any behavior this document requires that is not demonstrated is reported
+with its real compatibility state.
 
 ## Acceptance Outcomes
 
-* The Roll-a-Ball-style sample collects every pickup exactly once at different
-  frame rates, keeps the ball inside its boundaries, and completes the same
-  scenario with keyboard and gamepad in editor and player. (SMP-001, PHY-001,
-  INP-002, UI-001)
+* The game collects every pickup exactly once at different frame rates, keeps
+  the marble inside its boundaries, and completes the same scenario with
+  keyboard and gamepad in editor and player. (SMP-001, PHY-001, INP-002, UI-001)
 * The same scenarios pass on the Built-in Render Pipeline and URP 14.x
   variants, and each matches its approved references. (SMP-001, REN-002,
   REN-003, REN-004, TST-002)
@@ -495,5 +643,5 @@ reported with its real compatibility state.
   ghost replays its recorded route within 1 cm. (SMP-001, SAV-001, PHY-001)
 * Retrying leaves no transient state from the previous attempt, and settings
   persist across launches. (SMP-001, RUN-005, SAV-001)
-* Each desktop player is packaged with a build report and completes the
-  replayed happy path. (SMP-001, BLD-001)
+* Each desktop player and the Web target player is packaged with a build report
+  and completes the replayed happy path. (SMP-001, BLD-001)

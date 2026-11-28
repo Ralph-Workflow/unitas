@@ -1,4 +1,4 @@
-# Sample 3: Third-Person Adventure
+# Sample 3: Third-Person Adventure ("Hollow Light")
 
 ## Overview
 
@@ -11,25 +11,41 @@ sound. Lighting the altar starts a 45-second escape through a collapsing
 tunnel. A first run takes 20 to 30 minutes, and a skilled run under 15.
 
 The game is original, redistributable unitas content and uses no Unity-owned
-sample content. It proves imported humanoid characters, animation, cinematics,
-character movement, navigation, terrain, baked lighting, video, localization,
-streaming, and persistence working together in one playable loop.
+sample content. It is one of the demonstrations of imported humanoid
+characters, animation, cinematics, character movement, navigation, terrain,
+baked lighting, video, localization, streaming, and persistence working
+together in one playable loop; the acceptance of those features is owned by
+the domain specifications it cites.
 
 Compatibility tiers follow the [Feature catalog](../feature-catalog.md). This
 document owns the acceptance of this game under SMP-001.
 
 ## Targets and Input Modes
 
-* Targets: macOS, Windows, and Linux desktop players, plus the editor's play
-  mode and the headless editor.
-* Render pipeline: URP 14.x, Forward path, one URP asset per quality level.
-* Input modes: keyboard and mouse, and gamepad, through one Input System 1.x
-  action asset with the control schemes KeyboardMouse and Gamepad. Active input
-  handling is Input System only.
+### Targets
+
+* **Automated:** macOS, Windows, and Linux desktop players.
+* **Capability-reported:** gamepad rumble, which depends on the gamepad's
+  motors.
+* **Editor play mode:** yes.
+* **Headless editor:** yes.
+
+### Render pipelines
+
+URP 14.x, Forward path, one URP asset per quality level.
+
+### Input modes and devices
+
+Keyboard and mouse, and gamepad, through one Input System 1.x action asset with
+the control schemes KeyboardMouse and Gamepad. Active input handling is Input
+System only.
+
+Headless runs use synthetic devices marked synthetic; haptic and feel
+checkpoints need physical hardware and are otherwise unevaluable.
 
 ## Game Design
 
-### Core loop
+### Core loop and flow
 
 1. The title screen shows Continue (when a save exists), New Game, Load Game,
    Chapters (after a completion), Records, Settings, and Quit.
@@ -41,6 +57,54 @@ document owns the acceptance of this game under SMP-001.
    loading screen. The mid-game cutscene (40 s) plays after the second sigil.
 5. Placing the third sigil starts the escape. Reaching daylight shows the
    completion panel with time, shards, hearts lost, medals, and Title and Quit.
+6. Quit on the title exits the player.
+
+### Rules and mechanics
+
+* Walk 2.0 m/s, run 5.5 m/s. A standing jump clears 2.2 m and a running jump
+  4.0 m. A dodge moves 3 m in 0.4 s, ignores hits for its first 0.3 s, and has
+  a 1.0 s cooldown. Ground locomotion is root motion.
+* Husks hear a running hero within 10 m and a walking one within 4 m, see 14 m
+  in a 90° cone, give up after 6 s without contact, and never enter the
+  Sanctuary area around checkpoints. A lit brazier repels husks within 6 m.
+* The companion warps beside the hero when more than 25 m away or on respawn.
+  Husks cross off-mesh links in a scripted 0.6 s arc.
+* The footstep script accepts a `Footstep` event only from a clip with blend
+  weight 0.5 or more, so each foot contact plays one grass, stone, or water
+  sound, chosen by the dominant splat layer or physic material, and emits 6
+  dust particles on grass and dirt.
+* Disconnecting the gamepad in use pauses with "Controller disconnected";
+  reconnecting it or using the keyboard dismisses it.
+
+### Levels and progression
+
+| Area | Interaction | Shards | Husks | New elements |
+|---|---|---|---|---|
+| Meadow | lever bridge | 8 | 0 | traversal, terrain, waterfall |
+| Ruins | timed platform ring | 8 | 2 | timed platforms, video screen |
+| Cavern | brazier sequence | 8 | 6 | stealth, braziers that carve safe paths |
+| Escape | none | 0 | every remaining husk | falling stones, no checkpoint, music rising each 15 s |
+
+Four medals per run: Gold (under 15 minutes), Ember (all 24 shards), Untouched
+(no heart lost), and Unseen (no husk chase in the cavern). A completion unlocks
+Chapters and Hollow mode (one heart, no shard hearts, husks 20% faster).
+
+### Scoring, failure, and edge rules
+
+* The hero starts with three hearts, up to six. A husk hit or a chasm fall
+  costs one heart and respawns the hero at the last checkpoint after a 1.5 s
+  fade. At zero hearts the failure panel "You were overcome" offers Retry from
+  checkpoint, Load Game, and Quit to title. Retry restores three hearts with no
+  husk still chasing.
+* Shards stay unbanked until the next checkpoint. Dying leaves the unbanked
+  shards in a glowing cache where the hero fell, and dying again before
+  reaching the cache loses them. Every 8 banked shards add a heart, up to six.
+* Checkpoints autosave to the current slot. The pause menu saves to any of
+  three slots. Saving is refused, with "You can't save now", while airborne,
+  in a cutscene, during the escape, or while a husk is chasing.
+* A damaged slot shows "Damaged" and cannot be loaded. A slot from a future
+  version is reported incompatible and left unchanged. A version 1 slot
+  migrates to version 2 with progress kept, and the migration is reported.
 
 ### Controls
 
@@ -54,32 +118,21 @@ document owns the acceptance of this game under SMP-001.
 | Pause | Escape | Start |
 | Menus: navigate, confirm, back | Arrows, Tab, pointer; Enter or click; Escape | D-pad or left stick; South; East |
 
-### Rules
+### Pause, focus, and lifecycle
 
-* Walk 2.0 m/s, run 5.5 m/s. A standing jump clears 2.2 m and a running jump
-  4.0 m. A dodge moves 3 m in 0.4 s, ignores hits for its first 0.3 s, and has
-  a 1.0 s cooldown. Ground locomotion is root motion.
-* The hero starts with three hearts, up to six. A husk hit or a chasm fall
-  costs one heart and respawns the hero at the last checkpoint after a 1.5 s
-  fade. At zero hearts the failure panel "You were overcome" offers Retry from
-  checkpoint, Load Game, and Quit to title.
-* Husks hear a running hero within 10 m and a walking one within 4 m, see 14 m
-  in a 90° cone, give up after 6 s without contact, and never enter the
-  Sanctuary area around checkpoints. A lit brazier repels husks within 6 m.
-* Checkpoints autosave to the current slot. The pause menu saves to any of
-  three slots. Saving is refused, with "You can't save now", while airborne,
-  in a cutscene, during the escape, or while a husk is chasing. A damaged slot
-  shows "Damaged" and cannot be loaded.
-* Pause sets `Time.timeScale` to zero and shows Resume, Save, Load, Settings,
-  and Quit to title, plus Skip cutscene during a cutscene. Timeline, video,
-  animators, particles, agents, and gameplay audio stop, and the mixer moves
-  to the Paused snapshot while menu sounds play.
-* Settings: five volume sliders (master, music, effects, ambience, dialogue);
-  subtitles on or off and size; language (English, French, German, Japanese);
-  camera sensitivity, invert Y, run hold or toggle; reduced motion; display
-  mode, resolution, vertical sync; quality Low, Medium, or High. They persist
-  through `PlayerPrefs` and apply at once. The language persists through the
-  Localization player preference selector.
+Pause sets `Time.timeScale` to zero and shows Resume, Save, Load, Settings, and
+Quit to title, plus Skip cutscene during a cutscene. The game's scripts pause
+Timeline, video, animators, particles, agents, and gameplay audio, and move the
+mixer to the Paused snapshot while menu sounds play.
+
+### Settings
+
+Five volume sliders (master, music, effects, ambience, dialogue); subtitles on
+or off and size; language (English, French, German, Japanese); camera
+sensitivity, invert Y, run hold or toggle; reduced motion; display mode,
+resolution, vertical sync; quality Low, Medium, or High. They persist through
+`PlayerPrefs` and apply at once. The language persists through the
+Localization player preference selector.
 
 ### What makes it fun
 
@@ -88,33 +141,29 @@ document owns the acceptance of this game under SMP-001.
   after the hero first touches them. A 20-second sprint and jump run reaches
   the first checkpoint, where the first sigil's glow is visible across the
   valley.
-* **Mastery.** Better players chain running jumps, walk to slip past husks
-  unheard, dodge through attacks, time the ruins platform ring, and find
+* **Mastery curve.** Better players chain running jumps, walk to slip past
+  husks unheard, dodge through attacks, time the ruins platform ring, and find
   shortcuts that skip about 90 s of the meadow and ruins.
 * **Risk and reward.** Each area hides 8 ember shards (24 in all) on risky
-  routes: ledges over chasms, husk patrols, and crumbling stones. Shards stay
-  unbanked until the next checkpoint. Dying leaves the unbanked shards in a
-  glowing cache where the hero fell, and dying again before reaching the cache
-  loses them. Every 8 banked shards add a heart, up to six.
-* **Escalation.** The meadow is traversal only. The ruins add timed platforms
-  and two husks. The cavern adds six husks, stealth, and braziers that the
-  player lights to carve safe paths. The escape has no checkpoint: falling
-  stones, every remaining husk chasing, and the music rising each 15 s.
-* **Juice.** Movement responds on the first rendered frame after input.
+  routes: ledges over chasms, husk patrols, and crumbling stones. The shard
+  cache makes every death after a risky pickup a gamble.
+* **Variety and escalation.** The meadow is traversal only. The ruins add timed
+  platforms and two husks. The cavern adds six husks, stealth, and braziers.
+  The escape combines falling stones and every remaining husk.
+* **Game feel.** Movement responds on the first rendered frame after input.
   Landings from above 2 m dip the camera 0.1 m and puff dust. A husk hit adds
   80 ms of hit-stop, a red vignette, and 0.2 s of gamepad rumble. Taking a
   sigil plays a light burst, a music stinger, and 0.5 s at time scale 0.3.
-  Each shard collected within 3 s of the last plays one semitone higher, up
-  to eight steps.
-* **Replay.** Four medals per run: Gold (under 15 minutes), Ember (all 24
-  shards), Untouched (no heart lost), and Unseen (no husk chase in the
-  cavern). Records keep the best time and most shards per slot. A completion
-  unlocks Chapters and Hollow mode (one heart, no shard hearts, husks 20%
-  faster).
+  Each shard collected within 3 s of the last plays one semitone higher, up to
+  eight steps.
+* **Replay.** The four medals; records of the best time and most shards per
+  slot; Chapters and Hollow mode after a completion.
 
 ## Content
 
-| Asset | Source format | What matters on import |
+### Assets
+
+| Asset | Source format | Import settings that matter |
 |---|---|---|
 | `Title`, `Core`, `Area_Meadow`, `Area_Ruins`, `Area_Cavern`, `Gym_Traversal` | Unity YAML scenes | build order, additive loading, per-area lighting settings and baked data |
 | `Hero`, `Companion`, `Husk`, `HuskSwift` (variant), `MovingPlatform`, `FallingStone`, `Checkpoint`, `Shard`, `Brazier`, `AreaPortal` | Unity YAML prefabs | nesting, variant overrides of speed and material |
@@ -128,28 +177,52 @@ document owns the acceptance of this game under SMP-001.
 | `Opening.playable`, `Midgame.playable` | Timeline 1.x | Cinemachine, animation, audio, signal, and activation tracks |
 | `Meadow.asset` | TerrainData | 256 x 40 x 256 m, heightmap 513, alphamap 512, 4 TerrainLayers, 2 tree and 2 detail prototypes |
 | Albedo, normal, and mask textures | PNG and TGA | sRGB albedo, Normal map type, linear masks |
-| Lightmaps, shadowmasks, reflection captures, sky | EXR and PNG baked in unitas (and readable by Unity 2022.3 LTS), EXR cubemap | Lightmap and Shadowmask types, cube shape |
+| Lightmaps, shadowmasks, reflection captures, sky | EXR and PNG baked in the unitas editor, EXR cubemap | Lightmap and Shadowmask types, cube shape |
 | Dialogue; footsteps and effects; music and ambience | WAV 48 kHz mono; WAV; OGG | Compressed In Memory Vorbis 70; Decompress On Load; Streaming, looping |
-| `Archive.mp4` | H.264 1280 x 720 at 30 fps, AAC stereo, 24 s | VideoClip, no transcoding |
+| `Archive.webm` | VP9 1280 x 720 at 30 fps, Opus stereo, 24 s | VideoClip, no transcoding |
 | `Main.mixer` | AudioMixer | groups, sends, four snapshots, exposed volumes |
 | Locales, tables | Localization 1.x | `UI`, `Subtitles`, `Objectives` string tables, `Signs` asset table, Smart Strings |
 | Fonts | TrueType with TextMeshPro SDF assets | Latin primary, Japanese fallback |
 | `Adventure.inputactions` | Input System action asset | maps Gameplay and UI, two schemes |
 | Volume profiles | URP Volume Profile | `Global`, `Cavern`, `Cutscene` |
 | Addressables groups | Addressables 1.x | one group and label per area, local paths |
+| `Fixtures/UnityBuilt/` | AssetBundles built by Unity 2022.3 LTS for each desktop target | committed fixtures, with the producing Unity release recorded |
 
-Packages: URP 14.x, Cinemachine 2.x, Timeline 1.x, Input System 1.x,
-Localization 1.x, AI Navigation 1.x, Addressables 1.x, uGUI 1.0.x,
-TextMeshPro 3.0.x, and Unity Test Framework 1.x.
+### Packages
+
+URP 14.x, Cinemachine 2.x, Timeline 1.x, Input System 1.x, Localization 1.x, AI
+Navigation 1.x, Addressables 1.x, uGUI 1.0.x, TextMeshPro 3.0.x, and Unity Test
+Framework 1.x, at the version lines CMP-002 lists. Packages are resolved from
+their registry when the project opens and are never vendored in the sample
+repository.
+
+### Save data
+
+Three slots and an autosave as versioned `JsonUtility` files under
+`Application.persistentDataPath` (current format version 2); records in a
+separate file; settings in `PlayerPrefs`. Committed fixture slots: valid
+version 2, version 1, truncated, and future version.
+
+### Licences and provenance
+
+Every asset family's source, author, and licence is recorded in
+`Licenses/content-licenses.json`. Unity packages' licence terms are recorded in
+the build's licence report.
 
 ## Feature Coverage
 
 | ID | Behavior this game exercises | Scenarios |
 |---|---|---|
-| PRJ-001, PRJ-003, PRJ-007 | Opens in place; stable avatar, clip, and sub-asset identities; layers, quality, time step, input handling | S1, S16 |
+| PRJ-001 | Opens in place | S1 |
+| PRJ-003 | Stable avatar, clip, and sub-asset identities | S1, S16 |
 | PRJ-004 | FBX humanoid import, clip splitting, events, blend shapes, EXR lightmaps, video and audio | S1 |
-| SER-001, SER-002, SER-003 | Additive scene sets, prefab variants, serialized values | S1, S7, S16 |
-| RUN-001, RUN-002, RUN-003 | Objects, scripts, `OnAnimatorMove`, `OnAnimatorIK`, `OnControllerColliderHit` | S2, S5 |
+| PRJ-007 | Layers, quality, time step, input handling | S1 |
+| SER-001 | Serialized values | S16 |
+| SER-002 | Additive scene sets | S1, S7 |
+| SER-003 | Prefab variants | S1 |
+| RUN-001 | Objects and respawn | S6 |
+| RUN-002 | Compiled scripts | S1 |
+| RUN-003 | `OnAnimatorMove`, `OnAnimatorIK`, `OnControllerColliderHit` | S2, S5 |
 | RUN-004 | Async operations, `Time.timeScale`, fade and hit-stop coroutines | S7, S11 |
 | RUN-005 | Single and additive loads, `SetActiveScene`, unloading | S7, S8 |
 | RUN-006 | Addressables loads by label, reference counts, release on unload | S7 |
@@ -159,275 +232,433 @@ TextMeshPro 3.0.x, and Unity Test Framework 1.x.
 | PHY-003 | `CharacterController` on slopes, steps, platforms, respawn teleport | S5, S6 |
 | NAV-001 | Companion and husk agents, area masks, off-mesh links, path states | S13 |
 | ENV-001 | Terrain height, splat layers, trees, detail grass, wind | S15 |
-| REN-001, REN-007 | Cinemachine-driven camera, resolution changes, frame pacing | S3, S15 |
+| REN-001 | Cinemachine-driven camera, resolution changes | S3, S15 |
 | REN-002 | Skinned humanoids, facial blend shapes, URP Lit materials | S3, S15 |
 | REN-003 | Baked lightmaps, light probes, reflection probes, fog, post-processing, quality | S3, S15 |
 | REN-004 | Footstep dust, waterfall, fire, sigil burst | S5, S15 |
 | REN-006 | URP 14.x Forward with Volumes | S15 |
+| REN-007 | Frame pacing | S15 |
 | ANI-001 | Layers, blend trees, transitions, animation events, Timeline animation | S2, S3, S5 |
 | ANI-002 | Shared avatar, humanoid retargeting, foot and look-at IK, avatar masks | S1, S5 |
 | CIN-001 | Timeline cutscenes, Cinemachine cuts and blends, skip | S3, S4 |
-| UI-001, TXT-001 | Menus, subtitles, objective and medal text, Japanese fallback | S2, S9 |
+| UI-001 | Menus, subtitles, objective and medal text | S2, S9 |
+| TXT-001 | Japanese fallback | S9 |
 | INP-002 | Actions, scheme switching, device changes, rumble status | S10 |
 | AUD-001 | Spatial sources, reverb zones, mixer snapshots, dialogue, shard pitch steps | S3, S11, S15 |
 | MED-001 | Video on an in-world screen and full screen with synchronized audio | S12 |
 | LOC-001 | String and asset tables, Smart Strings, locale change during play | S9 |
 | SAV-001 | Settings, slots, records, corruption, migration | S8, S14, S17 |
 | ACC-001 | Subtitles, reduced motion, run toggle | S9, S11 |
-| BLD-001, BLD-005 | Packaged players and unitas-built Addressables content | S7, S16 |
-| BLD-002, TST-002, AUT-002 | Headless runs, scenarios, references, input replay, play control through the editor's MCP interface | all |
+| BLD-001 | Packaged players | S16 |
+| BLD-005 | unitas-built and Unity-built Addressables content | S7 |
+| BLD-002 | Headless runs | S1–S15, S17 |
+| TST-002 | Scenarios, references, input replay | all |
+| AUT-002 | Play control through the editor's MCP interface | S1–S15, S17 |
 | EDT-004 | Play and stop with edit-state restoration | S16 |
 
 ## Engine Behavior This Game Depends On
 
+Only engine and package behavior, each tied to a catalog ID. Game rules are
+defined under Game Design and implemented by the sample's own scripts; the
+engine contains no code specific to this game. Package behavior (Cinemachine,
+Timeline, Localization, AI Navigation, Addressables) comes from the package's
+own code at the pinned version line, compiled and run unmodified (CMP-002); the
+items below state only the engine surface the packages call. Agents reach the
+game only through the editor's generic MCP object, property,
+method-invocation, input, and capture commands, with no game-specific command.
+
 ### Scripting and runtime
 
-* `OnAnimatorMove` passes `Animator.deltaPosition` and gravity to
-  `CharacterController.Move`; root motion is not also applied automatically.
-* Async additive loads keep `Core` loaded, and `SetActiveScene` makes the
-  entered area supply fog, ambient light, and skybox. Each area's Addressables
-  label loads with its scene, and unloading the area releases every handle to
-  a reference count of zero.
+* `OnAnimatorMove` replaces automatic root motion: a script that passes
+  `Animator.deltaPosition` to `CharacterController.Move` moves the character
+  exactly once by that delta. (RUN-003, ANI-001, PHY-003)
+* Async additive loads keep other loaded scenes loaded, and `SetActiveScene`
+  makes the active scene supply fog, ambient light, and skybox. (RUN-005)
+* Addressables loads by label and releases by handle; unloading the scene that
+  owns the handles brings every reference count to zero. (RUN-006)
 * Signal receiver reactions are UnityEvents and run once per crossing.
+  (RUN-008)
 
 ### Project and content
 
-* `Companion.fbx` resolves `HeroAvatar` by reference, and the `Anim_*.fbx`
-  clips play on all three avatars. An invalid avatar is reported with its bones.
+* An FBX that copies another model's avatar resolves it by reference, and clips
+  imported on a separate source rig play on every humanoid avatar. An invalid
+  avatar is reported with its bones. (PRJ-004, ANI-002)
 * Lightmaps, shadowmasks, light probes, and reflection captures are baked in
-  the unitas editor, interactively or headless through the editor's MCP interface, and load with their
-  renderer assignments. Lighting baked earlier by Unity 2022.3 LTS loads the same
-  way. Moving a static renderer in the editor marks the bake stale and names the
-  renderer. Rebaking replaces the stale data, and the result is still readable by
-  Unity 2022.3 LTS.
+  the unitas editor, interactively or headless, and load with their renderer
+  assignments. Moving a static renderer in the editor marks the bake stale and
+  names the renderer. Rebaking replaces the stale data. (REN-003)
 
 ### Simulation
 
-* The `CharacterController` has height 1.8 m, radius 0.35 m, slope limit 45°,
-  step offset 0.35 m, and skin width 0.05 m. It climbs 0.3 m steps, stops at
-  0.5 m steps, walks 40° slopes, and slides down 50° slopes at 2 m/s or more.
-  A grounded hero rides a kinematic platform moving at 1.5 m/s without sliding.
-* Agents walk NavMeshSurface data from AI Navigation 1.x. A 3 m bidirectional
-  NavMeshLink crosses a ruins gap, and a one-way link drops 2 m from a ledge.
-  The companion traverses links automatically. Husks have automatic traversal
-  off and cross in a scripted 0.6 s arc ending with `CompleteOffMeshLink`.
-  Husk area masks exclude Sanctuary. The companion warps beside the hero when
-  more than 25 m away or on respawn.
+* A `CharacterController` with height 1.8 m, radius 0.35 m, slope limit 45°,
+  step offset 0.35 m, and skin width 0.05 m climbs 0.3 m steps, stops at 0.5 m
+  steps, walks 40° slopes, and slides down 50° slopes at 2 m/s or more. A
+  grounded controller rides a kinematic platform moving at 1.5 m/s without
+  sliding. (PHY-003)
+* Agents walk NavMeshSurface data. A bidirectional NavMeshLink and a one-way
+  link are traversed automatically when auto traversal is on; with it off,
+  `isOnOffMeshLink` is true at the link and `CompleteOffMeshLink` ends the
+  traversal. Area masks exclude areas from paths, and a path into an excluded
+  area is partial. (NAV-001)
 
 ### Rendering and animation
 
-* The hero's controller has Base (locomotion blend tree, jump, fall, land,
-  dodge, interact), UpperBody (override, `UpperBody.mask`, Carry), and
-  Breathing (additive, weight 0.5) layers. Legs stay on Base while carrying.
-* Foot IK keeps each foot within 3 cm of the ground on 30° slopes and 0.2 m
-  stair risers, with the pelvis lowered to match. Look-at IK turns the head to
-  an interactable within 4 m at weight 0.7.
-* The `Footstep` event fires on each foot contact of Walk and Run. The script
-  accepts it only from a clip with blend weight 0.5 or more, so each contact
-  plays one grass, stone, or water sound, chosen by the dominant splat layer or
-  physic material, and emits 6 dust particles on grass and dirt.
-* Timeline animation tracks drive the blend shapes `JawOpen`, `Blink_L`,
-  `Blink_R`, `Smile`, and `BrowUp`, rendered on the frame they are evaluated.
-* A Cinemachine 2.x FreeLook with the collider extension follows the hero.
-  Cutscenes cut and blend between four virtual cameras on a Cinemachine track,
-  and afterwards the brain blends back to the FreeLook over 1.0 s.
-* The `Cutscene` volume (priority 10, Bokeh depth of field) is active only in
-  cutscenes. The global volume applies ACES tonemapping, bloom (threshold 1.0,
-  intensity 0.6), and color adjustments; the cavern volume blends a cool grade
-  in over 5 m. Fog is Exponential Squared at 0.008 in the meadow and Linear
-  from 5 m to 40 m in the cavern.
-* The meadow terrain renders 4 splat layers with URP Terrain Lit, about 600
-  trees with LOD, billboards, and colliders, and instanced detail grass to 80 m
-  at High that waves with the terrain wind.
-* The waterfall emits continuously and collides with its pool. Braziers emit
-  fire with the light module and spark sub-emitters.
+* An Animator with a base layer, an override layer with an avatar mask, and an
+  additive layer at weight 0.5 blends as ANI-001 defines; masked-out bones keep
+  the base layer's pose. (ANI-001, ANI-002)
+* Foot IK set in `OnAnimatorIK` keeps each foot within 3 cm of the surface it
+  targets on 30° slopes and 0.2 m stair risers; look-at IK turns the head at the
+  set weight. (ANI-002)
+* Animation events fire at their clip times for every clip with nonzero blend
+  weight, and report that weight. (ANI-001)
+* Timeline animation tracks drive blend shapes, rendered on the frame they are
+  evaluated. (ANI-001, CIN-001, REN-002)
+* Cinemachine's brain drives the camera through the engine camera API; cuts
+  take effect on the frame of the cut and blends over their stated time.
+  (CIN-001, REN-001)
+* URP Volumes apply by priority and blend distance; ACES tonemapping, bloom,
+  color adjustments, and Bokeh depth of field render as REN-003 defines. Fog
+  modes Exponential Squared and Linear render as defined. (REN-003, REN-006)
+* Terrain renders splat layers with URP Terrain Lit, trees with LOD, billboards,
+  and colliders, and instanced detail grass to its detail distance, waving with
+  terrain wind. (ENV-001)
+* Particle systems collide with world colliders, and the light module and
+  sub-emitters behave as REN-004 defines. (REN-004)
 
-### Audio
+### Audio and video
 
-* Mixer groups Music, Ambience, Effects, Dialogue, and UI; snapshots Explore,
-  Cavern, Cutscene (music −6 dB, effects −10 dB), and Paused (lowpass 900 Hz),
-  with 0.5 s transitions.
-* The waterfall rolls off logarithmically from 3 m to 60 m and braziers
-  linearly from 1 m to 15 m. Reverb zones: Stone Corridor in the ruins hall
-  (8 m to 16 m) and Cave in the cavern (12 m to 30 m).
+* Mixer snapshots transition over their stated time; logarithmic and linear
+  rolloff and reverb zones apply between their minimum and maximum distances.
+  (AUD-001)
+* A VideoPlayer in Material Override and in Camera Near Plane modes plays with
+  its audio routed to an AudioSource or directly; audio and video stay within
+  40 ms; an undecodable clip fires `errorReceived` naming source and codec.
+  (MED-001)
 
 ### Input
 
-* Using a device of the other scheme switches the scheme and the prompt glyphs
-  within one input update. Disconnecting the gamepad in use pauses with
-  "Controller disconnected"; reconnecting it or using the keyboard dismisses it.
-  No action fires twice or is lost across a device change.
-* Rumble on a gamepad without motors returns its explicit status and the hit
-  feedback still plays.
+* Using a device of another control scheme switches the scheme within one
+  input update. No action fires twice or is lost across a device change.
+  (INP-002)
+* Rumble on a gamepad without motors returns its explicit status. (INP-002)
 
-### UI, text, and build
+### UI and text
 
-* Subtitles show the speaker's name and line from the `Subtitles` table within
-  one frame of the line's signal and clear on its end signal. Japanese renders
-  through the fallback font with no missing glyphs. The objective is a Smart
-  String with plural forms per locale.
-* The player loads Addressables content built by unitas, and the same content
-  built by Unity 2022.3 LTS (BLD-005). A corrupt bundle is reported by name and
-  is never loaded partially.
-* Through the editor's MCP interface an agent can skip or seek a cutscene, load a slot, switch locale,
-  teleport to a checkpoint, read hearts, shards, medals, active scene, handles,
-  and path states, and capture frames and audio.
+* TextMeshPro renders Japanese through the fallback font with no missing
+  glyphs. (TXT-001)
+* Localization string tables and Smart Strings with plural forms resolve per
+  locale; a locale change raises the package's change event on the next frame.
+  (LOC-001)
+
+### Player and build
+
+* The player loads Addressables content built by unitas, and the committed
+  Unity-built fixture bundles, as BLD-005 defines. A corrupt bundle is reported
+  by name and is never loaded partially. (BLD-005)
+* Each build report lists scenes, Addressables content, sizes, and the build
+  identifier. (BLD-001)
+
+### Editor and automation
+
+* Stopping play restores edited scene values. (EDT-004)
+* Through the editor's generic MCP commands an agent seeks a `PlayableDirector`,
+  invokes the game's own load and locale methods, sets transforms, reads any
+  component field (hearts, shards, medals, active scene, handle counts, path
+  states), and captures frames and audio. (AUT-002)
 
 ## Presentation and Performance
 
-* Visual checkpoints with unitas-approved references at each quality level:
-  the opening cutscene at 12.5 s, the meadow vista, the ruins hall, the video
-  screen at frame 360, the cavern altar, the escape at 20 s, the subtitle box
-  in all four locales, and the completion panel with medals.
-* Audio checkpoints: dialogue starts within one frame of its Timeline clip;
-  footsteps align with foot contact within one frame; cavern reverb is present
-  at the altar and absent in the meadow; shard pitch steps rise one semitone.
-* Project-declared expectations: 60 frames per second at 1080p at High on the
-  declared reference desktop class and 30 at Low on the declared minimum class;
-  no frame over 50 ms during an area transition at High on the reference
-  class; start to title under 4 s; Continue to control under 6 s. These are the
-  sample's own expectations, not the PRF-002 engine budgets.
+### Visual checkpoints
+
+Each has a unitas-approved reference at each quality level: the opening
+cutscene at 12.5 s, the meadow vista, the ruins hall, the video screen at frame
+360, the cavern altar, the escape at 20 s, the subtitle box in all four
+locales, and the completion panel with medals.
+
+### Audio checkpoints
+
+Dialogue starts within one frame of its Timeline clip; footsteps align with
+foot contact within one frame; cavern reverb is present at the altar and absent
+in the meadow; shard pitch steps rise one semitone.
+
+### Project-declared expectations
+
+60 frames per second at 1080p at High on the declared reference desktop class
+and 30 at Low on the declared minimum class; no frame over 50 ms during an area
+transition at High on the reference class; start to title under 4 s; Continue
+to control under 6 s. Expectations are evaluated only on the declared class;
+other runs record the measurement and report the expectation as unevaluable
+(TST-002). These are the sample's own expectations, not the PRF-002 engine
+budgets.
+
+### PRF-002 measurements
+
+None.
 
 ## Acceptance Scenarios
 
-Every scenario runs in editor play mode, in a packaged player, and headless
-through the editor's MCP interface, unless it says otherwise.
+Outcomes use the TST-002 vocabulary: passed, failed, skipped, unevaluable, and
+awaiting human review. Each perturbation names its mechanism: a TST-002
+replay-stream event, a harness action outside the player, or a
+development-build debug command implemented in the sample's scripts.
 
-* **S1. Open and inspect.** No cache exists. Open the project. Expected: no
-  import errors; the three avatars validate; `Companion.fbx` references
-  `HeroAvatar`; split clips keep loop, bake, and `Footstep` settings; 12 blend
-  shapes exist; reopening yields identical identities. (PRJ-001, PRJ-003,
-  PRJ-004, PRJ-007, SER-002, ANI-002)
-* **S2. Happy path.** New Game, then a recorded input path through all areas
-  and the escape. Expected: the objective reads 0/3 to 3/3, both cutscenes
-  play, each sigil shows the Carry pose at UpperBody weight 1, and the
-  completion panel appears. (RUN-003, ANI-001, PHY-003, CIN-001, UI-001, INP-002)
-* **S3. Opening cutscene and hook.** Play the opening cutscene. Expected: cuts
-  and blends occur at their authored times; six dialogue lines play under the
-  Cutscene snapshot; subtitles appear within one frame of their signals;
-  `JawOpen` follows its curve within 0.01; the Cutscene volume is active only
-  during playback; control returns within one frame of the end signal, the
-  first stone falls 1.5 s after contact, and the replayed sprint reaches the
-  checkpoint in 20 to 30 s. (CIN-001, ANI-001, REN-002, REN-003, AUD-001,
-  LOC-001, RUN-008)
-* **S4. Skip.** Tap Skip, then hold it 1.0 s, in each cutscene and from the
-  pause menu. Expected: a tap only shows the prompt; the hold jumps to 0.1 s
-  before the end, the end signal fires once, and the world state equals a
-  watched cutscene. (CIN-001)
-* **S5. Traversal gym.** In `Gym_Traversal`, cross 20°, 40°, and 50° ramps,
-  0.2, 0.3, and 0.5 m steps, a staircase, a moving platform, and 2.2 m and
-  4.0 m gaps, at 30, 60, and 144 frames per second. Expected: the Simulation
-  rules hold at each rate; feet stay within 3 cm of the surface; one sound and
-  one dust burst per contact. (PHY-003, ANI-002, ANI-001, REN-004, PHY-001)
-* **S6. Fall, respawn, and failure.** Jump into a chasm, then take three hits.
-  Expected: each loss costs one heart and respawns at the checkpoint with the
-  companion warped beside the hero; the last shows the failure panel; Retry
-  restores three hearts with no husk still chasing. (PHY-003, NAV-001, RUN-001)
-* **S7. Streaming and Addressables.** Walk meadow to ruins to cavern.
-  Expected: at most two areas loaded; the active scene and fog change at each
-  boundary; each area's handles reach a reference count of zero after unload;
-  no transition frame exceeds the expectation. With Unity-built bundles
-  substituted, the same walk loads them and gives the same result. A corrupted
-  bundle is reported by name and not loaded. (RUN-005, SER-002, RUN-006,
-  BLD-005)
-* **S8. Save and resume.** In the ruins with the second sigil, two hearts, and
-  3 unbanked shards, save to slot 2, quit, and Continue. Expected: same area,
-  checkpoint, position within 0.01 m, rotation within 0.5°, hearts, banked and
-  unbanked shards, Carry pose, companion position, objective, and cutscenes
-  seen. Saving while airborne is refused. (SAV-001, RUN-009, RUN-005, ANI-001)
-* **S9. Locale change during play.** During the opening cutscene, and in the
-  ruins with a husk chasing, switch through all four locales. Expected:
-  subtitle, objective, menus, and signs update on the next frame; cutscene
-  time, the chase, and game state are unchanged; the locale persists across a
-  relaunch. (LOC-001, TXT-001, ACC-001)
-* **S10. Device changes.** Connect a gamepad, alternate devices, then unplug
-  it mid-run. Expected: scheme and glyphs switch within one input update; the
-  unplug pauses with the prompt; no jump or dodge fires twice or is lost; a
-  motorless gamepad reports rumble status. (INP-002)
-* **S11. Pause and juice.** Pause during a cutscene, the video, and a chase;
-  then take a hit and take a sigil. Expected: Timeline time, video frame,
-  animator states, particles, and agents hold while paused under the Paused
-  snapshot, and dialogue resumes at the same sample; a hit gives 80 ms of
-  hit-stop and the vignette; a sigil gives 0.5 s at time scale 0.3 and the
-  stinger. Reduced motion removes camera shake and landing dips. (RUN-004,
-  AUD-001, CIN-001, MED-001, ACC-001)
-* **S12. Video interlude.** Approach the ruins screen, then watch full screen.
-  Expected: Material Override on the screen with 3D audio at it; full screen
+### S1. Open and inspect
+
+* **Runs in:** headless editor; editor play mode.
+* **Preconditions:** no import cache exists.
+* **Steps:** open the project; reopen it.
+* **Expected:** no import errors; the three avatars validate; `Companion.fbx`
+  references `HeroAvatar`; split clips keep loop, bake, and `Footstep`
+  settings; 12 blend shapes exist; reopening yields identical identities.
+* **Demonstrates:** PRJ-001, PRJ-003, PRJ-004, PRJ-007, SER-002, ANI-002
+
+### S2. Happy path
+
+* **Runs in:** editor play mode; headless editor; desktop packaged players.
+* **Preconditions:** a fresh profile.
+* **Steps:** New Game, then a recorded input path through all areas and the
+  escape.
+* **Expected:** the objective reads 0/3 to 3/3, both cutscenes play, each sigil
+  shows the Carry pose at UpperBody weight 1, and the completion panel appears.
+* **Demonstrates:** RUN-003, ANI-001, PHY-003, CIN-001, UI-001, INP-002
+
+### S3. Opening cutscene and hook
+
+* **Runs in:** editor play mode; headless editor; packaged players.
+* **Preconditions:** a fresh profile.
+* **Steps:** play the opening cutscene, then replay the opening sprint.
+* **Expected:** cuts and blends occur at their authored times; six dialogue
+  lines play under the Cutscene snapshot; subtitles appear within one frame of
+  their signals; `JawOpen` follows its curve within 0.01; the Cutscene volume is
+  active only during playback; control returns within one frame of the end
+  signal, the first stone falls 1.5 s after contact, and the replayed sprint
+  reaches the checkpoint in 20 to 30 s.
+* **Demonstrates:** CIN-001, ANI-001, REN-002, REN-003, AUD-001, LOC-001, RUN-008
+
+### S4. Skip
+
+* **Runs in:** editor play mode; headless editor; packaged players.
+* **Preconditions:** each cutscene's saved state.
+* **Steps:** tap Skip, then hold it 1.0 s, in each cutscene and from the pause
+  menu.
+* **Expected:** a tap only shows the prompt; the hold jumps to 0.1 s before the
+  end, the end signal fires once, and the world state equals a watched
+  cutscene.
+* **Demonstrates:** CIN-001
+
+### S5. Traversal gym
+
+* **Runs in:** editor play mode; headless editor; packaged players.
+* **Preconditions:** `Gym_Traversal` at the start of the course.
+* **Steps:** cross 20°, 40°, and 50° ramps, 0.2, 0.3, and 0.5 m steps, a
+  staircase, a moving platform, and 2.2 m and 4.0 m gaps, at 30, 60, and 144
+  frames per second.
+* **Expected:** the Simulation behavior holds at each rate; feet stay within
+  3 cm of the surface; one sound and one dust burst per contact.
+* **Demonstrates:** PHY-003, ANI-002, ANI-001, REN-004, PHY-001
+
+### S6. Fall, respawn, and failure
+
+* **Runs in:** editor play mode; headless editor; packaged players.
+* **Preconditions:** meadow at the start of the opening sprint.
+* **Steps:** jump into a chasm, then take three hits.
+* **Expected:** each loss costs one heart and respawns at the checkpoint with
+  the companion warped beside the hero; the last shows the failure panel; Retry
+  restores three hearts with no husk still chasing.
+* **Demonstrates:** PHY-003, NAV-001, RUN-001
+
+### S7. Streaming and Addressables
+
+* **Runs in:** editor play mode; headless editor; packaged players.
+* **Preconditions:** meadow at the start of the opening sprint.
+* **Steps:** walk meadow to ruins to cavern. Repeat with the committed
+  Unity-built fixture bundles substituted. Then corrupt one bundle (a harness
+  action on the build's content folder) and walk again.
+* **Expected:** at most two areas loaded; the active scene and fog change at
+  each boundary; each area's handles reach a reference count of zero after
+  unload; no transition frame exceeds the expectation on the declared class.
+  The Unity-built bundles load and give the same result. The corrupted bundle
+  is reported by name and not loaded.
+* **Demonstrates:** RUN-005, SER-002, RUN-006, BLD-005
+
+### S8. Save and resume
+
+* **Runs in:** packaged players; headless editor with a play-session restart.
+* **Preconditions:** ruins with the second sigil, two hearts, and 3 unbanked
+  shards.
+* **Steps:** save to slot 2, then quit and relaunch (a harness action that ends
+  and restarts the player process, or, headless, ends the play session and
+  starts a new one with the same storage root), and Continue. Try to save while
+  airborne.
+* **Expected:** same area, checkpoint, position within 0.01 m, rotation within
+  0.5°, hearts, banked and unbanked shards, Carry pose, companion position,
+  objective, and cutscenes seen. Saving while airborne is refused.
+* **Demonstrates:** SAV-001, RUN-009, RUN-005, ANI-001
+
+### S9. Locale change during play
+
+* **Runs in:** editor play mode; headless editor; packaged players.
+* **Preconditions:** the opening cutscene, and the cavern with one husk chasing.
+* **Steps:** in each state, switch through all four locales; relaunch.
+* **Expected:** subtitle, objective, menus, and signs update on the next frame;
+  cutscene time, the chase, and game state are unchanged; the locale persists
+  across the relaunch.
+* **Demonstrates:** LOC-001, TXT-001, ACC-001
+
+### S10. Device changes
+
+* **Runs in:** editor play mode; headless editor; packaged players.
+* **Preconditions:** meadow in play with keyboard and mouse.
+* **Steps:** add a gamepad, alternate devices, then remove it mid-run, through
+  device-addition and device-removal events in the replay stream. Repeat with a
+  gamepad that reports no motors.
+* **Expected:** scheme and glyphs switch within one input update; the removal
+  pauses with the prompt; no jump or dodge fires twice or is lost; the
+  motorless gamepad reports rumble status and the hit feedback still plays.
+* **Demonstrates:** INP-002
+
+### S11. Pause and juice
+
+* **Runs in:** editor play mode; headless editor; packaged players.
+* **Preconditions:** each relevant saved state.
+* **Steps:** pause during a cutscene, the video, and a chase; then take a hit
+  and take a sigil. Repeat with reduced motion on.
+* **Expected:** Timeline time, video frame, animator states, particles, and
+  agents hold while paused under the Paused snapshot, and dialogue resumes at
+  the same sample; a hit gives 80 ms of hit-stop and the vignette; a sigil
+  gives 0.5 s at time scale 0.3 and the stinger. Reduced motion removes camera
+  shake and landing dips.
+* **Demonstrates:** RUN-004, AUD-001, CIN-001, MED-001, ACC-001
+
+### S12. Video interlude
+
+* **Runs in:** editor play mode; headless editor; packaged players.
+* **Preconditions:** ruins beside the video screen.
+* **Steps:** approach the ruins screen, then watch full screen. Replace the
+  clip with one in a codec the target cannot decode (a development-build debug
+  command implemented in the sample's scripts).
+* **Expected:** Material Override on the screen with 3D audio at it; full screen
   in Camera Near Plane with 2D audio; at each sync marker (a white flash and a
-  1 kHz beep every 5 s) audio and video align within 40 ms. An undecodable
-  codec fires `errorReceived` naming source and codec, and the screen shows
-  "Signal lost", never a silent black frame. (MED-001, AUD-001)
-* **S13. Navigation and stealth.** Lead the companion across the gap and down
-  the ledge; walk past a husk at 5 m, then run past at 8 m; stand in
-  Sanctuary. Expected: the companion uses both links with `isOnOffMeshLink`
-  true; walking is unheard and running starts a chase; the husk crosses links
-  with its arc; its path to Sanctuary is partial and it stops at the edge.
-  (NAV-001)
-* **S14. Damaged and older saves.** Load a truncated slot, a future-version
-  slot, and a version 1 slot. Expected: the truncated slot shows Damaged; the
-  future version is reported incompatible and left unchanged; version 1
-  migrates to version 2 with progress kept and the migration reported.
-  (SAV-001, RUN-009)
-* **S15. Visual and audio checkpoints.** Capture every checkpoint at Low,
-  Medium, and High. Expected: each matches its reference within tolerance;
-  tree, grass, and shadow distances follow the quality level; reverb and
-  rolloff match the audio checkpoints. (REN-002, REN-003, REN-004, REN-006,
-  ENV-001, AUD-001, TST-002)
-* **S16. Equivalence, edit, and package.** Run S2 in the editor and in a
-  player per desktop target; in the editor, move a platform during play and
-  stop. Expected: identical checkpoint results; the platform returns to its
-  edited position; each build report lists scenes, Addressables content,
-  sizes, and the build identifier. (BLD-001, EDT-004, SER-001)
-* **S17. Shard risk, medals, and unlocks.** Collect 5 shards, die before a
-  checkpoint, recover the cache, then die again holding 2 new shards before
-  their cache. Finish a replayed run under 15 minutes with no heart lost.
-  Expected: the cache holds exactly 5; the second death loses the 2; banking
-  24 shards gives six hearts; the panel awards Gold and Untouched; records,
-  medals, Chapters, and Hollow mode persist across a relaunch; Hollow mode
-  starts with one heart and husks 20% faster. (SAV-001, UI-001, AUD-001)
+  1 kHz beep every 5 s) audio and video align within 40 ms. The undecodable
+  clip fires `errorReceived` naming source and codec, and the screen shows
+  "Signal lost", never a silent black frame.
+* **Demonstrates:** MED-001, AUD-001
+
+### S13. Navigation and stealth
+
+* **Runs in:** editor play mode; headless editor; packaged players.
+* **Preconditions:** ruins with the companion beside the gap.
+* **Steps:** lead the companion across the gap and down the ledge; walk past a
+  husk at 5 m, then run past at 8 m; stand in Sanctuary.
+* **Expected:** the companion uses both links with `isOnOffMeshLink` true;
+  walking is unheard and running starts a chase; the husk crosses links with
+  its arc; its path to Sanctuary is partial and it stops at the edge.
+* **Demonstrates:** NAV-001
+
+### S14. Damaged and older saves
+
+* **Runs in:** editor play mode; headless editor; packaged players.
+* **Preconditions:** the committed fixture slots installed in the storage root.
+* **Steps:** load the truncated slot, the future-version slot, and the version 1
+  slot.
+* **Expected:** the truncated slot shows Damaged; the future version is reported
+  incompatible and left unchanged; version 1 migrates to version 2 with
+  progress kept and the migration reported.
+* **Demonstrates:** SAV-001, RUN-009
+
+### S15. Visual and audio checkpoints
+
+* **Runs in:** headless editor; packaged players.
+* **Preconditions:** each saved state needed by a checkpoint.
+* **Steps:** capture every checkpoint at Low, Medium, and High.
+* **Expected:** each matches its reference within tolerance; tree, grass, and
+  shadow distances follow the quality level; reverb and rolloff match the audio
+  checkpoints.
+* **Demonstrates:** REN-002, REN-003, REN-004, REN-006, ENV-001, AUD-001, TST-002
+
+### S16. Equivalence, edit, and package
+
+* **Runs in:** editor play mode (visual and headless); headless editor (build);
+  desktop packaged players.
+* **Preconditions:** none.
+* **Steps:** run S2 in the editor and in a player per desktop target; in the
+  editor, move a platform during play and stop.
+* **Expected:** identical checkpoint results; the platform returns to its edited
+  position; each build report lists scenes, Addressables content, sizes, and
+  the build identifier.
+* **Demonstrates:** BLD-001, EDT-004, SER-001
+
+### S17. Shard risk, medals, and unlocks
+
+* **Runs in:** editor play mode; headless editor; packaged players.
+* **Preconditions:** a fresh profile.
+* **Steps:** collect 5 shards, die before a checkpoint, recover the cache, then
+  die again holding 2 new shards before their cache. Finish a replayed run
+  under 15 minutes with no heart lost. Relaunch, then start Hollow mode.
+* **Expected:** the cache holds exactly 5; the second death loses the 2;
+  banking 24 shards gives six hearts; the panel awards Gold and Untouched;
+  records, medals, Chapters, and Hollow mode persist across the relaunch;
+  Hollow mode starts with one heart and husks 20% faster.
+* **Demonstrates:** SAV-001, UI-001, AUD-001
 
 ## Manual Playtest Guidance
 
-A person judges whether the opening sprint grips within 30 seconds, whether
-running jumps and dodges feel responsive and fair, whether shard routes tempt
-without feeling cheap, whether the cavern stealth and the escape feel tense,
-and whether the medals invite a second run. They also judge camera comfort,
-foot placement, lip movement against dialogue, the mix in each area, and
-subtitle readability. A headless run reports these checkpoints as awaiting
-human review, never as passed.
+A person judges the following, and a headless run reports these checkpoints as
+awaiting human review, never as passed:
+
+* Whether the opening sprint grips within 30 seconds.
+* Whether running jumps and dodges feel responsive and fair.
+* Whether shard routes tempt without feeling cheap.
+* Whether the cavern stealth and the escape feel tense.
+* Whether the medals invite a second run.
+* Camera comfort, foot placement, lip movement against dialogue, the mix in
+  each area, and subtitle readability.
 
 ## Agent Authoring Change Requests
 
-Add a pressure plate in the ruins that opens a side gate while the hero or the
-companion stands on it, with a hint line in all four locales. Its scenario
-proves that the gate opens and closes, the companion's path uses it, and the
-hint shows in each locale, with a test of the plate's state. A second request
-adds a husk variant that throws a slow projectile, with a scenario proving that
-the projectile costs one heart and that respawn and shard caches still work.
+### CR1. Pressure plate
+
+* **Request:** add a pressure plate in the ruins that opens a side gate while
+  the hero or the companion stands on it, with a hint line in all four locales.
+* **Acceptance scenario:** the gate opens while either character stands on the
+  plate and closes when both leave; the companion's path uses the open gate;
+  the hint shows in each locale.
+* **Test:** a test of the plate's state.
+
+### CR2. Projectile husk
+
+* **Request:** add a husk variant that throws a slow projectile.
+* **Acceptance scenario:** a projectile hit costs one heart, and respawn and
+  shard caches still behave as in S6 and S17.
+* **Test:** a test that counts hearts lost per projectile hit.
 
 ## Accessibility
 
-Every action works with the keyboard alone and the gamepad alone. Subtitles
-are on by default, have three sizes and a background box, and name the
-speaker in text. Husk attacks telegraph by pose, sound, and color together.
-Reduced motion removes camera shake, landing dips, and cutscene depth of
-field. Run can be held or toggled, and cutscenes can be skipped.
+* Every action works with the keyboard alone and the gamepad alone (S10).
+* Subtitles are on by default, have three sizes and a background box, and name
+  the speaker in text (S9).
+* Husk attacks telegraph by pose, sound, and color together (S13).
+* Reduced motion removes camera shake, landing dips, and cutscene depth of
+  field (S11).
+* Run can be held or toggled, and cutscenes can be skipped (S4).
 
 ## Saved and Reproducible States
 
-* Meadow at the start of the opening sprint.
-* Ruins with the second sigil, beside the video screen, 3 unbanked shards.
-* Cavern with two sigils placed and one husk chasing; the escape at its start.
-* `Gym_Traversal` at the start of the course.
-* Slots: valid version 2, version 1, truncated, and future version.
+| State | How it is reached | Used by |
+|---|---|---|
+| Meadow at the start of the opening sprint | save file | S6, S7 |
+| Ruins with the second sigil, beside the video screen, 3 unbanked shards | save file | S8, S12 |
+| Ruins with the companion beside the gap | save file | S13 |
+| Cavern with two sigils placed and one husk chasing | save file | S9, S11 |
+| The escape at its start | save file | S15 |
+| `Gym_Traversal` at the start of the course | scene | S5 |
+| Slots: valid version 2, version 1, truncated, and future version | committed fixture files | S14 |
 
 ## Known Limitations and Unsupported Conditions
 
-* None that come from the engine. The `Archive.mp4` interlude plays on every
-  declared target. unitas provides H.264 and AAC decoding wherever the platform
-  does not.
-* Any behavior this document requires that is not demonstrated is reported
-  with its real compatibility state, as a defect to fix.
+None. Any behavior this document requires that is not demonstrated is reported
+with its real compatibility state, as a defect to fix.
 
 ## Acceptance Outcomes
 

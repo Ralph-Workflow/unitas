@@ -125,57 +125,65 @@ specifications and the compatibility benchmarks.
 
 ## Sample document structure
 
-Every game document uses these sections, in this order:
+Every game document uses exactly these headings, in this order. A subsection
+with no content keeps its heading and reads "None." or "No requirements beyond
+the domain documents."
 
-1. **Overview.** The player's goal, session length, tone, and the claim that
-   the game is original unitas content.
-2. **Targets and input modes.** The declared player targets, the render
-   pipelines used (Built-in, URP, HDRP, or a custom scriptable render
-   pipeline, with version line), and every supported input mode.
-3. **Game design.** The core loop, a controls table for every input mode,
-   areas or levels, objectives, scoring or progression, the complete start,
-   play, pause, completion, failure, restart, and exit flow, and the
-   settings the player can change. It contains a **What makes it fun**
-   subsection, which covers:
-   * the hook: what makes the first 30 seconds compelling
-   * the mastery curve: the skills that a better player shows
-   * the risk-and-reward decisions
-   * variety and escalation across the session
-   * game feel and feedback ("juice": responsive controls, hit and collect
-     feedback, camera, sound, and particles)
-   * the reasons to replay: medals, records, ghosts, and unlocks
-
-   Every element is concrete enough to test. Its scenarios observe the
-   mechanics, and its manual playtest guidance judges whether it is fun.
-4. **Content.** Scenes, prefabs and variants, models, textures, audio,
-   fonts, video, and data assets, each with the source format that is
-   imported and the import settings that matter. Also the Unity packages and
-   their version lines from CMP-002.
-5. **Feature coverage.** A table mapping each catalog identifier the game
-   exercises to the concrete behavior it exercises and the scenarios that
-   observe it.
-6. **Engine behavior this game depends on.** The observable behavior
-   required, grouped by area: scripting and runtime, project and content,
-   simulation, rendering and animation, audio, input, UI and text, player
-   and build, and editor and automation. Each item is specific enough to test.
-7. **Presentation and performance.** The visual and audio checkpoints with
-   unitas-approved references, and the project-declared performance
-   expectations per target class. These expectations are kept separate from
-   the PRF-002 engine budgets.
-8. **Acceptance scenarios.** Numbered scenarios, each with preconditions,
-   steps, expected observations, the catalog identifiers it demonstrates,
-   and where it runs (editor play mode, player, headless through MCP). Each
-   game has at least one happy-path scenario, at least one failure or
-   recovery scenario, and scenarios for its listed edge cases.
-9. **Manual playtest guidance.** The behavior that requires human judgment,
-   and how a headless run reports it.
-10. **Agent authoring change requests.** At least one change request with its
-    acceptance scenario, for the Agent Authoring Benchmark.
-11. **Accessibility.**
-12. **Saved and reproducible states** for reaching important test
-    situations quickly.
-13. **Known limitations and unsupported conditions.**
-14. **Acceptance outcomes.** Bullets, each naming the catalog identifiers it
+1. **`# Sample N: <Genre> ("<Game name>")`**
+2. **Overview.** The player's goal, session length, and tone; the claim that
+   the game is original unitas content; the sentence "It is one of the
+   demonstrations of …", naming the specifications that own those features'
+   acceptance; and the SMP-001 ownership sentence.
+3. **Targets and Input Modes**, with the subsections Targets (automated
+   targets, capability-reported targets, editor play mode, and the headless
+   editor), Render pipelines (each with its version line), and Input modes and
+   devices, which ends with the sentence: "Headless runs use synthetic devices
+   marked synthetic; haptic and feel checkpoints need physical hardware and are
+   otherwise unevaluable."
+4. **Game Design**, with the subsections Core loop and flow (start, play,
+   pause, completion, failure, restart, and exit), Rules and mechanics, Levels
+   and progression, Scoring, failure, and edge rules, Controls (one column per
+   input mode), Pause, focus, and lifecycle, Settings, and What makes it fun
+   (the fixed labels Hook, Mastery curve, Risk and reward, Variety and
+   escalation, Game feel, and Replay). Every game rule lives here and is
+   implemented by the sample's own scripts.
+5. **Content**, with the subsections Assets (Asset | Source format | Import
+   settings that matter), Packages (version lines from CMP-002, resolved from
+   their registry and never vendored), Save data (formats, versions, and
+   locations), and Licences and provenance (a pointer to
+   `Licenses/content-licenses.json`).
+6. **Feature Coverage.** ID | Behavior | Scenarios, with one ID per row.
+7. **Engine Behavior This Game Depends On.** It opens with: "Only engine and
+   package behavior, each tied to a catalog ID. Game rules are defined under
+   Game Design and implemented by the sample's own scripts; the engine contains
+   no code specific to this game. Package behavior comes from the package's own
+   code at the pinned version line, compiled and run unmodified (CMP-002).
+   Agents reach the game only through the editor's generic MCP commands, with
+   no game-specific command." Its subsections are Scripting and runtime;
+   Project and content; Simulation; Rendering and animation; Audio and video;
+   Input; UI and text; Player and build; and Editor and automation. An optional
+   Networking, XR, or Platform and permissions subsection follows the nine.
+8. **Presentation and Performance**, with the subsections Visual checkpoints,
+   Audio checkpoints, Project-declared expectations (per target class,
+   evaluated only on the declared class, never PRF-002 budgets), and PRF-002
+   measurements (only for samples that take them).
+9. **Acceptance Scenarios.** A one-paragraph preamble gives the TST-002 outcome
+   vocabulary and the perturbation mechanisms: a replay-stream event, a harness
+   action outside the player, or a development-build debug command. Each
+   scenario is a `### Sn. <Name>` heading with the fields Runs in,
+   Preconditions, Steps, Expected, and Demonstrates. S1 is Open and inspect and
+   S2 is Happy path. Each game has at least one failure or recovery scenario and
+   scenarios for its listed edge cases.
+10. **Manual Playtest Guidance.** Behavior that needs human judgment, which a
+    headless run reports as awaiting human review (TST-002).
+11. **Agent Authoring Change Requests.** At least one `### CRn. <Name>`, each
+    with Request, Acceptance scenario, and Test.
+12. **Accessibility.** Each item names the setting or behavior and the scenario
+    that observes it.
+13. **Saved and Reproducible States.** State | How it is reached | Used by.
+14. **Known Limitations and Unsupported Conditions.** Bullets or "None.", then
+    the fixed sentence about reporting the real compatibility state.
+15. **Acceptance Outcomes.** Each outcome names the catalog identifiers it
     demonstrates.
 
 ## Feature coverage of the suite
@@ -256,13 +264,13 @@ table is corrected.
 | PRD-001 | — | W10 |
 | PRD-002 | 10 | — |
 | LOC-001 | 3, 5 | — |
-| ACC-001 | 1, 3, 4, 5, 6, 7, 8, 9, 11, 12 | — |
+| ACC-001 | 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12 | — |
 | SAV-001 | 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12 | — |
 | DIA-001 | 5, 8, 11 | — |
 | DIA-002 | — | W6 |
 | DIA-003 | 10 | — |
-| PRF-001 | 4, 8, 10, 11, 12 | — |
-| PRF-002 | 7, 8 | — |
+| PRF-001 | 4, 7, 8, 10, 11, 12 | — |
+| PRF-002 | 8 | — |
 | TST-001 | — | W9 |
 | TST-002 | 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12 | — |
 | TST-003 | 7 | W6 |

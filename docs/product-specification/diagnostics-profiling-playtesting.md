@@ -352,7 +352,9 @@ A result records:
 
 * setup success or failure;
 * steps performed and their timing;
-* checkpoints passed, failed, skipped, or unevaluable;
+* checkpoints passed, failed, skipped, unevaluable, or awaiting human review,
+  the last for a checkpoint that only a person's judgment can decide, which
+  stays open until a person records a verdict;
 * expected and observed values;
 * relevant messages, exceptions, captures, and runtime state;
 * environmental differences and interventions;
