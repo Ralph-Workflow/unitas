@@ -2,6 +2,7 @@ use super::{
     ANIMATOR_STATE_INFO_SIZE, EntityId, RuntimeState, decode_controller_binary, read_runtime_bytes,
     with_runtime_state,
 };
+use crate::animation::{AvatarIkGoal, AvatarIkHint, string_to_hash};
 
 fn read_animator_name(
     state: &mut RuntimeState,
@@ -665,5 +666,732 @@ pub extern "C" fn unitas_runtime_animator_drain_fired_events(handle: u64) -> i32
         Ok(code) => code,
         Err(code) => code,
     }
+}
+}
+
+fn animator_result_to_code(state: &mut RuntimeState, result: Result<(), String>) -> i32 {
+    match result {
+        Ok(()) => {
+            state.clear_error();
+            0
+        }
+        Err(message) => {
+            state.set_error(&message);
+            -4
+        }
+    }
+}
+
+ffi_export! {
+pub extern "C" fn unitas_runtime_animator_play(
+    handle: u64,
+    entity: u64,
+    name_address: u64,
+    name_length: u64,
+) -> i32 {
+    let Ok(length) = usize::try_from(name_length) else {
+        return -2;
+    };
+    match with_runtime_state(handle, |state| {
+        if entity == 0 {
+            state.set_error("invalid entity id");
+            return -2;
+        }
+        let name = match read_animator_name(state, name_address, length) {
+            Ok(name) => name,
+            Err(code) => return code,
+        };
+        let result = state
+            .runtime
+            .animation_mut()
+            .play_state(EntityId::new(entity), &name);
+        animator_result_to_code(state, result)
+    }) {
+        Ok(code) => code,
+        Err(code) => code,
+    }
+}
+}
+
+ffi_export! {
+pub extern "C" fn unitas_runtime_animator_play_hash(handle: u64, entity: u64, hash: i32) -> i32 {
+    match with_runtime_state(handle, |state| {
+        if entity == 0 {
+            state.set_error("invalid entity id");
+            return -2;
+        }
+        let result = state
+            .runtime
+            .animation_mut()
+            .play_state_hash(EntityId::new(entity), hash);
+        animator_result_to_code(state, result)
+    }) {
+        Ok(code) => code,
+        Err(code) => code,
+    }
+}
+}
+
+ffi_export! {
+pub extern "C" fn unitas_runtime_animator_play_queued(
+    handle: u64,
+    entity: u64,
+    name_address: u64,
+    name_length: u64,
+) -> i32 {
+    let Ok(length) = usize::try_from(name_length) else {
+        return -2;
+    };
+    match with_runtime_state(handle, |state| {
+        if entity == 0 {
+            state.set_error("invalid entity id");
+            return -2;
+        }
+        let name = match read_animator_name(state, name_address, length) {
+            Ok(name) => name,
+            Err(code) => return code,
+        };
+        let result = state
+            .runtime
+            .animation_mut()
+            .play_queued_state(EntityId::new(entity), &name);
+        animator_result_to_code(state, result)
+    }) {
+        Ok(code) => code,
+        Err(code) => code,
+    }
+}
+}
+
+ffi_export! {
+pub extern "C" fn unitas_runtime_animator_cross_fade(
+    handle: u64,
+    entity: u64,
+    name_address: u64,
+    name_length: u64,
+    duration: f32,
+) -> i32 {
+    let Ok(length) = usize::try_from(name_length) else {
+        return -2;
+    };
+    match with_runtime_state(handle, |state| {
+        if entity == 0 {
+            state.set_error("invalid entity id");
+            return -2;
+        }
+        let name = match read_animator_name(state, name_address, length) {
+            Ok(name) => name,
+            Err(code) => return code,
+        };
+        let result = state
+            .runtime
+            .animation_mut()
+            .cross_fade_state(EntityId::new(entity), &name, duration);
+        animator_result_to_code(state, result)
+    }) {
+        Ok(code) => code,
+        Err(code) => code,
+    }
+}
+}
+
+ffi_export! {
+pub extern "C" fn unitas_runtime_animator_cross_fade_hash(
+    handle: u64,
+    entity: u64,
+    hash: i32,
+    duration: f32,
+) -> i32 {
+    match with_runtime_state(handle, |state| {
+        if entity == 0 {
+            state.set_error("invalid entity id");
+            return -2;
+        }
+        let result = state
+            .runtime
+            .animation_mut()
+            .cross_fade_state_hash(EntityId::new(entity), hash, duration);
+        animator_result_to_code(state, result)
+    }) {
+        Ok(code) => code,
+        Err(code) => code,
+    }
+}
+}
+
+ffi_export! {
+pub extern "C" fn unitas_runtime_animator_set_apply_root_motion(
+    handle: u64,
+    entity: u64,
+    apply: u32,
+) -> i32 {
+    match with_runtime_state(handle, |state| {
+        if entity == 0 {
+            state.set_error("invalid entity id");
+            return -2;
+        }
+        let result = state
+            .runtime
+            .animation_mut()
+            .set_apply_root_motion(EntityId::new(entity), apply != 0);
+        animator_result_to_code(state, result)
+    }) {
+        Ok(code) => code,
+        Err(code) => code,
+    }
+}
+}
+
+ffi_export! {
+pub extern "C" fn unitas_runtime_animator_get_apply_root_motion(
+    handle: u64,
+    entity: u64,
+    out_buffer: u64,
+) -> i32 {
+    match with_runtime_state(handle, |state| {
+        if !animator_out_buffer_ready(state, out_buffer, 4) {
+            state.set_error("buffer address mismatch");
+            return -2;
+        }
+        if entity == 0 {
+            state.set_error("invalid entity id");
+            return -2;
+        }
+        match state.runtime.animation().apply_root_motion(EntityId::new(entity)) {
+            Some(apply) => {
+                state.path_buffer[0..4].copy_from_slice(&u32::from(apply).to_le_bytes());
+                state.clear_error();
+                0
+            }
+            None => {
+                state.set_error("animator not found");
+                -4
+            }
+        }
+    }) {
+        Ok(code) => code,
+        Err(code) => code,
+    }
+}
+}
+
+ffi_export! {
+pub extern "C" fn unitas_runtime_animator_root_motion(
+    handle: u64,
+    entity: u64,
+    out_buffer: u64,
+) -> i32 {
+    match with_runtime_state(handle, |state| {
+        if !animator_out_buffer_ready(state, out_buffer, 28) {
+            state.set_error("buffer address mismatch");
+            return -2;
+        }
+        if entity == 0 {
+            state.set_error("invalid entity id");
+            return -2;
+        }
+        match state.runtime.animation().root_motion(EntityId::new(entity)) {
+            Some(motion) => {
+                let mut bytes = [0u8; 28];
+                bytes[0..4].copy_from_slice(&motion.delta_position[0].to_le_bytes());
+                bytes[4..8].copy_from_slice(&motion.delta_position[1].to_le_bytes());
+                bytes[8..12].copy_from_slice(&motion.delta_position[2].to_le_bytes());
+                bytes[12..16].copy_from_slice(&motion.delta_rotation[0].to_le_bytes());
+                bytes[16..20].copy_from_slice(&motion.delta_rotation[1].to_le_bytes());
+                bytes[20..24].copy_from_slice(&motion.delta_rotation[2].to_le_bytes());
+                bytes[24..28].copy_from_slice(&motion.delta_rotation[3].to_le_bytes());
+                state.path_buffer[0..28].copy_from_slice(&bytes);
+                state.clear_error();
+                0
+            }
+            None => {
+                state.set_error("animator not found");
+                -4
+            }
+        }
+    }) {
+        Ok(code) => code,
+        Err(code) => code,
+    }
+}
+}
+
+ffi_export! {
+pub extern "C" fn unitas_runtime_animator_set_ik_position(
+    handle: u64,
+    entity: u64,
+    goal: u32,
+    x: f32,
+    y: f32,
+    z: f32,
+) -> i32 {
+    let Some(goal) = AvatarIkGoal::from_u32(goal) else {
+        return -2;
+    };
+    match with_runtime_state(handle, |state| {
+        if entity == 0 {
+            state.set_error("invalid entity id");
+            return -2;
+        }
+        let result = state
+            .runtime
+            .animation_mut()
+            .set_ik_position(EntityId::new(entity), goal, [x, y, z]);
+        animator_result_to_code(state, result)
+    }) {
+        Ok(code) => code,
+        Err(code) => code,
+    }
+}
+}
+
+ffi_export! {
+pub extern "C" fn unitas_runtime_animator_get_ik_position(
+    handle: u64,
+    entity: u64,
+    goal: u32,
+    out_buffer: u64,
+) -> i32 {
+    let Some(goal) = AvatarIkGoal::from_u32(goal) else {
+        return -2;
+    };
+    match with_runtime_state(handle, |state| {
+        if !animator_out_buffer_ready(state, out_buffer, 12) {
+            state.set_error("buffer address mismatch");
+            return -2;
+        }
+        if entity == 0 {
+            state.set_error("invalid entity id");
+            return -2;
+        }
+        match state.runtime.animation().ik_position(EntityId::new(entity), goal) {
+            Some(pos) => {
+                state.path_buffer[0..4].copy_from_slice(&pos[0].to_le_bytes());
+                state.path_buffer[4..8].copy_from_slice(&pos[1].to_le_bytes());
+                state.path_buffer[8..12].copy_from_slice(&pos[2].to_le_bytes());
+                state.clear_error();
+                0
+            }
+            None => {
+                state.set_error("animator not found");
+                -4
+            }
+        }
+    }) {
+        Ok(code) => code,
+        Err(code) => code,
+    }
+}
+}
+
+ffi_export! {
+pub extern "C" fn unitas_runtime_animator_set_ik_position_weight(
+    handle: u64,
+    entity: u64,
+    goal: u32,
+    weight: f32,
+) -> i32 {
+    let Some(goal) = AvatarIkGoal::from_u32(goal) else {
+        return -2;
+    };
+    match with_runtime_state(handle, |state| {
+        if entity == 0 {
+            state.set_error("invalid entity id");
+            return -2;
+        }
+        let result = state
+            .runtime
+            .animation_mut()
+            .set_ik_position_weight(EntityId::new(entity), goal, weight);
+        animator_result_to_code(state, result)
+    }) {
+        Ok(code) => code,
+        Err(code) => code,
+    }
+}
+}
+
+ffi_export! {
+pub extern "C" fn unitas_runtime_animator_get_ik_position_weight(
+    handle: u64,
+    entity: u64,
+    goal: u32,
+    out_buffer: u64,
+) -> i32 {
+    let Some(goal) = AvatarIkGoal::from_u32(goal) else {
+        return -2;
+    };
+    match with_runtime_state(handle, |state| {
+        if !animator_out_buffer_ready(state, out_buffer, 4) {
+            state.set_error("buffer address mismatch");
+            return -2;
+        }
+        if entity == 0 {
+            state.set_error("invalid entity id");
+            return -2;
+        }
+        match state
+            .runtime
+            .animation()
+            .ik_position_weight(EntityId::new(entity), goal)
+        {
+            Some(weight) => {
+                state.path_buffer[0..4].copy_from_slice(&weight.to_le_bytes());
+                state.clear_error();
+                0
+            }
+            None => {
+                state.set_error("animator not found");
+                -4
+            }
+        }
+    }) {
+        Ok(code) => code,
+        Err(code) => code,
+    }
+}
+}
+
+ffi_export! {
+pub extern "C" fn unitas_runtime_animator_set_ik_rotation(
+    handle: u64,
+    entity: u64,
+    goal: u32,
+    x: f32,
+    y: f32,
+    z: f32,
+    w: f32,
+) -> i32 {
+    let Some(goal) = AvatarIkGoal::from_u32(goal) else {
+        return -2;
+    };
+    match with_runtime_state(handle, |state| {
+        if entity == 0 {
+            state.set_error("invalid entity id");
+            return -2;
+        }
+        let result = state
+            .runtime
+            .animation_mut()
+            .set_ik_rotation(EntityId::new(entity), goal, [x, y, z, w]);
+        animator_result_to_code(state, result)
+    }) {
+        Ok(code) => code,
+        Err(code) => code,
+    }
+}
+}
+
+ffi_export! {
+pub extern "C" fn unitas_runtime_animator_get_ik_rotation(
+    handle: u64,
+    entity: u64,
+    goal: u32,
+    out_buffer: u64,
+) -> i32 {
+    let Some(goal) = AvatarIkGoal::from_u32(goal) else {
+        return -2;
+    };
+    match with_runtime_state(handle, |state| {
+        if !animator_out_buffer_ready(state, out_buffer, 16) {
+            state.set_error("buffer address mismatch");
+            return -2;
+        }
+        if entity == 0 {
+            state.set_error("invalid entity id");
+            return -2;
+        }
+        match state.runtime.animation().ik_rotation(EntityId::new(entity), goal) {
+            Some(rot) => {
+                state.path_buffer[0..4].copy_from_slice(&rot[0].to_le_bytes());
+                state.path_buffer[4..8].copy_from_slice(&rot[1].to_le_bytes());
+                state.path_buffer[8..12].copy_from_slice(&rot[2].to_le_bytes());
+                state.path_buffer[12..16].copy_from_slice(&rot[3].to_le_bytes());
+                state.clear_error();
+                0
+            }
+            None => {
+                state.set_error("animator not found");
+                -4
+            }
+        }
+    }) {
+        Ok(code) => code,
+        Err(code) => code,
+    }
+}
+}
+
+ffi_export! {
+pub extern "C" fn unitas_runtime_animator_set_ik_rotation_weight(
+    handle: u64,
+    entity: u64,
+    goal: u32,
+    weight: f32,
+) -> i32 {
+    let Some(goal) = AvatarIkGoal::from_u32(goal) else {
+        return -2;
+    };
+    match with_runtime_state(handle, |state| {
+        if entity == 0 {
+            state.set_error("invalid entity id");
+            return -2;
+        }
+        let result = state
+            .runtime
+            .animation_mut()
+            .set_ik_rotation_weight(EntityId::new(entity), goal, weight);
+        animator_result_to_code(state, result)
+    }) {
+        Ok(code) => code,
+        Err(code) => code,
+    }
+}
+}
+
+ffi_export! {
+pub extern "C" fn unitas_runtime_animator_get_ik_rotation_weight(
+    handle: u64,
+    entity: u64,
+    goal: u32,
+    out_buffer: u64,
+) -> i32 {
+    let Some(goal) = AvatarIkGoal::from_u32(goal) else {
+        return -2;
+    };
+    match with_runtime_state(handle, |state| {
+        if !animator_out_buffer_ready(state, out_buffer, 4) {
+            state.set_error("buffer address mismatch");
+            return -2;
+        }
+        if entity == 0 {
+            state.set_error("invalid entity id");
+            return -2;
+        }
+        match state
+            .runtime
+            .animation()
+            .ik_rotation_weight(EntityId::new(entity), goal)
+        {
+            Some(weight) => {
+                state.path_buffer[0..4].copy_from_slice(&weight.to_le_bytes());
+                state.clear_error();
+                0
+            }
+            None => {
+                state.set_error("animator not found");
+                -4
+            }
+        }
+    }) {
+        Ok(code) => code,
+        Err(code) => code,
+    }
+}
+}
+
+ffi_export! {
+pub extern "C" fn unitas_runtime_animator_set_ik_hint_position(
+    handle: u64,
+    entity: u64,
+    hint: u32,
+    x: f32,
+    y: f32,
+    z: f32,
+) -> i32 {
+    let Some(hint) = AvatarIkHint::from_u32(hint) else {
+        return -2;
+    };
+    match with_runtime_state(handle, |state| {
+        if entity == 0 {
+            state.set_error("invalid entity id");
+            return -2;
+        }
+        let result = state
+            .runtime
+            .animation_mut()
+            .set_ik_hint_position(EntityId::new(entity), hint, [x, y, z]);
+        animator_result_to_code(state, result)
+    }) {
+        Ok(code) => code,
+        Err(code) => code,
+    }
+}
+}
+
+ffi_export! {
+pub extern "C" fn unitas_runtime_animator_get_ik_hint_position(
+    handle: u64,
+    entity: u64,
+    hint: u32,
+    out_buffer: u64,
+) -> i32 {
+    let Some(hint) = AvatarIkHint::from_u32(hint) else {
+        return -2;
+    };
+    match with_runtime_state(handle, |state| {
+        if !animator_out_buffer_ready(state, out_buffer, 12) {
+            state.set_error("buffer address mismatch");
+            return -2;
+        }
+        if entity == 0 {
+            state.set_error("invalid entity id");
+            return -2;
+        }
+        match state.runtime.animation().ik_hint_position(EntityId::new(entity), hint) {
+            Some(pos) => {
+                state.path_buffer[0..4].copy_from_slice(&pos[0].to_le_bytes());
+                state.path_buffer[4..8].copy_from_slice(&pos[1].to_le_bytes());
+                state.path_buffer[8..12].copy_from_slice(&pos[2].to_le_bytes());
+                state.clear_error();
+                0
+            }
+            None => {
+                state.set_error("animator not found");
+                -4
+            }
+        }
+    }) {
+        Ok(code) => code,
+        Err(code) => code,
+    }
+}
+}
+
+ffi_export! {
+pub extern "C" fn unitas_runtime_animator_set_ik_hint_position_weight(
+    handle: u64,
+    entity: u64,
+    hint: u32,
+    weight: f32,
+) -> i32 {
+    let Some(hint) = AvatarIkHint::from_u32(hint) else {
+        return -2;
+    };
+    match with_runtime_state(handle, |state| {
+        if entity == 0 {
+            state.set_error("invalid entity id");
+            return -2;
+        }
+        let result = state
+            .runtime
+            .animation_mut()
+            .set_ik_hint_position_weight(EntityId::new(entity), hint, weight);
+        animator_result_to_code(state, result)
+    }) {
+        Ok(code) => code,
+        Err(code) => code,
+    }
+}
+}
+
+ffi_export! {
+pub extern "C" fn unitas_runtime_animator_get_ik_hint_position_weight(
+    handle: u64,
+    entity: u64,
+    hint: u32,
+    out_buffer: u64,
+) -> i32 {
+    let Some(hint) = AvatarIkHint::from_u32(hint) else {
+        return -2;
+    };
+    match with_runtime_state(handle, |state| {
+        if !animator_out_buffer_ready(state, out_buffer, 4) {
+            state.set_error("buffer address mismatch");
+            return -2;
+        }
+        if entity == 0 {
+            state.set_error("invalid entity id");
+            return -2;
+        }
+        match state
+            .runtime
+            .animation()
+            .ik_hint_position_weight(EntityId::new(entity), hint)
+        {
+            Some(weight) => {
+                state.path_buffer[0..4].copy_from_slice(&weight.to_le_bytes());
+                state.clear_error();
+                0
+            }
+            None => {
+                state.set_error("animator not found");
+                -4
+            }
+        }
+    }) {
+        Ok(code) => code,
+        Err(code) => code,
+    }
+}
+}
+
+ffi_export! {
+pub extern "C" fn unitas_runtime_animator_set_look_at_position(
+    handle: u64,
+    entity: u64,
+    x: f32,
+    y: f32,
+    z: f32,
+) -> i32 {
+    match with_runtime_state(handle, |state| {
+        if entity == 0 {
+            state.set_error("invalid entity id");
+            return -2;
+        }
+        let result = state
+            .runtime
+            .animation_mut()
+            .set_look_at_position(EntityId::new(entity), [x, y, z]);
+        animator_result_to_code(state, result)
+    }) {
+        Ok(code) => code,
+        Err(code) => code,
+    }
+}
+}
+
+ffi_export! {
+pub extern "C" fn unitas_runtime_animator_set_look_at_weight(
+    handle: u64,
+    entity: u64,
+    weight: f32,
+    body_weight: f32,
+    head_weight: f32,
+    eyes_weight: f32,
+    clamp_weight: f32,
+) -> i32 {
+    match with_runtime_state(handle, |state| {
+        if entity == 0 {
+            state.set_error("invalid entity id");
+            return -2;
+        }
+        let result = state.runtime.animation_mut().set_look_at_weight(
+            EntityId::new(entity),
+            [weight, body_weight, head_weight, eyes_weight, clamp_weight],
+        );
+        animator_result_to_code(state, result)
+    }) {
+        Ok(code) => code,
+        Err(code) => code,
+    }
+}
+}
+
+ffi_export! {
+pub extern "C" fn unitas_runtime_animator_string_to_hash(
+    handle: u64,
+    name_address: u64,
+    name_length: u64,
+) -> i32 {
+    let Ok(length) = usize::try_from(name_length) else {
+        return 0;
+    };
+    with_runtime_state(handle, |state| {
+        read_animator_name(state, name_address, length)
+            .map(|name| string_to_hash(&name))
+            .unwrap_or(0)
+    })
+    .unwrap_or(0)
 }
 }

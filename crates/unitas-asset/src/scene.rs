@@ -15,6 +15,7 @@ use crate::trail::{trail_renderer_component, TrailRendererBinding};
 use crate::unity_yaml::{self, Document, Node, Stream, YamlError};
 
 use self::scene_audio::collect_audio;
+use self::scene_navigation::{collect_navigation, is_nav_mesh_surface};
 use self::scene_physics::{
     collect_physics, collect_physics_2d, is_character_controller, AssembledScenePhysics,
 };
@@ -24,6 +25,12 @@ pub use crate::particle::PARTICLE_SYSTEM_CLASS;
 pub use crate::trail::TRAIL_RENDERER_CLASS;
 pub use scene_anim::AnimatorBinding;
 pub use scene_audio::{AudioFilterComponent, AudioFilterKind};
+pub use scene_navigation::{
+    CollectObjects, NavMeshAgentComponent, NavMeshObstacleComponent, NavMeshObstacleShape,
+    NavMeshSurfaceComponent, NavigationBinding, OffMeshLinkComponent, SceneNavMeshTriangle,
+    NAV_MESH_AGENT_CLASS, NAV_MESH_OBSTACLE_CLASS, NAV_MESH_SURFACE_SCRIPT_GUID,
+    OFF_MESH_LINK_CLASS,
+};
 pub use scene_physics::parse_physic_material;
 pub use scene_ui::{
     CanvasComponent, CanvasMatchMode, CanvasRenderMode, CanvasScaleMode, CanvasScalerComponent,
@@ -36,6 +43,8 @@ pub use scene_ui::{
 mod scene_anim;
 #[path = "scene_audio.rs"]
 mod scene_audio;
+#[path = "scene_navigation.rs"]
+mod scene_navigation;
 #[path = "scene_physics.rs"]
 pub mod scene_physics;
 #[path = "scene_sprite.rs"]
@@ -545,6 +554,7 @@ pub struct AssembledScene {
     pub particles: Vec<ParticleBinding>,
     pub trails: Vec<TrailBinding>,
     pub animators: Vec<AnimatorBinding>,
+    pub navigation: NavigationBinding,
     pub ui: UiBinding,
     pub diagnostics: Vec<(EntityId, String)>,
 }
@@ -561,6 +571,7 @@ struct DocumentSet {
     particles: Vec<ParticleBinding>,
     trails: Vec<TrailBinding>,
     animators: Vec<AnimatorBinding>,
+    navigation: NavigationBinding,
     ui: UiBinding,
     unsupported_classes: Vec<(EntityId, u32)>,
 }
@@ -687,6 +698,7 @@ fn assemble_stream(
         particles: set.particles,
         trails: set.trails,
         animators: set.animators,
+        navigation: set.navigation,
         ui: set.ui,
         diagnostics,
     })
@@ -840,6 +852,7 @@ fn assemble_documents(
         particles: Vec::new(),
         trails: Vec::new(),
         animators: Vec::new(),
+        navigation: NavigationBinding::default(),
         ui: UiBinding::default(),
         unsupported_classes: Vec::new(),
     };
@@ -877,7 +890,7 @@ fn assemble_documents(
             continue;
         }
         let body = match document.root.get("MonoBehaviour") {
-            Some(body) if !is_character_controller(body) => body,
+            Some(body) if !is_character_controller(body) && !is_nav_mesh_surface(body) => body,
             _ => continue,
         };
         let game_object_file_id = match reference_id(body.get("m_GameObject"))? {
@@ -926,6 +939,16 @@ fn assemble_documents(
         &instance_roots,
         index,
         material_properties,
+    )?;
+    set.navigation = collect_navigation(
+        stream,
+        graph,
+        &set.game_objects,
+        &set.transforms,
+        &instance_roots,
+        &set.physics,
+        &set.render,
+        index,
     )?;
     set.ui = collect_ui(stream, &set.game_objects, &instance_roots, index);
     let (particles, trails) =
@@ -1229,6 +1252,7 @@ fn expand_instance(
     set.render.lights.extend(prefab_set.render.lights);
     set.particles.extend(prefab_set.particles);
     set.trails.extend(prefab_set.trails);
+    set.navigation.extend(prefab_set.navigation);
     set.unsupported_classes
         .extend(prefab_set.unsupported_classes);
     Ok(root)
@@ -1769,6 +1793,9 @@ fn handled_component_class(class_id: u32) -> bool {
                 | PARTICLE_SYSTEM_CLASS
                 | TRAIL_RENDERER_CLASS
                 | ANIMATOR_CLASS
+                | NAV_MESH_AGENT_CLASS
+                | NAV_MESH_OBSTACLE_CLASS
+                | OFF_MESH_LINK_CLASS
                 | PREFAB_INSTANCE_CLASS
                 | CANVAS_CLASS
                 | RECT_TRANSFORM_CLASS

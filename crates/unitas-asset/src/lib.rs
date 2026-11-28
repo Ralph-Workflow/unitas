@@ -21,6 +21,8 @@ pub mod project;
 pub mod project_settings;
 pub mod scene;
 pub mod scene_save;
+pub mod scene_terrain;
+pub mod terrain_import;
 pub mod texture;
 pub mod trail;
 pub mod trust;

@@ -21,6 +21,8 @@ mod abi_input;
 mod abi_jobs;
 #[path = "abi_joints.rs"]
 pub mod abi_joints;
+#[path = "abi_particles.rs"]
+mod abi_particles;
 #[path = "abi_physics2d.rs"]
 mod abi_physics2d;
 #[path = "abi_physics3d.rs"]
@@ -44,6 +46,7 @@ pub use abi_effectors2d::*;
 pub use abi_input::*;
 pub use abi_jobs::*;
 pub use abi_joints::*;
+pub use abi_particles::*;
 pub use abi_physics2d::*;
 pub use abi_physics3d::*;
 pub use abi_player_loop::*;

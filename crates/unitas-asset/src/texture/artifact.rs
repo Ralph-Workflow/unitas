@@ -635,10 +635,17 @@ pub fn load_or_cook_texture_with_cache(
 }
 
 pub fn default_texture_cache_dir(project_root: &Path) -> PathBuf {
+    if !project_root.as_os_str().is_empty() && project_root.is_dir() {
+        return project_root
+            .join("Library")
+            .join("unitas")
+            .join("cache")
+            .join("texture");
+    }
     let hash = fnv1a_hash(project_root.to_string_lossy().as_bytes());
     std::env::temp_dir()
         .join("unitas_texture_import_cache")
-        .join(format!("{}_{hash:016x}", std::process::id()))
+        .join(format!("{hash:016x}"))
 }
 
 fn default_texture_cache_dir_for_path(path: &Path, fingerprint: &ImportFingerprint) -> PathBuf {
@@ -652,7 +659,7 @@ fn default_texture_cache_dir_for_path(path: &Path, fingerprint: &ImportFingerpri
     let hash = fnv1a_hash(parent_key.as_bytes());
     std::env::temp_dir()
         .join("unitas_texture_import_cache")
-        .join(format!("{}_{hash:016x}", std::process::id()))
+        .join(format!("{hash:016x}"))
 }
 
 fn find_ancestor_cooked_manifest(path: &Path) -> Option<(PathBuf, PathBuf, CookedTextureManifest)> {

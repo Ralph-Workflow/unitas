@@ -139,3 +139,4 @@ $RECYCLE.BIN/
 .ruff_cache/
 editor/**/obj/
 **/Library/UnitasScriptAssemblies/
+**/Library/unitas/

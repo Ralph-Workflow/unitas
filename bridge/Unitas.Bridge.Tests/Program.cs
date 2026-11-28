@@ -81,6 +81,7 @@ namespace Unitas.Bridge.Tests
                 () => PlaytestTests.Run(),
                 () => SceneCameraTests.Run(),
                 () => SceneTrailRendererTests.Run(),
+                () => ParticleSystemTests.Run(),
                 () => UiClickPumpTests.Run(),
                 () => TestCharacterControllerDefaultsAndNullProvider(),
                 () => TestEndToEndCharacterControllerMoveAndSceneLoad(),

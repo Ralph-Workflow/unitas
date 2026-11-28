@@ -1,17 +1,36 @@
 use std::cell::RefCell;
 use std::error::Error;
+use std::path::Path;
 use std::rc::Rc;
 
+use unitas_animation::curve::{AssetReference, ObjectReferenceCurve, ObjectReferenceKey};
 use unitas_animation::{
     AnimationClip, AnimatorController, AnimatorState, CurveBinding, CurveBindingTarget, FloatCurve,
-    Keyframe, StateMotion, WrapMode,
+    Keyframe, PropertyCurve, StateMotion, WrapMode, encode_controller_binary,
 };
 use unitas_core::{EntityId, IDENTITY_ROTATION, Transform, rotate_vector};
-use unitas_runtime::AnimationWorld;
 use unitas_runtime::animation::{
     AnimatorHookWorld, AnimatorIkPose, AnimatorRootMotion, AnimatorScriptHooks, AvatarIkGoal,
     AvatarIkHint, IkGoalPose, IkHintPose, LookAtIkConfig, TwoBoneIkChain, TwoBoneIkSkeletonChain,
-    solve_look_at_ik, solve_two_bone_ik,
+    solve_look_at_ik, solve_two_bone_ik, string_to_hash,
+};
+use unitas_runtime::{
+    AnimationWorld, test_read_path_buffer, test_write_path_buffer, unitas_runtime_animator_attach,
+    unitas_runtime_animator_controller_create, unitas_runtime_animator_cross_fade,
+    unitas_runtime_animator_cross_fade_hash, unitas_runtime_animator_get_apply_root_motion,
+    unitas_runtime_animator_get_ik_hint_position,
+    unitas_runtime_animator_get_ik_hint_position_weight, unitas_runtime_animator_get_ik_position,
+    unitas_runtime_animator_get_ik_position_weight, unitas_runtime_animator_get_ik_rotation,
+    unitas_runtime_animator_get_ik_rotation_weight, unitas_runtime_animator_play,
+    unitas_runtime_animator_play_hash, unitas_runtime_animator_play_queued,
+    unitas_runtime_animator_root_motion, unitas_runtime_animator_set_apply_root_motion,
+    unitas_runtime_animator_set_controller, unitas_runtime_animator_set_ik_hint_position,
+    unitas_runtime_animator_set_ik_hint_position_weight, unitas_runtime_animator_set_ik_position,
+    unitas_runtime_animator_set_ik_position_weight, unitas_runtime_animator_set_ik_rotation,
+    unitas_runtime_animator_set_ik_rotation_weight, unitas_runtime_animator_set_look_at_position,
+    unitas_runtime_animator_set_look_at_weight, unitas_runtime_animator_state_info,
+    unitas_runtime_animator_state_name, unitas_runtime_animator_string_to_hash,
+    unitas_runtime_destroy, unitas_runtime_new, unitas_runtime_path_buffer, unitas_runtime_tick,
 };
 
 fn vec_distance(a: [f32; 3], b: [f32; 3]) -> f32 {
@@ -571,4 +590,475 @@ fn animator_ik_pose_solves_multiple_goals_and_hints_with_unity_style_accessors()
         assert!(foot.mid_position[2] > 0.1);
     }
     assert!(pose.solved_look_at().is_some());
+}
+
+fn write_test_tga(path: &Path, width: u16, height: u16, rgb: [u8; 3]) -> std::io::Result<()> {
+    let mut bytes = vec![0u8; 18 + (width as usize) * (height as usize) * 3];
+    bytes[2] = 2;
+    bytes[12..14].copy_from_slice(&width.to_le_bytes());
+    bytes[14..16].copy_from_slice(&height.to_le_bytes());
+    bytes[16] = 24;
+    bytes[17] = 0x20;
+    for chunk in bytes[18..].chunks_exact_mut(3) {
+        chunk[0] = rgb[2];
+        chunk[1] = rgb[1];
+        chunk[2] = rgb[0];
+    }
+    std::fs::write(path, bytes)
+}
+
+fn build_three_step_sprite_swap_controller(
+    guid_a: &str,
+    guid_b: &str,
+    missing_guid: &str,
+    target: &CurveBindingTarget,
+) -> Result<AnimatorController, Box<dyn Error>> {
+    let ref_a = AssetReference::from_hex(guid_a, 21300000).ok_or("invalid guid_a")?;
+    let ref_b = AssetReference::from_hex(guid_b, 21300000).ok_or("invalid guid_b")?;
+    let ref_missing =
+        AssetReference::from_hex(missing_guid, 21300099).ok_or("invalid missing_guid")?;
+    let clip = AnimationClip::new(
+        "Swap",
+        3.0,
+        60.0,
+        WrapMode::Once,
+        vec![CurveBinding::new(
+            target.clone(),
+            PropertyCurve::ObjectReference(ObjectReferenceCurve::new(vec![
+                ObjectReferenceKey::new(0.0, ref_a),
+                ObjectReferenceKey::new(1.0, ref_b),
+                ObjectReferenceKey::new(2.0, ref_missing),
+            ])),
+        )],
+        Vec::new(),
+    );
+    Ok(AnimatorController::new(
+        "SwapCtrl",
+        Vec::new(),
+        vec![AnimatorState::new("Swap", StateMotion::Clip(clip))],
+        0,
+        Vec::new(),
+    ))
+}
+
+#[test]
+fn ani_001_animation_world_resolves_sprite_swap_and_records_missing_sprite_diagnostic()
+-> Result<(), Box<dyn Error>> {
+    let dir = std::env::temp_dir().join(format!(
+        "unitas_anim_world_sprite_swap_{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir)?;
+
+    let guid_a = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    let guid_b = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+    let missing_guid = "deadbeefdeadbeefdeadbeefdeadbeef";
+    let tex_a = dir.join("a.tga");
+    let tex_b = dir.join("b.tga");
+    write_test_tga(&tex_a, 16, 16, [255, 0, 0])?;
+    write_test_tga(&tex_b, 32, 32, [0, 255, 0])?;
+    for (meta_name, guid) in [("a.tga.meta", guid_a), ("b.tga.meta", guid_b)] {
+        std::fs::write(
+            dir.join(meta_name),
+            format!("fileFormatVersion: 2\nguid: {guid}\nTextureImporter:\n  sRGBTexture: 0\n"),
+        )?;
+    }
+
+    let target = CurveBindingTarget::new("", "SpriteRenderer", "m_Sprite");
+    let controller =
+        build_three_step_sprite_swap_controller(guid_a, guid_b, missing_guid, &target)?;
+
+    let mut world = AnimationWorld::new();
+    world.register_sprite_asset(guid_a, &tex_a);
+    world.register_sprite_asset(guid_b, &tex_b);
+    let entity = EntityId::new(1);
+    world.ensure_animator(entity, Transform::default());
+    let handle = world.register_controller(controller);
+    world.set_controller(entity, handle)?;
+
+    let tex0 = world
+        .resolved_sprite(entity, &target)
+        .flatten()
+        .ok_or("expected resolved sprite at t=0")?;
+    assert_eq!((tex0.width, tex0.height), (16, 16));
+    assert_eq!(world.diagnostic_count(entity), Some(0));
+
+    world.tick(1.0);
+    let tex1 = world
+        .resolved_sprite(entity, &target)
+        .flatten()
+        .ok_or("expected resolved sprite at t=1")?;
+    assert_eq!((tex1.width, tex1.height), (32, 32));
+    assert_eq!(world.diagnostic_count(entity), Some(0));
+
+    world.tick(1.0);
+    let _ = std::fs::remove_dir_all(&dir);
+    let diags = world
+        .diagnostics(entity)
+        .ok_or("expected diagnostics slice")?;
+    assert!(
+        diags.iter().any(|d| d.contains(missing_guid)
+            && d.contains("SpriteRenderer")
+            && d.contains("m_Sprite")),
+        "expected diagnostic naming asset and member, got {diags:?}"
+    );
+    Ok(())
+}
+
+fn build_two_state_controller() -> AnimatorController {
+    let idle_clip = AnimationClip::new(
+        "IdleClip",
+        1.0,
+        60.0,
+        WrapMode::Once,
+        vec![CurveBinding::new(
+            CurveBindingTarget::transform("", "localPosition.x"),
+            PropertyCurve::Float(FloatCurve::new(vec![
+                Keyframe::linear(0.0, 0.0),
+                Keyframe::linear(1.0, 10.0),
+            ])),
+        )],
+        Vec::new(),
+    );
+    let run_clip = AnimationClip::new(
+        "RunClip",
+        1.0,
+        60.0,
+        WrapMode::Once,
+        vec![CurveBinding::new(
+            CurveBindingTarget::transform("", "localPosition.x"),
+            PropertyCurve::Float(FloatCurve::new(vec![
+                Keyframe::linear(0.0, 100.0),
+                Keyframe::linear(1.0, 110.0),
+            ])),
+        )],
+        Vec::new(),
+    );
+    AnimatorController::new(
+        "Locomotion",
+        Vec::new(),
+        vec![
+            AnimatorState::new("Idle", StateMotion::Clip(idle_clip)),
+            AnimatorState::new("Run", StateMotion::Clip(run_clip)),
+        ],
+        0,
+        Vec::new(),
+    )
+}
+
+#[test]
+fn ani_002_play_play_queued_cross_fade_root_motion_and_ik_pose() -> Result<(), Box<dyn Error>> {
+    let mut world = AnimationWorld::new();
+    let entity = EntityId::new(1);
+    world.ensure_animator(entity, Transform::default());
+    let handle = world.register_controller(build_two_state_controller());
+    world.set_controller(entity, handle)?;
+
+    assert_eq!(world.apply_root_motion(entity), Some(true));
+    world.set_apply_root_motion(entity, false)?;
+    assert_eq!(world.apply_root_motion(entity), Some(false));
+    world.set_apply_root_motion(entity, true)?;
+
+    world.play_state(entity, "Run")?;
+    world.tick(0.25);
+    let info = world.state_info(entity)?;
+    assert_eq!(info.state_name, "Run");
+    let rm = world.root_motion(entity).ok_or("expected root motion")?;
+    assert!((rm.delta_position[0] - 2.5).abs() < 1e-4);
+
+    world.play_state(entity, "Idle")?;
+    world.play_queued_state(entity, "Run")?;
+    world.tick(0.5);
+    assert_eq!(world.state_info(entity)?.state_name, "Idle");
+    world.tick(0.6);
+    assert_eq!(world.state_info(entity)?.state_name, "Run");
+
+    world.cross_fade_state(entity, "Idle", 0.5)?;
+    world.tick(0.1);
+    let fade_info = world.state_info(entity)?;
+    assert!(fade_info.is_in_transition);
+
+    let hash_idle = string_to_hash("Idle");
+    let hash_run = string_to_hash("Run");
+    assert_ne!(hash_idle, hash_run);
+    assert_eq!(hash_idle, string_to_hash("Idle"));
+    world.play_state_hash(entity, hash_idle)?;
+    world.tick(0.0);
+    assert_eq!(world.state_info(entity)?.state_name, "Idle");
+
+    world.set_ik_position(entity, AvatarIkGoal::LeftHand, [1.0, 2.0, 3.0])?;
+    world.set_ik_position_weight(entity, AvatarIkGoal::LeftHand, 0.75)?;
+    world.set_ik_rotation(entity, AvatarIkGoal::LeftHand, [0.0, 0.0, 0.0, 1.0])?;
+    world.set_ik_rotation_weight(entity, AvatarIkGoal::LeftHand, 0.5)?;
+    world.set_ik_hint_position(entity, AvatarIkHint::LeftElbow, [0.5, 1.5, 2.5])?;
+    world.set_ik_hint_position_weight(entity, AvatarIkHint::LeftElbow, 0.8)?;
+    world.set_look_at_position(entity, [0.0, 1.6, 5.0])?;
+    world.set_look_at_weight(entity, [0.9, 0.2, 0.8, 0.1, 0.5])?;
+
+    assert_eq!(
+        world.ik_position(entity, AvatarIkGoal::LeftHand),
+        Some([1.0, 2.0, 3.0])
+    );
+    assert_eq!(
+        world.ik_position_weight(entity, AvatarIkGoal::LeftHand),
+        Some(0.75)
+    );
+    assert_eq!(
+        world.ik_rotation(entity, AvatarIkGoal::LeftHand),
+        Some([0.0, 0.0, 0.0, 1.0])
+    );
+    assert_eq!(
+        world.ik_rotation_weight(entity, AvatarIkGoal::LeftHand),
+        Some(0.5)
+    );
+    assert_eq!(
+        world.ik_hint_position(entity, AvatarIkHint::LeftElbow),
+        Some([0.5, 1.5, 2.5])
+    );
+    assert_eq!(
+        world.ik_hint_position_weight(entity, AvatarIkHint::LeftElbow),
+        Some(0.8)
+    );
+    assert_eq!(world.look_at_position(entity), Some([0.0, 1.6, 5.0]));
+    assert_eq!(world.look_at_weight(entity), Some(0.9));
+    Ok(())
+}
+
+fn abi_write(handle: u64, bytes: &[u8]) -> Result<u64, Box<dyn Error>> {
+    let addr = unitas_runtime_path_buffer(handle, bytes.len() as u64);
+    if addr == 0 {
+        return Err("buffer allocation failed".into());
+    }
+    test_write_path_buffer(handle, bytes)?;
+    Ok(addr)
+}
+
+fn abi_read(handle: u64, len: usize) -> Result<Vec<u8>, Box<dyn Error>> {
+    let mut out = vec![0u8; len];
+    let _ = unitas_runtime_path_buffer(handle, len as u64);
+    test_read_path_buffer(handle, &mut out)?;
+    Ok(out)
+}
+
+fn abi_f32(bytes: &[u8], offset: usize) -> f32 {
+    let mut raw = [0u8; 4];
+    raw.copy_from_slice(&bytes[offset..offset + 4]);
+    f32::from_le_bytes(raw)
+}
+
+fn abi_u32(bytes: &[u8], offset: usize) -> u32 {
+    let mut raw = [0u8; 4];
+    raw.copy_from_slice(&bytes[offset..offset + 4]);
+    u32::from_le_bytes(raw)
+}
+
+fn abi_state_name(handle: u64, entity: u64) -> Result<String, Box<dyn Error>> {
+    let len = unitas_runtime_animator_state_name(handle, entity);
+    if len < 0 {
+        return Err("state_name failed".into());
+    }
+    Ok(String::from_utf8(abi_read(handle, len as usize)?)?)
+}
+
+#[test]
+fn ani_002_abi_play_queued_cross_fade_root_motion_and_ik_exports() -> Result<(), Box<dyn Error>> {
+    let handle = unitas_runtime_new();
+    assert_ne!(handle, 0);
+    let encoded = encode_controller_binary(&build_two_state_controller());
+    let addr = abi_write(handle, &encoded)?;
+    let ctrl = unitas_runtime_animator_controller_create(handle, addr, encoded.len() as u64);
+    assert_ne!(ctrl, 0);
+    let entity = unitas_runtime_animator_attach(handle, 0);
+    assert_ne!(entity, 0);
+    assert_eq!(
+        unitas_runtime_animator_set_controller(handle, entity, ctrl),
+        0
+    );
+
+    let idle_addr = abi_write(handle, b"Idle")?;
+    let idle_hash = unitas_runtime_animator_string_to_hash(handle, idle_addr, 4);
+    assert_eq!(idle_hash, string_to_hash("Idle"));
+
+    assert_eq!(unitas_runtime_tick(handle, 0.0), 0);
+    assert_eq!(abi_state_name(handle, entity)?, "Idle");
+
+    let run_addr = abi_write(handle, b"Run")?;
+    assert_eq!(unitas_runtime_animator_play(handle, entity, run_addr, 3), 0);
+    assert_eq!(unitas_runtime_tick(handle, 0.1), 0);
+    assert_eq!(abi_state_name(handle, entity)?, "Run");
+
+    assert_eq!(
+        unitas_runtime_animator_play_hash(handle, entity, idle_hash),
+        0
+    );
+    assert_eq!(unitas_runtime_tick(handle, 0.0), 0);
+    assert_eq!(abi_state_name(handle, entity)?, "Idle");
+
+    let run_addr = abi_write(handle, b"Run")?;
+    assert_eq!(
+        unitas_runtime_animator_play_queued(handle, entity, run_addr, 3),
+        0
+    );
+    assert_eq!(unitas_runtime_tick(handle, 0.5), 0);
+    assert_eq!(abi_state_name(handle, entity)?, "Idle");
+    assert_eq!(unitas_runtime_tick(handle, 0.6), 0);
+    assert_eq!(abi_state_name(handle, entity)?, "Run");
+
+    let idle_addr = abi_write(handle, b"Idle")?;
+    assert_eq!(
+        unitas_runtime_animator_cross_fade(handle, entity, idle_addr, 4, 0.5),
+        0
+    );
+    assert_eq!(unitas_runtime_tick(handle, 0.1), 0);
+    let info_buf = unitas_runtime_path_buffer(handle, 80);
+    assert_eq!(
+        unitas_runtime_animator_state_info(handle, entity, info_buf),
+        0
+    );
+    let info_bytes = abi_read(handle, 80)?;
+    assert_ne!(abi_u32(&info_bytes, 20), 0);
+    assert_eq!(unitas_runtime_tick(handle, 0.5), 0);
+    assert_eq!(abi_state_name(handle, entity)?, "Idle");
+
+    let run_hash = string_to_hash("Run");
+    assert_eq!(
+        unitas_runtime_animator_cross_fade_hash(handle, entity, run_hash, 0.2),
+        0
+    );
+    assert_eq!(unitas_runtime_tick(handle, 0.3), 0);
+    assert_eq!(abi_state_name(handle, entity)?, "Run");
+
+    assert_eq!(unitas_runtime_destroy(handle), 0);
+    Ok(())
+}
+
+#[test]
+fn ani_002_abi_root_motion_and_ik_getters_setters() -> Result<(), Box<dyn Error>> {
+    let handle = unitas_runtime_new();
+    assert_ne!(handle, 0);
+    let encoded = encode_controller_binary(&build_two_state_controller());
+    let addr = abi_write(handle, &encoded)?;
+    let ctrl = unitas_runtime_animator_controller_create(handle, addr, encoded.len() as u64);
+    let entity = unitas_runtime_animator_attach(handle, 0);
+    assert_eq!(
+        unitas_runtime_animator_set_controller(handle, entity, ctrl),
+        0
+    );
+
+    let out4 = unitas_runtime_path_buffer(handle, 4);
+    assert_eq!(
+        unitas_runtime_animator_get_apply_root_motion(handle, entity, out4),
+        0
+    );
+    assert_eq!(abi_u32(&abi_read(handle, 4)?, 0), 1);
+    assert_eq!(
+        unitas_runtime_animator_set_apply_root_motion(handle, entity, 0),
+        0
+    );
+    assert_eq!(
+        unitas_runtime_animator_get_apply_root_motion(handle, entity, out4),
+        0
+    );
+    assert_eq!(abi_u32(&abi_read(handle, 4)?, 0), 0);
+    assert_eq!(
+        unitas_runtime_animator_set_apply_root_motion(handle, entity, 1),
+        0
+    );
+
+    assert_eq!(unitas_runtime_tick(handle, 0.0), 0);
+    assert_eq!(unitas_runtime_tick(handle, 0.2), 0);
+    let out28 = unitas_runtime_path_buffer(handle, 28);
+    assert_eq!(
+        unitas_runtime_animator_root_motion(handle, entity, out28),
+        0
+    );
+    let rm_bytes = abi_read(handle, 28)?;
+    assert!((abi_f32(&rm_bytes, 0) - 2.0).abs() < 1e-4);
+    assert!((abi_f32(&rm_bytes, 24) - 1.0).abs() < 1e-4);
+
+    assert_eq!(
+        unitas_runtime_animator_set_ik_position(handle, entity, 3, 1.5, 2.5, -0.5),
+        0
+    );
+    assert_eq!(
+        unitas_runtime_animator_set_ik_position_weight(handle, entity, 3, 0.85),
+        0
+    );
+    assert_eq!(
+        unitas_runtime_animator_set_ik_rotation(handle, entity, 3, 0.0, 0.7071068, 0.0, 0.7071068),
+        0
+    );
+    assert_eq!(
+        unitas_runtime_animator_set_ik_rotation_weight(handle, entity, 3, 0.65),
+        0
+    );
+    assert_eq!(
+        unitas_runtime_animator_set_ik_hint_position(handle, entity, 3, 0.5, 1.25, -0.25),
+        0
+    );
+    assert_eq!(
+        unitas_runtime_animator_set_ik_hint_position_weight(handle, entity, 3, 0.45),
+        0
+    );
+    assert_eq!(
+        unitas_runtime_animator_set_look_at_position(handle, entity, 0.0, 1.7, 10.0),
+        0
+    );
+    assert_eq!(
+        unitas_runtime_animator_set_look_at_weight(handle, entity, 0.9, 0.25, 0.75, 0.1, 0.5),
+        0
+    );
+
+    let out12 = unitas_runtime_path_buffer(handle, 12);
+    assert_eq!(
+        unitas_runtime_animator_get_ik_position(handle, entity, 3, out12),
+        0
+    );
+    let pos_b = abi_read(handle, 12)?;
+    assert_eq!(
+        [abi_f32(&pos_b, 0), abi_f32(&pos_b, 4), abi_f32(&pos_b, 8)],
+        [1.5, 2.5, -0.5]
+    );
+    let out4 = unitas_runtime_path_buffer(handle, 4);
+    assert_eq!(
+        unitas_runtime_animator_get_ik_position_weight(handle, entity, 3, out4),
+        0
+    );
+    assert!((abi_f32(&abi_read(handle, 4)?, 0) - 0.85).abs() < 1e-6);
+
+    let out16 = unitas_runtime_path_buffer(handle, 16);
+    assert_eq!(
+        unitas_runtime_animator_get_ik_rotation(handle, entity, 3, out16),
+        0
+    );
+    let rot_b = abi_read(handle, 16)?;
+    assert!((abi_f32(&rot_b, 4) - 0.7071068).abs() < 1e-4);
+    assert!((abi_f32(&rot_b, 12) - 0.7071068).abs() < 1e-4);
+    let out4 = unitas_runtime_path_buffer(handle, 4);
+    assert_eq!(
+        unitas_runtime_animator_get_ik_rotation_weight(handle, entity, 3, out4),
+        0
+    );
+    assert!((abi_f32(&abi_read(handle, 4)?, 0) - 0.65).abs() < 1e-6);
+
+    let out12 = unitas_runtime_path_buffer(handle, 12);
+    assert_eq!(
+        unitas_runtime_animator_get_ik_hint_position(handle, entity, 3, out12),
+        0
+    );
+    let h_b = abi_read(handle, 12)?;
+    assert_eq!(
+        [abi_f32(&h_b, 0), abi_f32(&h_b, 4), abi_f32(&h_b, 8)],
+        [0.5, 1.25, -0.25]
+    );
+    let out4 = unitas_runtime_path_buffer(handle, 4);
+    assert_eq!(
+        unitas_runtime_animator_get_ik_hint_position_weight(handle, entity, 3, out4),
+        0
+    );
+    assert!((abi_f32(&abi_read(handle, 4)?, 0) - 0.45).abs() < 1e-6);
+
+    assert_eq!(unitas_runtime_destroy(handle), 0);
+    Ok(())
 }

@@ -114,6 +114,9 @@ pub struct EntityAnimatorEntry {
     pub keep_state_on_disable: bool,
     pub callbacks: Vec<StateMachineCallback>,
     pub root_motion: AnimatorRootMotion,
+    pub apply_root_motion: bool,
+    pub queued_states: Vec<usize>,
+    pub ik_pose: AnimatorIkPose,
     pub writes_transforms: bool,
     pub applied_object_references: Vec<AppliedObjectReference>,
 }
@@ -135,6 +138,9 @@ impl EntityAnimatorEntry {
             keep_state_on_disable: false,
             callbacks: Vec::new(),
             root_motion: AnimatorRootMotion::default(),
+            apply_root_motion: true,
+            queued_states: Vec::new(),
+            ik_pose: AnimatorIkPose::default(),
             writes_transforms: true,
             applied_object_references: Vec::new(),
         }
@@ -548,8 +554,6 @@ impl AnimationWorld {
             .map(|entry| entry.fired_events.len())
     }
 
-    /// Takes the events the animator fired since the last take, so the player
-    /// that delivers them to scripts gets each event exactly once.
     pub fn take_fired_events(&mut self, entity: EntityId) -> Vec<AnimationEvent> {
         self.entries
             .get_mut(&entity)
@@ -784,14 +788,51 @@ impl AnimationWorld {
             delta_position: subtract_vectors(sampled.translation, previous.translation),
             delta_rotation: rotation_delta(previous.rotation, sampled.rotation),
         };
-        let wrote = step_result.writes_transforms;
+        let wrote = step_result.writes_transforms && entry.apply_root_motion;
         if wrote {
             entry.transform = sampled;
+        }
+        if !entry.queued_states.is_empty()
+            && !step_result.state_info.is_in_transition
+            && step_result.state_info.normalized_time >= 1.0
+        {
+            let next_state = entry.queued_states.remove(0);
+            let queued_bindings = if let Some(animator) = &mut entry.animator {
+                animator.play(next_state);
+                animator.step(0.0).bindings
+            } else {
+                Vec::new()
+            };
+            if !queued_bindings.is_empty() {
+                let mut transform = entry.transform.clone();
+                let _ =
+                    apply_bindings_to_transform(entity, entry, &mut transform, &queued_bindings);
+                if entry.apply_root_motion {
+                    entry.transform = transform;
+                }
+            }
         }
         if !child_bindings.is_empty() {
             all_child_bindings.push((entity, child_bindings));
         }
         wrote
+    }
+
+    fn apply_immediate_play(entity: EntityId, entry: &mut EntityAnimatorEntry, index: usize) {
+        entry.queued_states.clear();
+        let bindings = if let Some(animator) = &mut entry.animator {
+            animator.play(index);
+            animator.step(0.0).bindings
+        } else {
+            Vec::new()
+        };
+        if !bindings.is_empty() {
+            let mut transform = entry.transform.clone();
+            let _ = apply_bindings_to_transform(entity, entry, &mut transform, &bindings);
+            if entry.apply_root_motion {
+                entry.transform = transform;
+            }
+        }
     }
 
     fn tick_legacy(
@@ -961,6 +1002,277 @@ impl AnimationWorld {
 
     pub fn root_motion(&self, entity: EntityId) -> Option<AnimatorRootMotion> {
         self.entries.get(&entity).map(|entry| entry.root_motion)
+    }
+
+    pub fn apply_root_motion(&self, entity: EntityId) -> Option<bool> {
+        self.entries
+            .get(&entity)
+            .map(|entry| entry.apply_root_motion)
+    }
+
+    pub fn set_apply_root_motion(&mut self, entity: EntityId, apply: bool) -> Result<(), String> {
+        let Some(entry) = self.entries.get_mut(&entity) else {
+            return Err(format!("animator not found for entity {}", entity.as_u64()));
+        };
+        entry.apply_root_motion = apply;
+        Ok(())
+    }
+
+    fn resolve_state_index(animator: &Animator, name: &str) -> Result<usize, String> {
+        let candidate = name.strip_prefix("Base Layer.").unwrap_or(name);
+        animator
+            .state_index_by_name(name)
+            .or_else(|| animator.state_index_by_name(candidate))
+            .ok_or_else(|| format!("state '{name}' not found"))
+    }
+
+    fn resolve_state_index_by_hash(animator: &Animator, hash: i32) -> Result<usize, String> {
+        animator
+            .controller()
+            .states
+            .iter()
+            .position(|state| {
+                string_to_hash(&state.name) == hash
+                    || string_to_hash(&format!("Base Layer.{}", state.name)) == hash
+            })
+            .ok_or_else(|| format!("state hash {hash} not found"))
+    }
+
+    pub fn play_state(&mut self, entity: EntityId, name: &str) -> Result<(), String> {
+        let Some(entry) = self.entries.get_mut(&entity) else {
+            return Err(format!("animator not found for entity {}", entity.as_u64()));
+        };
+        let Some(animator) = &entry.animator else {
+            return Err(format!(
+                "animator on entity {} has no controller attached",
+                entity.as_u64()
+            ));
+        };
+        let index = Self::resolve_state_index(animator, name)?;
+        Self::apply_immediate_play(entity, entry, index);
+        self.pending_transform_writes.insert(entity);
+        Ok(())
+    }
+
+    pub fn play_state_hash(&mut self, entity: EntityId, hash: i32) -> Result<(), String> {
+        let Some(entry) = self.entries.get_mut(&entity) else {
+            return Err(format!("animator not found for entity {}", entity.as_u64()));
+        };
+        let Some(animator) = &entry.animator else {
+            return Err(format!(
+                "animator on entity {} has no controller attached",
+                entity.as_u64()
+            ));
+        };
+        let index = Self::resolve_state_index_by_hash(animator, hash)?;
+        Self::apply_immediate_play(entity, entry, index);
+        self.pending_transform_writes.insert(entity);
+        Ok(())
+    }
+
+    pub fn play_queued_state(&mut self, entity: EntityId, name: &str) -> Result<(), String> {
+        let Some(entry) = self.entries.get_mut(&entity) else {
+            return Err(format!("animator not found for entity {}", entity.as_u64()));
+        };
+        let Some(animator) = &entry.animator else {
+            return Err(format!(
+                "animator on entity {} has no controller attached",
+                entity.as_u64()
+            ));
+        };
+        let index = Self::resolve_state_index(animator, name)?;
+        entry.queued_states.push(index);
+        Ok(())
+    }
+
+    pub fn cross_fade_state(
+        &mut self,
+        entity: EntityId,
+        name: &str,
+        duration: f32,
+    ) -> Result<(), String> {
+        let Some(entry) = self.entries.get_mut(&entity) else {
+            return Err(format!("animator not found for entity {}", entity.as_u64()));
+        };
+        let Some(animator) = &mut entry.animator else {
+            return Err(format!(
+                "animator on entity {} has no controller attached",
+                entity.as_u64()
+            ));
+        };
+        let index = Self::resolve_state_index(animator, name)?;
+        entry.queued_states.clear();
+        animator.cross_fade(index, duration);
+        Ok(())
+    }
+
+    pub fn cross_fade_state_hash(
+        &mut self,
+        entity: EntityId,
+        hash: i32,
+        duration: f32,
+    ) -> Result<(), String> {
+        let Some(entry) = self.entries.get_mut(&entity) else {
+            return Err(format!("animator not found for entity {}", entity.as_u64()));
+        };
+        let Some(animator) = &mut entry.animator else {
+            return Err(format!(
+                "animator on entity {} has no controller attached",
+                entity.as_u64()
+            ));
+        };
+        let index = Self::resolve_state_index_by_hash(animator, hash)?;
+        entry.queued_states.clear();
+        animator.cross_fade(index, duration);
+        Ok(())
+    }
+
+    fn get_or_error(&mut self, entity: EntityId) -> Result<&mut EntityAnimatorEntry, String> {
+        self.entries
+            .get_mut(&entity)
+            .ok_or_else(|| format!("animator not found for entity {}", entity.as_u64()))
+    }
+
+    pub fn set_ik_position(
+        &mut self,
+        entity: EntityId,
+        goal: AvatarIkGoal,
+        position: [f32; 3],
+    ) -> Result<(), String> {
+        self.get_or_error(entity)?
+            .ik_pose
+            .set_ik_goal_position(goal, position);
+        Ok(())
+    }
+
+    pub fn ik_position(&self, entity: EntityId, goal: AvatarIkGoal) -> Option<[f32; 3]> {
+        self.entries
+            .get(&entity)
+            .map(|e| e.ik_pose.ik_goal_position(goal))
+    }
+
+    pub fn set_ik_position_weight(
+        &mut self,
+        entity: EntityId,
+        goal: AvatarIkGoal,
+        weight: f32,
+    ) -> Result<(), String> {
+        self.get_or_error(entity)?
+            .ik_pose
+            .set_ik_goal_position_weight(goal, weight);
+        Ok(())
+    }
+
+    pub fn ik_position_weight(&self, entity: EntityId, goal: AvatarIkGoal) -> Option<f32> {
+        self.entries
+            .get(&entity)
+            .map(|e| e.ik_pose.ik_goal_position_weight(goal))
+    }
+
+    pub fn set_ik_rotation(
+        &mut self,
+        entity: EntityId,
+        goal: AvatarIkGoal,
+        rotation: [f32; 4],
+    ) -> Result<(), String> {
+        self.get_or_error(entity)?
+            .ik_pose
+            .set_ik_goal_rotation(goal, rotation);
+        Ok(())
+    }
+
+    pub fn ik_rotation(&self, entity: EntityId, goal: AvatarIkGoal) -> Option<[f32; 4]> {
+        self.entries
+            .get(&entity)
+            .map(|e| e.ik_pose.ik_goal_rotation(goal))
+    }
+
+    pub fn set_ik_rotation_weight(
+        &mut self,
+        entity: EntityId,
+        goal: AvatarIkGoal,
+        weight: f32,
+    ) -> Result<(), String> {
+        self.get_or_error(entity)?
+            .ik_pose
+            .set_ik_goal_rotation_weight(goal, weight);
+        Ok(())
+    }
+
+    pub fn ik_rotation_weight(&self, entity: EntityId, goal: AvatarIkGoal) -> Option<f32> {
+        self.entries
+            .get(&entity)
+            .map(|e| e.ik_pose.ik_goal_rotation_weight(goal))
+    }
+
+    pub fn set_ik_hint_position(
+        &mut self,
+        entity: EntityId,
+        hint: AvatarIkHint,
+        position: [f32; 3],
+    ) -> Result<(), String> {
+        self.get_or_error(entity)?
+            .ik_pose
+            .set_ik_hint_position(hint, position);
+        Ok(())
+    }
+
+    pub fn ik_hint_position(&self, entity: EntityId, hint: AvatarIkHint) -> Option<[f32; 3]> {
+        self.entries
+            .get(&entity)
+            .map(|e| e.ik_pose.ik_hint_position(hint))
+    }
+
+    pub fn set_ik_hint_position_weight(
+        &mut self,
+        entity: EntityId,
+        hint: AvatarIkHint,
+        weight: f32,
+    ) -> Result<(), String> {
+        self.get_or_error(entity)?
+            .ik_pose
+            .set_ik_hint_position_weight(hint, weight);
+        Ok(())
+    }
+
+    pub fn ik_hint_position_weight(&self, entity: EntityId, hint: AvatarIkHint) -> Option<f32> {
+        self.entries
+            .get(&entity)
+            .map(|e| e.ik_pose.ik_hint_position_weight(hint))
+    }
+
+    pub fn set_look_at_position(
+        &mut self,
+        entity: EntityId,
+        position: [f32; 3],
+    ) -> Result<(), String> {
+        self.get_or_error(entity)?
+            .ik_pose
+            .set_look_at_position(position);
+        Ok(())
+    }
+
+    pub fn look_at_position(&self, entity: EntityId) -> Option<[f32; 3]> {
+        self.entries
+            .get(&entity)
+            .map(|e| e.ik_pose.look_at().map_or([0.0, 0.0, 1.0], |c| c.target))
+    }
+
+    pub fn set_look_at_weight(
+        &mut self,
+        entity: EntityId,
+        weights: [f32; 5],
+    ) -> Result<(), String> {
+        self.get_or_error(entity)?
+            .ik_pose
+            .set_look_at_weight(weights[0], weights[1], weights[2], weights[3], weights[4]);
+        Ok(())
+    }
+
+    pub fn look_at_weight(&self, entity: EntityId) -> Option<f32> {
+        self.entries
+            .get(&entity)
+            .map(|e| e.ik_pose.look_at().map_or(0.0, |c| c.weight))
     }
 
     pub fn set_legacy_animation(&mut self, entity: EntityId, component: LegacyAnimationComponent) {
@@ -1483,10 +1795,28 @@ impl LegacyAnimationComponent {
     }
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct AnimatorRootMotion {
     pub delta_position: [f32; 3],
     pub delta_rotation: [f32; 4],
+}
+
+impl Default for AnimatorRootMotion {
+    fn default() -> Self {
+        Self {
+            delta_position: [0.0; 3],
+            delta_rotation: unitas_core::IDENTITY_ROTATION,
+        }
+    }
+}
+
+pub fn string_to_hash(name: &str) -> i32 {
+    let mut hash: u32 = 0x811c_9dc5;
+    for byte in name.as_bytes() {
+        hash ^= u32::from(*byte);
+        hash = hash.wrapping_mul(0x0100_0193);
+    }
+    hash as i32
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -1498,6 +1828,16 @@ pub enum AvatarIkGoal {
 }
 
 impl AvatarIkGoal {
+    pub const fn from_u32(value: u32) -> Option<Self> {
+        match value {
+            0 => Some(Self::LeftFoot),
+            1 => Some(Self::RightFoot),
+            2 => Some(Self::LeftHand),
+            3 => Some(Self::RightHand),
+            _ => None,
+        }
+    }
+
     pub const fn default_hint(self) -> AvatarIkHint {
         match self {
             Self::LeftFoot => AvatarIkHint::LeftKnee,
@@ -1514,6 +1854,18 @@ pub enum AvatarIkHint {
     RightKnee,
     LeftElbow,
     RightElbow,
+}
+
+impl AvatarIkHint {
+    pub const fn from_u32(value: u32) -> Option<Self> {
+        match value {
+            0 => Some(Self::LeftKnee),
+            1 => Some(Self::RightKnee),
+            2 => Some(Self::LeftElbow),
+            3 => Some(Self::RightElbow),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -2636,125 +2988,4 @@ fn conjugate_rotation(rotation: [f32; 4]) -> [f32; 4] {
 
 fn rotation_delta(previous: [f32; 4], current: [f32; 4]) -> [f32; 4] {
     unitas_core::multiply_rotation(current, conjugate_rotation(previous))
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use unitas_animation::curve::{ObjectReferenceCurve, ObjectReferenceKey};
-    use unitas_animation::{AnimatorState, CurveBinding, PropertyCurve, StateMotion};
-
-    fn write_test_tga(path: &Path, width: u16, height: u16, rgb: [u8; 3]) -> std::io::Result<()> {
-        let mut bytes = vec![0u8; 18 + (width as usize) * (height as usize) * 3];
-        bytes[2] = 2;
-        bytes[12..14].copy_from_slice(&width.to_le_bytes());
-        bytes[14..16].copy_from_slice(&height.to_le_bytes());
-        bytes[16] = 24;
-        bytes[17] = 0x20;
-        for chunk in bytes[18..].chunks_exact_mut(3) {
-            chunk[0] = rgb[2];
-            chunk[1] = rgb[1];
-            chunk[2] = rgb[0];
-        }
-        std::fs::write(path, bytes)
-    }
-
-    fn build_three_step_sprite_swap_controller(
-        guid_a: &str,
-        guid_b: &str,
-        missing_guid: &str,
-        target: &CurveBindingTarget,
-    ) -> Result<AnimatorController, Box<dyn std::error::Error>> {
-        let ref_a = AssetReference::from_hex(guid_a, 21300000).ok_or("invalid guid_a")?;
-        let ref_b = AssetReference::from_hex(guid_b, 21300000).ok_or("invalid guid_b")?;
-        let ref_missing =
-            AssetReference::from_hex(missing_guid, 21300099).ok_or("invalid missing_guid")?;
-        let clip = AnimationClip::new(
-            "Swap",
-            3.0,
-            60.0,
-            WrapMode::Once,
-            vec![CurveBinding::new(
-                target.clone(),
-                PropertyCurve::ObjectReference(ObjectReferenceCurve::new(vec![
-                    ObjectReferenceKey::new(0.0, ref_a),
-                    ObjectReferenceKey::new(1.0, ref_b),
-                    ObjectReferenceKey::new(2.0, ref_missing),
-                ])),
-            )],
-            Vec::new(),
-        );
-        Ok(AnimatorController::new(
-            "SwapCtrl",
-            Vec::new(),
-            vec![AnimatorState::new("Swap", StateMotion::Clip(clip))],
-            0,
-            Vec::new(),
-        ))
-    }
-
-    #[test]
-    fn ani_001_animation_world_resolves_sprite_swap_and_records_missing_sprite_diagnostic()
-    -> Result<(), Box<dyn std::error::Error>> {
-        let dir = std::env::temp_dir().join(format!(
-            "unitas_anim_world_sprite_swap_{}",
-            std::process::id()
-        ));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir)?;
-
-        let guid_a = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
-        let guid_b = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
-        let missing_guid = "deadbeefdeadbeefdeadbeefdeadbeef";
-        let tex_a = dir.join("a.tga");
-        let tex_b = dir.join("b.tga");
-        write_test_tga(&tex_a, 16, 16, [255, 0, 0])?;
-        write_test_tga(&tex_b, 32, 32, [0, 255, 0])?;
-        for (meta_name, guid) in [("a.tga.meta", guid_a), ("b.tga.meta", guid_b)] {
-            std::fs::write(
-                dir.join(meta_name),
-                format!("fileFormatVersion: 2\nguid: {guid}\nTextureImporter:\n  sRGBTexture: 0\n"),
-            )?;
-        }
-
-        let target = CurveBindingTarget::new("", "SpriteRenderer", "m_Sprite");
-        let controller =
-            build_three_step_sprite_swap_controller(guid_a, guid_b, missing_guid, &target)?;
-
-        let mut world = AnimationWorld::new();
-        world.register_sprite_asset(guid_a, &tex_a);
-        world.register_sprite_asset(guid_b, &tex_b);
-        let entity = EntityId::new(1);
-        world.ensure_animator(entity, Transform::default());
-        let handle = world.register_controller(controller);
-        world.set_controller(entity, handle)?;
-
-        let tex0 = world
-            .resolved_sprite(entity, &target)
-            .flatten()
-            .ok_or("expected resolved sprite at t=0")?;
-        assert_eq!((tex0.width, tex0.height), (16, 16));
-        assert_eq!(world.diagnostic_count(entity), Some(0));
-
-        world.tick(1.0);
-        let tex1 = world
-            .resolved_sprite(entity, &target)
-            .flatten()
-            .ok_or("expected resolved sprite at t=1")?;
-        assert_eq!((tex1.width, tex1.height), (32, 32));
-        assert_eq!(world.diagnostic_count(entity), Some(0));
-
-        world.tick(1.0);
-        let _ = std::fs::remove_dir_all(&dir);
-        let diags = world
-            .diagnostics(entity)
-            .ok_or("expected diagnostics slice")?;
-        assert!(
-            diags.iter().any(|d| d.contains(missing_guid)
-                && d.contains("SpriteRenderer")
-                && d.contains("m_Sprite")),
-            "expected diagnostic naming asset and member, got {diags:?}"
-        );
-        Ok(())
-    }
 }

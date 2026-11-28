@@ -288,6 +288,39 @@ impl ParticleRuntimeWorld {
             .or_insert_with(|| ParticleSystem::new(seed))
     }
 
+    pub fn ensure_system(&mut self, entity: EntityId) -> &mut ParticleSystem {
+        let seed = entity.as_u64().wrapping_mul(0x9E37_79B9_7F4A_7C15);
+        self.register_system(entity, seed)
+    }
+
+    pub fn has_system(&self, entity: EntityId) -> bool {
+        self.systems.contains_key(&entity)
+    }
+
+    pub fn is_playing(&self, entity: EntityId) -> bool {
+        self.systems
+            .get(&entity)
+            .is_some_and(|system| system.state() == ParticleSystemState::Playing)
+    }
+
+    pub fn is_paused(&self, entity: EntityId) -> bool {
+        self.systems
+            .get(&entity)
+            .is_some_and(|system| system.state() == ParticleSystemState::Paused)
+    }
+
+    pub fn is_stopped(&self, entity: EntityId) -> bool {
+        self.systems
+            .get(&entity)
+            .is_some_and(|system| system.state() == ParticleSystemState::Stopped)
+    }
+
+    pub fn particle_count(&self, entity: EntityId) -> usize {
+        self.systems
+            .get(&entity)
+            .map_or(0, |system| system.get_particles().len())
+    }
+
     pub fn register_binding(
         &mut self,
         entity: EntityId,
@@ -385,11 +418,48 @@ impl ParticleRuntimeWorld {
         true
     }
 
+    pub fn stop_with_behavior(&mut self, entity: EntityId, clear: bool) -> bool {
+        let Some(system) = self.systems.get_mut(&entity) else {
+            return false;
+        };
+        system.stop(StopAction::None);
+        if clear {
+            system.clear();
+            self.rebuild_draw_list();
+        }
+        true
+    }
+
     pub fn clear(&mut self, entity: EntityId) -> bool {
         let Some(system) = self.systems.get_mut(&entity) else {
             return false;
         };
         system.clear();
+        self.rebuild_draw_list();
+        true
+    }
+
+    pub fn simulate(&mut self, entity: EntityId, delta_time: f32, restart: bool) -> bool {
+        if !delta_time.is_finite() || delta_time < 0.0 {
+            return false;
+        }
+        let Some(system) = self.systems.get_mut(&entity) else {
+            return false;
+        };
+        if restart {
+            system.stop(StopAction::None);
+            system.clear();
+            system.play();
+        } else if system.state() != ParticleSystemState::Playing {
+            system.play();
+        }
+        if delta_time > 0.0 {
+            system.simulate(delta_time);
+        }
+        let sub_events = system.drain_sub_emitter_events();
+        system.pause();
+        self.dispatch_sub_emitter_events(&sub_events);
+        self.rebuild_draw_list();
         true
     }
 
@@ -398,6 +468,7 @@ impl ParticleRuntimeWorld {
             return false;
         };
         system.emit(count);
+        self.rebuild_draw_list();
         true
     }
 
@@ -547,6 +618,51 @@ impl ParticleRuntimeWorld {
         self.systems
             .get(&entity)
             .map(ParticleSystem::get_trigger_events)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn particle_runtime_world_control_and_state_queries() {
+        let mut world = ParticleRuntimeWorld::new();
+        let entity = EntityId::new(42);
+        assert!(!world.has_system(entity));
+        world.ensure_system(entity);
+        assert!(world.has_system(entity));
+        assert!(world.is_playing(entity));
+        assert!(!world.is_paused(entity));
+        assert!(!world.is_stopped(entity));
+        assert_eq!(world.particle_count(entity), 0);
+
+        assert!(world.emit(entity, 5));
+        assert_eq!(world.particle_count(entity), 5);
+        assert_eq!(world.draw_list().len(), 5);
+
+        assert!(world.pause(entity));
+        assert!(!world.is_playing(entity));
+        assert!(world.is_paused(entity));
+        assert!(!world.is_stopped(entity));
+
+        assert!(world.play(entity));
+        assert!(world.is_playing(entity));
+        assert!(!world.is_paused(entity));
+
+        assert!(world.stop_with_behavior(entity, false));
+        assert!(!world.is_playing(entity));
+        assert!(world.is_stopped(entity));
+        assert_eq!(world.particle_count(entity), 5);
+
+        assert!(world.stop_with_behavior(entity, true));
+        assert_eq!(world.particle_count(entity), 0);
+        assert!(world.draw_list().is_empty());
+
+        assert!(world.emit(entity, 3));
+        assert!(world.simulate(entity, 0.25, true));
+        assert_eq!(world.particle_count(entity), 0);
+        assert!(world.is_paused(entity));
     }
 }
 

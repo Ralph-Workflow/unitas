@@ -6,14 +6,14 @@ using UnityEngine;
 
 namespace Unitas.Bridge
 {
-    /// <summary>
-    /// Runtime-backed animation provider: every call marshals its payload through the runtime's shared path buffer.
-    /// </summary>
     public sealed class RuntimeAnimationProvider : IAnimationProvider
     {
         private const int StateInfoSize = 80;
         private const int StateNameCapacity = 256;
         private const int ValueSize = 4;
+        private const int Vector3Size = 12;
+        private const int QuaternionSize = 16;
+        private const int RootMotionSize = 28;
 
         private readonly ulong _runtimeHandle;
 
@@ -208,7 +208,6 @@ namespace Unitas.Bridge
                 return false;
             }
 
-            // The state name is read first because the state info call overwrites the shared buffer.
             string stateName = string.Empty;
             int nameLength = RuntimeInterop.unitas_runtime_animator_state_name(_runtimeHandle, entityId);
             if (nameLength < 0)
@@ -246,6 +245,344 @@ namespace Unitas.Bridge
                     BitConverter.ToSingle(bytes, 36),
                     BitConverter.ToSingle(bytes, 40)));
             return true;
+        }
+
+        public bool Play(ulong entityId, string stateName)
+        {
+            if (!TryWriteName(stateName, 0, out IntPtr buffer, out ulong length))
+            {
+                return false;
+            }
+
+            return RuntimeInterop.unitas_runtime_animator_play(_runtimeHandle, entityId, buffer, length) == 0;
+        }
+
+        public bool PlayHash(ulong entityId, int stateNameHash)
+        {
+            if (_runtimeHandle == 0UL || entityId == 0UL)
+            {
+                return false;
+            }
+
+            return RuntimeInterop.unitas_runtime_animator_play_hash(_runtimeHandle, entityId, stateNameHash) == 0;
+        }
+
+        public bool PlayQueued(ulong entityId, string stateName)
+        {
+            if (!TryWriteName(stateName, 0, out IntPtr buffer, out ulong length))
+            {
+                return false;
+            }
+
+            return RuntimeInterop.unitas_runtime_animator_play_queued(_runtimeHandle, entityId, buffer, length) == 0;
+        }
+
+        public bool CrossFade(ulong entityId, string stateName, float normalizedTransitionDuration)
+        {
+            if (!TryWriteName(stateName, 0, out IntPtr buffer, out ulong length))
+            {
+                return false;
+            }
+
+            return RuntimeInterop.unitas_runtime_animator_cross_fade(_runtimeHandle, entityId, buffer, length, normalizedTransitionDuration) == 0;
+        }
+
+        public bool CrossFadeHash(ulong entityId, int stateNameHash, float normalizedTransitionDuration)
+        {
+            if (_runtimeHandle == 0UL || entityId == 0UL)
+            {
+                return false;
+            }
+
+            return RuntimeInterop.unitas_runtime_animator_cross_fade_hash(_runtimeHandle, entityId, stateNameHash, normalizedTransitionDuration) == 0;
+        }
+
+        public bool SetApplyRootMotion(ulong entityId, bool apply)
+        {
+            if (_runtimeHandle == 0UL || entityId == 0UL)
+            {
+                return false;
+            }
+
+            return RuntimeInterop.unitas_runtime_animator_set_apply_root_motion(_runtimeHandle, entityId, apply ? 1U : 0U) == 0;
+        }
+
+        public bool GetApplyRootMotion(ulong entityId, out bool apply)
+        {
+            apply = false;
+            IntPtr buffer = RuntimeInterop.unitas_runtime_path_buffer(_runtimeHandle, ValueSize);
+            if (buffer == IntPtr.Zero)
+            {
+                return false;
+            }
+
+            if (RuntimeInterop.unitas_runtime_animator_get_apply_root_motion(_runtimeHandle, entityId, buffer) != 0)
+            {
+                return false;
+            }
+
+            apply = BitConverter.ToUInt32(ReadBytes(buffer, ValueSize), 0) != 0U;
+            return true;
+        }
+
+        public bool GetRootMotion(ulong entityId, out Vector3 deltaPosition, out Quaternion deltaRotation)
+        {
+            deltaPosition = Vector3.zero;
+            deltaRotation = Quaternion.identity;
+            IntPtr buffer = RuntimeInterop.unitas_runtime_path_buffer(_runtimeHandle, RootMotionSize);
+            if (buffer == IntPtr.Zero)
+            {
+                return false;
+            }
+
+            if (RuntimeInterop.unitas_runtime_animator_root_motion(_runtimeHandle, entityId, buffer) != 0)
+            {
+                return false;
+            }
+
+            byte[] bytes = ReadBytes(buffer, RootMotionSize);
+            deltaPosition = new Vector3(
+                BitConverter.ToSingle(bytes, 0),
+                BitConverter.ToSingle(bytes, 4),
+                BitConverter.ToSingle(bytes, 8));
+            deltaRotation = new Quaternion(
+                BitConverter.ToSingle(bytes, 12),
+                BitConverter.ToSingle(bytes, 16),
+                BitConverter.ToSingle(bytes, 20),
+                BitConverter.ToSingle(bytes, 24));
+            return true;
+        }
+
+        public bool SetIKPosition(ulong entityId, AvatarIKGoal goal, Vector3 goalPosition)
+        {
+            if (_runtimeHandle == 0UL || entityId == 0UL)
+            {
+                return false;
+            }
+
+            return RuntimeInterop.unitas_runtime_animator_set_ik_position(
+                _runtimeHandle,
+                entityId,
+                (uint)goal,
+                goalPosition.x,
+                goalPosition.y,
+                goalPosition.z) == 0;
+        }
+
+        public bool GetIKPosition(ulong entityId, AvatarIKGoal goal, out Vector3 goalPosition)
+        {
+            goalPosition = Vector3.zero;
+            IntPtr buffer = RuntimeInterop.unitas_runtime_path_buffer(_runtimeHandle, Vector3Size);
+            if (buffer == IntPtr.Zero)
+            {
+                return false;
+            }
+
+            if (RuntimeInterop.unitas_runtime_animator_get_ik_position(_runtimeHandle, entityId, (uint)goal, buffer) != 0)
+            {
+                return false;
+            }
+
+            byte[] bytes = ReadBytes(buffer, Vector3Size);
+            goalPosition = new Vector3(
+                BitConverter.ToSingle(bytes, 0),
+                BitConverter.ToSingle(bytes, 4),
+                BitConverter.ToSingle(bytes, 8));
+            return true;
+        }
+
+        public bool SetIKPositionWeight(ulong entityId, AvatarIKGoal goal, float value)
+        {
+            if (_runtimeHandle == 0UL || entityId == 0UL)
+            {
+                return false;
+            }
+
+            return RuntimeInterop.unitas_runtime_animator_set_ik_position_weight(_runtimeHandle, entityId, (uint)goal, value) == 0;
+        }
+
+        public bool GetIKPositionWeight(ulong entityId, AvatarIKGoal goal, out float value)
+        {
+            value = 0f;
+            IntPtr buffer = RuntimeInterop.unitas_runtime_path_buffer(_runtimeHandle, ValueSize);
+            if (buffer == IntPtr.Zero)
+            {
+                return false;
+            }
+
+            if (RuntimeInterop.unitas_runtime_animator_get_ik_position_weight(_runtimeHandle, entityId, (uint)goal, buffer) != 0)
+            {
+                return false;
+            }
+
+            value = ReadSingle(buffer, 0);
+            return true;
+        }
+
+        public bool SetIKRotation(ulong entityId, AvatarIKGoal goal, Quaternion goalRotation)
+        {
+            if (_runtimeHandle == 0UL || entityId == 0UL)
+            {
+                return false;
+            }
+
+            return RuntimeInterop.unitas_runtime_animator_set_ik_rotation(
+                _runtimeHandle,
+                entityId,
+                (uint)goal,
+                goalRotation.x,
+                goalRotation.y,
+                goalRotation.z,
+                goalRotation.w) == 0;
+        }
+
+        public bool GetIKRotation(ulong entityId, AvatarIKGoal goal, out Quaternion goalRotation)
+        {
+            goalRotation = Quaternion.identity;
+            IntPtr buffer = RuntimeInterop.unitas_runtime_path_buffer(_runtimeHandle, QuaternionSize);
+            if (buffer == IntPtr.Zero)
+            {
+                return false;
+            }
+
+            if (RuntimeInterop.unitas_runtime_animator_get_ik_rotation(_runtimeHandle, entityId, (uint)goal, buffer) != 0)
+            {
+                return false;
+            }
+
+            byte[] bytes = ReadBytes(buffer, QuaternionSize);
+            goalRotation = new Quaternion(
+                BitConverter.ToSingle(bytes, 0),
+                BitConverter.ToSingle(bytes, 4),
+                BitConverter.ToSingle(bytes, 8),
+                BitConverter.ToSingle(bytes, 12));
+            return true;
+        }
+
+        public bool SetIKRotationWeight(ulong entityId, AvatarIKGoal goal, float value)
+        {
+            if (_runtimeHandle == 0UL || entityId == 0UL)
+            {
+                return false;
+            }
+
+            return RuntimeInterop.unitas_runtime_animator_set_ik_rotation_weight(_runtimeHandle, entityId, (uint)goal, value) == 0;
+        }
+
+        public bool GetIKRotationWeight(ulong entityId, AvatarIKGoal goal, out float value)
+        {
+            value = 0f;
+            IntPtr buffer = RuntimeInterop.unitas_runtime_path_buffer(_runtimeHandle, ValueSize);
+            if (buffer == IntPtr.Zero)
+            {
+                return false;
+            }
+
+            if (RuntimeInterop.unitas_runtime_animator_get_ik_rotation_weight(_runtimeHandle, entityId, (uint)goal, buffer) != 0)
+            {
+                return false;
+            }
+
+            value = ReadSingle(buffer, 0);
+            return true;
+        }
+
+        public bool SetIKHintPosition(ulong entityId, AvatarIKHint hint, Vector3 hintPosition)
+        {
+            if (_runtimeHandle == 0UL || entityId == 0UL)
+            {
+                return false;
+            }
+
+            return RuntimeInterop.unitas_runtime_animator_set_ik_hint_position(
+                _runtimeHandle,
+                entityId,
+                (uint)hint,
+                hintPosition.x,
+                hintPosition.y,
+                hintPosition.z) == 0;
+        }
+
+        public bool GetIKHintPosition(ulong entityId, AvatarIKHint hint, out Vector3 hintPosition)
+        {
+            hintPosition = Vector3.zero;
+            IntPtr buffer = RuntimeInterop.unitas_runtime_path_buffer(_runtimeHandle, Vector3Size);
+            if (buffer == IntPtr.Zero)
+            {
+                return false;
+            }
+
+            if (RuntimeInterop.unitas_runtime_animator_get_ik_hint_position(_runtimeHandle, entityId, (uint)hint, buffer) != 0)
+            {
+                return false;
+            }
+
+            byte[] bytes = ReadBytes(buffer, Vector3Size);
+            hintPosition = new Vector3(
+                BitConverter.ToSingle(bytes, 0),
+                BitConverter.ToSingle(bytes, 4),
+                BitConverter.ToSingle(bytes, 8));
+            return true;
+        }
+
+        public bool SetIKHintPositionWeight(ulong entityId, AvatarIKHint hint, float value)
+        {
+            if (_runtimeHandle == 0UL || entityId == 0UL)
+            {
+                return false;
+            }
+
+            return RuntimeInterop.unitas_runtime_animator_set_ik_hint_position_weight(_runtimeHandle, entityId, (uint)hint, value) == 0;
+        }
+
+        public bool GetIKHintPositionWeight(ulong entityId, AvatarIKHint hint, out float value)
+        {
+            value = 0f;
+            IntPtr buffer = RuntimeInterop.unitas_runtime_path_buffer(_runtimeHandle, ValueSize);
+            if (buffer == IntPtr.Zero)
+            {
+                return false;
+            }
+
+            if (RuntimeInterop.unitas_runtime_animator_get_ik_hint_position_weight(_runtimeHandle, entityId, (uint)hint, buffer) != 0)
+            {
+                return false;
+            }
+
+            value = ReadSingle(buffer, 0);
+            return true;
+        }
+
+        public bool SetLookAtPosition(ulong entityId, Vector3 lookAtPosition)
+        {
+            if (_runtimeHandle == 0UL || entityId == 0UL)
+            {
+                return false;
+            }
+
+            return RuntimeInterop.unitas_runtime_animator_set_look_at_position(
+                _runtimeHandle,
+                entityId,
+                lookAtPosition.x,
+                lookAtPosition.y,
+                lookAtPosition.z) == 0;
+        }
+
+        public bool SetLookAtWeight(ulong entityId, float weight, float bodyWeight, float headWeight, float eyesWeight, float clampWeight)
+        {
+            if (_runtimeHandle == 0UL || entityId == 0UL)
+            {
+                return false;
+            }
+
+            return RuntimeInterop.unitas_runtime_animator_set_look_at_weight(
+                _runtimeHandle,
+                entityId,
+                weight,
+                bodyWeight,
+                headWeight,
+                eyesWeight,
+                clampWeight) == 0;
         }
 
         public readonly struct FiredAnimatorEvent
@@ -371,7 +708,6 @@ namespace Unitas.Bridge
         }
     }
 
-    /// <summary>Serializes an animator controller into the native controller binary format.</summary>
     public static class AnimatorControllerEncoder
     {
         private const uint WireVersion = 1;
@@ -382,11 +718,20 @@ namespace Unitas.Bridge
             bytes.AddRange(Encoding.ASCII.GetBytes("UANC"));
             WriteUInt32(bytes, WireVersion);
             WriteString(bytes, controller.name);
+            WriteParameters(bytes, controller.parameters);
+            WriteStates(bytes, controller.states);
+            int entryIndex = controller.entryState.Length > 0 ? controller.IndexOfState(controller.entryState) : 0;
+            WriteUInt32(bytes, (uint)Math.Max(entryIndex, 0));
+            WriteTransitions(bytes, controller);
+            return bytes.ToArray();
+        }
 
-            WriteUInt32(bytes, (uint)controller.parameters.Count);
-            for (int index = 0; index < controller.parameters.Count; index++)
+        private static void WriteParameters(List<byte> bytes, IReadOnlyList<AnimatorControllerParameter> parameters)
+        {
+            WriteUInt32(bytes, (uint)parameters.Count);
+            for (int index = 0; index < parameters.Count; index++)
             {
-                AnimatorControllerParameter parameter = controller.parameters[index];
+                AnimatorControllerParameter parameter = parameters[index];
                 WriteString(bytes, parameter.name);
                 switch (parameter.type)
                 {
@@ -408,11 +753,14 @@ namespace Unitas.Bridge
                         break;
                 }
             }
+        }
 
-            WriteUInt32(bytes, (uint)controller.states.Count);
-            for (int index = 0; index < controller.states.Count; index++)
+        private static void WriteStates(List<byte> bytes, IReadOnlyList<AnimatorControllerState> states)
+        {
+            WriteUInt32(bytes, (uint)states.Count);
+            for (int index = 0; index < states.Count; index++)
             {
-                AnimatorControllerState state = controller.states[index];
+                AnimatorControllerState state = states[index];
                 WriteString(bytes, state.name);
                 WriteSingle(bytes, state.speed);
                 WriteBool(bytes, state.isExit);
@@ -426,10 +774,10 @@ namespace Unitas.Bridge
                     WriteClip(bytes, state.clip);
                 }
             }
+        }
 
-            int entryIndex = controller.entryState.Length > 0 ? controller.IndexOfState(controller.entryState) : 0;
-            WriteUInt32(bytes, (uint)Math.Max(entryIndex, 0));
-
+        private static void WriteTransitions(List<byte> bytes, AnimatorController controller)
+        {
             WriteUInt32(bytes, (uint)controller.transitions.Count);
             for (int index = 0; index < controller.transitions.Count; index++)
             {
@@ -459,8 +807,6 @@ namespace Unitas.Bridge
                     }
                 }
             }
-
-            return bytes.ToArray();
         }
 
         private static void WriteClip(List<byte> bytes, AnimationClip clip)

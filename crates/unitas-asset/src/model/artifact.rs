@@ -687,10 +687,17 @@ pub fn load_or_cook_mesh_with_cache(
 }
 
 pub fn default_mesh_cache_dir(project_root: &Path) -> PathBuf {
+    if !project_root.as_os_str().is_empty() && project_root.is_dir() {
+        return project_root
+            .join("Library")
+            .join("unitas")
+            .join("cache")
+            .join("mesh");
+    }
     let hash = fnv1a_hash(project_root.to_string_lossy().as_bytes());
     std::env::temp_dir()
         .join("unitas_mesh_import_cache")
-        .join(format!("{}_{hash:016x}", std::process::id()))
+        .join(format!("{hash:016x}"))
 }
 
 pub fn default_mesh_cache_dir_for_path(path: &Path, fingerprint: &ImportFingerprint) -> PathBuf {
@@ -707,11 +714,7 @@ pub fn default_mesh_cache_dir_for_path(path: &Path, fingerprint: &ImportFingerpr
         .unwrap_or_else(|| format!("{:016x}", fingerprint.source));
     std::env::temp_dir()
         .join("unitas_mesh_import_cache")
-        .join(format!(
-            "{}_{:016x}",
-            std::process::id(),
-            fnv1a_hash(key.as_bytes())
-        ))
+        .join(format!("{:016x}", fnv1a_hash(key.as_bytes())))
 }
 
 fn find_ancestor_manifest(path: &Path) -> Option<(PathBuf, PathBuf, CookedMeshManifest)> {

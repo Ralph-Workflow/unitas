@@ -1,3 +1,5 @@
+using System;
+
 namespace UnityEngine
 {
     public readonly struct AnimatorStateInfo
@@ -22,7 +24,8 @@ namespace UnityEngine
             bool isInTransition,
             Vector3 position)
         {
-            this.name = name ?? string.Empty;
+            string resolvedName = name ?? string.Empty;
+            this.name = resolvedName;
             this.stateIndex = stateIndex;
             this.normalizedTime = normalizedTime;
             this.length = length;
@@ -30,6 +33,10 @@ namespace UnityEngine
             this.weight = weight;
             this.isInTransition = isInTransition;
             this.position = position;
+            shortNameHash = Animator.StringToHash(resolvedName);
+            fullPathHash = resolvedName.Length == 0
+                ? 0
+                : Animator.StringToHash("Base Layer." + resolvedName);
         }
 
         public string name { get; }
@@ -46,7 +53,31 @@ namespace UnityEngine
 
         public bool isInTransition { get; }
 
-        /// <summary>Local position of the animated transform after the latest sample.</summary>
         public Vector3 position { get; }
+
+        public int shortNameHash { get; }
+
+        public int fullPathHash { get; }
+
+        public bool IsName(string stateName)
+        {
+            if (string.IsNullOrEmpty(stateName) || string.IsNullOrEmpty(name))
+            {
+                return false;
+            }
+
+            if (string.Equals(name, stateName, StringComparison.Ordinal))
+            {
+                return true;
+            }
+
+            if (string.Equals("Base Layer." + name, stateName, StringComparison.Ordinal))
+            {
+                return true;
+            }
+
+            int hash = Animator.StringToHash(stateName);
+            return hash == shortNameHash || hash == fullPathHash;
+        }
     }
 }
