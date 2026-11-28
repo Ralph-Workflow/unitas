@@ -9,6 +9,9 @@ source categories covered, the rule set, the strictness baseline, the
 formatting responsibilities, and the rules around inline suppressions and
 configuration overrides.
 
+Loading trigger: a change to a lint or format rule, its configuration, or
+a suppression.
+
 ## Default requirements
 
 A maintained first-party language includes interpreted or compiled production

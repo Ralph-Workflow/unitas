@@ -12,6 +12,12 @@ also defines how first-party code MUST be written and structured so the
 checker can prove as much as possible: richer types, total functions,
 isolated side effects, and no dynamic constructs that create unchecked holes.
 
+Loading trigger: a change to type-checker configuration, strictness, or a
+suppression, or a first-party type shape the checker must prove.
+
+Loading trigger: a change to type-checker configuration, strictness, or a
+suppression, or a first-party type shape the checker must prove.
+
 ## Default requirements
 
 Every maintained first-party language MUST be statically type-checked (the

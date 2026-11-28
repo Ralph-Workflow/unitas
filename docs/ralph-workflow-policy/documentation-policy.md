@@ -11,6 +11,9 @@ restrictions on docstrings, comments, public APIs, configuration,
 commands, examples, migrations, and release notes, and where each kind
 of documentation belongs.
 
+Loading trigger: a behaviour change that a documentation surface
+describes, or a change to a documentation surface itself.
+
 ## Default requirements
 
 * Documentation MUST explain current behaviour and user decisions. It

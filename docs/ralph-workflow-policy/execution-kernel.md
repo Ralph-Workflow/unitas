@@ -230,7 +230,7 @@ Agents load the kernel plus only the domain policies triggered by the
 changed surfaces. The kernel is always loaded; conditional domain
 policies load when their declared triggers fire (B2). The default for
 a conditional starter is "do not load it" — the starter's own
-"Applicability" section names the trigger; the AGENTS.md managed block
+"Purpose and scope" section names the trigger; the AGENTS.md managed block
 restates the rule; the remediation prompt enforces it. Loading every
 policy on every change is the symptom the kernel explicitly rules out.
 
@@ -320,7 +320,7 @@ without re-deriving them.
    Run every gate, No weakening, Policy follows reality,
    Report failures honestly.
 4. LOAD only the domain policies triggered by the change. The kernel
-   names the rule; the per-starter "Applicability" section names the
+   names the rule; the per-starter "Purpose and scope" section names the
    trigger; the AGENTS.md managed block restates the rule; the
    remediation prompt enforces it.
 5. ON CONFLICT, the kernel wins. A domain starter, a project fact, a

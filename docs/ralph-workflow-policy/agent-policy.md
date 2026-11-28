@@ -9,6 +9,12 @@ to every change made through Claude Code, OpenCode, or any other agent
 shell. It defines the project instruction surface, the gate obligations,
 the truthfulness obligations, and the documentation update obligations.
 
+Loading trigger: every change an agent makes — this policy loads with the
+kernel on every task.
+
+Loading trigger: every change an agent makes — this policy loads with the
+kernel on every task.
+
 ## Default requirements
 
 * Every AI agent MUST read `AGENTS.md`, `agent-policy.md`, and

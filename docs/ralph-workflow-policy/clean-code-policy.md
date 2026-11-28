@@ -12,6 +12,9 @@ rules for refactoring code that cannot be tested or understood cleanly;
 and the treatment of generated, vendored, migration, and compatibility
 code.
 
+Loading trigger: a change to first-party source structure, naming, module
+boundaries, error handling, or logging.
+
 ## Default requirements
 
 * The agent MUST follow project-specific naming conventions verified
