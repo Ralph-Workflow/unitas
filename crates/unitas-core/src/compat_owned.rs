@@ -622,7 +622,7 @@ pub const OWNED_FEATURE_CAPABILITIES: &[OwnedFeatureCapability] = &[
                 behavior: "2D physics is reachable from a Unity scene and from the C# surface",
                 location: "crates/unitas-runtime/src/physics.rs",
                 evidence: &[
-                    "crates/unitas-runtime/tests/physics2d_collider_surface_tests.rs::composite_outline_merges_two_abutting_box_colliders_and_slides_smoothly_across_seam",
+                    "crates/unitas-runtime/tests/physics2d_collider_surface_tests.rs::physics2d_composite_outline_merges_two_abutting_box_colliders_and_slides_smoothly_across_seam",
                     "bridge/Unitas.Bridge.Tests/Physics2DTests.cs::TestSceneParsesExtendedCollidersAndMaterials",
                     "bridge/Unitas.Bridge.Tests/Physics2DMessageTests.cs::TestWicksLanternEndToEndPlatformerScenario",
                 ],

@@ -23,6 +23,7 @@ const AV_PIX_FMT_RGBA: c_int = 26;
 const SWS_BILINEAR: c_int = 2;
 
 static VIDEO_PLAYER_ID_SEQ: AtomicU64 = AtomicU64::new(1);
+#[cfg(not(target_arch = "wasm32"))]
 static VIDEO_TEMP_SEQ: AtomicU64 = AtomicU64::new(1);
 static VIDEO_PLAYERS: OnceLock<Mutex<BTreeMap<u64, Arc<Mutex<VideoPlayerInternal>>>>> =
     OnceLock::new();
