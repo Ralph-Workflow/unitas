@@ -200,10 +200,10 @@ impl NavigationRuntimeWorld {
                     .with_carving(entry.carving)
                     .with_carve_only_stationary(entry.carve_only_stationary, entry.is_stationary)
                     .with_enabled(entry.enabled && entry.carving);
-                if let Ok(index) = self.navmesh.add_obstacle(obstacle) {
-                    if let Some(slot) = self.obstacles.get_mut(&entity) {
-                        slot.navmesh_index = Some(index);
-                    }
+                if let Ok(index) = self.navmesh.add_obstacle(obstacle)
+                    && let Some(slot) = self.obstacles.get_mut(&entity)
+                {
+                    slot.navmesh_index = Some(index);
                 }
             }
         }
@@ -214,10 +214,10 @@ impl NavigationRuntimeWorld {
         entity: EntityId,
         mut entry: RuntimeObstacleEntry,
     ) -> Result<usize, NavigationRuntimeError> {
-        if let Some(existing) = self.obstacles.get(&entity) {
-            if let Some(old_index) = existing.navmesh_index {
-                self.navmesh.set_obstacle_enabled(old_index, false);
-            }
+        if let Some(existing) = self.obstacles.get(&entity)
+            && let Some(old_index) = existing.navmesh_index
+        {
+            self.navmesh.set_obstacle_enabled(old_index, false);
         }
         let obstacle = NavMeshObstacle::carving_box(entry.center, entry.half_extents())
             .with_carving(entry.carving)

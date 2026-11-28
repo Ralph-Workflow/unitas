@@ -150,22 +150,6 @@ impl Runtime {
         registered
     }
 
-    pub(crate) fn step_navigation_and_write_back(&mut self, scaled_delta: f64) {
-        if scaled_delta < 0.0 {
-            return;
-        }
-        let _ = self.navigation.step(scaled_delta);
-        let entities = self.navigation.agent_entities();
-        for entity in entities {
-            if let Some(agent) = self.navigation.agent(entity) {
-                if agent.update_position {
-                    let pos = agent.position();
-                    self.write_back_entity_transform(entity, pos);
-                }
-            }
-        }
-    }
-
     pub fn ensure_navmesh_agent(&mut self, entity: EntityId) {
         let pos = self.entity_transform(entity).map_or([0.0; 3], |tf| {
             [

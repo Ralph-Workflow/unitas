@@ -24,6 +24,14 @@ pub use unitas_asset::texture::{
     COOKED_TEXTURE_MAGIC,
 };
 
+pub use unitas_asset::video_import::{
+    cook_project_videos, default_video_cache_dir, is_video_source_path, load_or_cook_video,
+    load_or_cook_video_with_cache, CookedVideo, CookedVideoEntry, CookedVideoManifest,
+    VIDEO_IMPORTER_VERSION, COOKED_VIDEO_DIR_NAME, COOKED_VIDEO_EXTENSION,
+    COOKED_VIDEO_FORMAT_VERSION, COOKED_VIDEO_MAGIC, COOKED_VIDEO_MANIFEST_FILENAME,
+    COOKED_VIDEO_MANIFEST_FORMAT, COOKED_VIDEO_MANIFEST_FORMAT_VERSION,
+};
+
 use crate::bundle::BundleError;
 
 pub fn stage_project_assets_without_raw_textures(
@@ -134,6 +142,23 @@ pub fn stage_project_cooked_audio_with_cache(
     cook_project_audio(project_root, cache_dir, &cooked_dir).map_err(map_cache_error)
 }
 
+pub fn stage_project_cooked_videos(
+    project_root: &Path,
+    output_dir: &Path,
+) -> Result<(CookedVideoManifest, ImportSessionReport), BundleError> {
+    let cache_dir = default_video_cache_dir(project_root);
+    stage_project_cooked_videos_with_cache(project_root, &cache_dir, output_dir)
+}
+
+pub fn stage_project_cooked_videos_with_cache(
+    project_root: &Path,
+    cache_dir: &Path,
+    output_dir: &Path,
+) -> Result<(CookedVideoManifest, ImportSessionReport), BundleError> {
+    let cooked_dir = output_dir.join(COOKED_VIDEO_DIR_NAME);
+    cook_project_videos(project_root, cache_dir, &cooked_dir).map_err(map_cache_error)
+}
+
 fn map_cache_error(error: ImportCacheError) -> BundleError {
     BundleError::Io {
         path: error.path,
@@ -162,6 +187,7 @@ fn copy_non_texture_directory(source: &Path, destination: &Path) -> Result<(), B
         } else if is_texture_source_path(&path)
             || is_audio_source_path(&path)
             || is_mesh_source_path(&path)
+            || is_video_source_path(&path)
         {
             if target.is_file() {
                 let _ = fs::remove_file(&target);

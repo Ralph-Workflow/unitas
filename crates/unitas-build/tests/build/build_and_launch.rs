@@ -3,9 +3,9 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use unitas_build::{
-    build_project, execute_build, launch_bundle, BuildConfiguration, BuildMode, BuildOutcome,
-    BuildReport, BuildTarget, BundleError, BundleManifest, PlayerStartupError,
-    BUILD_REPORT_FILENAME, DEVELOPMENT_DIAGNOSTICS_MARKER_FILENAME,
+    build_project, execute_build, launch_bundle, stage_bundle_for_host, BuildConfiguration,
+    BuildMode, BuildOutcome, BuildReport, BuildTarget, BundleError, BundleManifest,
+    PlayerStartupError, BUILD_REPORT_FILENAME, DEVELOPMENT_DIAGNOSTICS_MARKER_FILENAME,
 };
 
 static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -340,6 +340,82 @@ fn staged_bundle_cooks_textures_under_cooked_with_manifest_excludes_raw_textures
 
     fs::remove_dir_all(&workspace)?;
     Ok(())
+}
+
+#[test]
+fn staged_bundle_cooks_videos_and_runtime_loads_cooked_clip_without_source_file(
+) -> Result<(), Box<dyn std::error::Error>> {
+    use unitas_build::cooked::{
+        load_or_cook_video, CookedVideo, CookedVideoManifest, COOKED_DIR_NAME,
+        COOKED_VIDEO_MANIFEST_FILENAME,
+    };
+    use unitas_build::sample::marble_rush_scene_yaml;
+
+    let workspace = temp_dir("cooked_video_bundle_pipeline")?;
+    let project_root = workspace.join("project");
+    let scenes_dir = project_root.join("Assets").join("Scenes");
+    let video_dir = project_root.join("Assets").join("Video");
+    fs::create_dir_all(&scenes_dir)?;
+    fs::create_dir_all(&video_dir)?;
+    let scene_path = scenes_dir.join("VideoScene.unity");
+    fs::write(&scene_path, marble_rush_scene_yaml())?;
+    fs::write(
+        video_dir.join("intro.ivf"),
+        synthetic_ivf_bytes(64, 48, 15, 1, 30),
+    )?;
+    fs::write(
+        video_dir.join("intro.ivf.meta"),
+        "fileFormatVersion: 2\nguid: eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee\nVideoClipImporter:\n  keepAlpha: 0\n",
+    )?;
+
+    let config = BuildConfiguration::for_host(vec![scene_path], "CookedVideoGame");
+    let bundle_dir = workspace.join("video_bundle");
+    stage_bundle_for_host(&config, &bundle_dir, None)?;
+
+    let cooked_dir = bundle_dir.join(COOKED_DIR_NAME);
+    assert!(cooked_dir.join(COOKED_VIDEO_MANIFEST_FILENAME).is_file());
+    let manifest = CookedVideoManifest::load_from_dir(&cooked_dir)
+        .ok_or("expected cooked video manifest in bundle")?;
+    let entry = manifest
+        .get_by_asset_path("Assets/Video/intro.ivf")
+        .ok_or("expected Assets/Video/intro.ivf in cooked video manifest")?;
+    let cooked_file = cooked_dir.join(&entry.cooked_path);
+    assert!(cooked_file.is_file());
+    let decoded = CookedVideo::decode(&fs::read(&cooked_file)?)?;
+    assert_eq!(decoded.width, entry.width);
+    assert_eq!(decoded.height, entry.height);
+    assert_eq!(decoded.frame_count, entry.frame_count);
+
+    // The raw clip stays out of the staged bundle; only its meta and the
+    // cooked artifact ship, so a player runs cooked-only.
+    assert!(!bundle_dir.join("Assets/Video/intro.ivf").exists());
+    assert!(bundle_dir.join("Assets/Video/intro.ivf.meta").is_file());
+
+    // The runtime video load path resolves the cooked artifact with the
+    // source clip absent.
+    let staged_virtual_path = bundle_dir.join("Assets").join("Video").join("intro.ivf");
+    let cooked_clip = load_or_cook_video(&staged_virtual_path)
+        .ok_or("expected runtime to load cooked video without the source file")?;
+    assert_eq!(cooked_clip.width, 64);
+    assert_eq!(cooked_clip.height, 48);
+
+    fs::remove_dir_all(&workspace)?;
+    Ok(())
+}
+
+fn synthetic_ivf_bytes(width: u16, height: u16, fps_num: u32, fps_den: u32, frames: u32) -> Vec<u8> {
+    let mut out = Vec::with_capacity(32);
+    out.extend_from_slice(b"DKIF");
+    out.extend_from_slice(&0u16.to_le_bytes());
+    out.extend_from_slice(&32u16.to_le_bytes());
+    out.extend_from_slice(b"VP80");
+    out.extend_from_slice(&width.to_le_bytes());
+    out.extend_from_slice(&height.to_le_bytes());
+    out.extend_from_slice(&fps_num.to_le_bytes());
+    out.extend_from_slice(&fps_den.to_le_bytes());
+    out.extend_from_slice(&frames.to_le_bytes());
+    out.extend_from_slice(&0u32.to_le_bytes());
+    out
 }
 
 fn assert_staged_cooked_textures_and_meshes(

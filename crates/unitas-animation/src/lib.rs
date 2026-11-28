@@ -12,11 +12,11 @@ pub use clip::{
     TransformChannel, TransformProperty, WrapMode,
 };
 pub use controller::{
-    blend_sampled_bindings, AnimationDiagnostic, Animator, AnimatorController, AnimatorCullingMode,
-    AnimatorFrame, AnimatorState, AnimatorStateInfo, AnimatorStepResult, AnimatorUpdateMode,
-    BlendTree2DMode, ConditionOp, InterruptionSource, ParameterDef, ParameterType, ParameterValue,
-    StateMachineCallback, StateMachineCallbackKind, StateMotion, StateTransition,
-    TransitionCondition, TransitionTarget,
+    blend_sampled_bindings, AnimationDiagnostic, Animator, AnimatorController, AnimatorControllerLayer,
+    AnimatorCullingMode, AnimatorFrame, AnimatorState, AnimatorStateInfo, AnimatorStepResult,
+    AnimatorUpdateMode, BlendTree2DMode, ConditionOp, InterruptionSource, LayerBlendingMode,
+    ParameterDef, ParameterType, ParameterValue, StateMachineCallback, StateMachineCallbackKind,
+    StateMotion, StateTransition, TransitionCondition, TransitionTarget,
 };
 pub use curve::{
     AnimatedValue, AnimationCurve, FloatCurve, InterpolationMode, Keyframe, PropertyCurve,

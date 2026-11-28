@@ -1,8 +1,8 @@
 use crate::clip::{AnimationClip, AnimationEvent, CurveBinding, CurveBindingTarget, WrapMode};
 use crate::controller::{
-    AnimatorController, AnimatorState, BlendTree2DMode, ConditionOp, InterruptionSource,
-    ParameterDef, ParameterValue, StateMotion, StateTransition, TransitionCondition,
-    TransitionTarget,
+    AnimatorController, AnimatorControllerLayer, AnimatorState, BlendTree2DMode, ConditionOp,
+    InterruptionSource, LayerBlendingMode, ParameterDef, ParameterValue, StateMotion,
+    StateTransition, TransitionCondition, TransitionTarget,
 };
 use crate::curve::{
     AssetReference, FloatCurve, InterpolationMode, Keyframe, ObjectReferenceCurve,
@@ -13,6 +13,7 @@ use crate::error::AnimationError;
 pub const WIRE_MAGIC: [u8; 4] = *b"UANC";
 pub const WIRE_VERSION: u32 = 2;
 const EXTENSION_MAGIC: u32 = 0x5744_0001;
+const EXTENSION_LAYERS_MAGIC: u32 = 0x5744_0002;
 
 pub fn encode_controller_binary(controller: &AnimatorController) -> Vec<u8> {
     let mut out = Vec::new();
@@ -55,8 +56,12 @@ fn write_parameters(out: &mut Vec<u8>, controller: &AnimatorController) {
 }
 
 fn write_states(out: &mut Vec<u8>, controller: &AnimatorController) {
-    write_u32(out, controller.states.len() as u32);
-    for state in &controller.states {
+    write_states_slice(out, &controller.states);
+}
+
+fn write_states_slice(out: &mut Vec<u8>, states: &[AnimatorState]) {
+    write_u32(out, states.len() as u32);
+    for state in states {
         write_str(out, &state.name);
         write_f32(out, state.speed);
         write_bool(out, state.is_exit);
@@ -117,8 +122,12 @@ fn write_motion(out: &mut Vec<u8>, motion: &StateMotion) {
 }
 
 fn write_transitions(out: &mut Vec<u8>, controller: &AnimatorController) {
-    write_u32(out, controller.transitions.len() as u32);
-    for tr in &controller.transitions {
+    write_transitions_slice(out, &controller.transitions);
+}
+
+fn write_transitions_slice(out: &mut Vec<u8>, transitions: &[StateTransition]) {
+    write_u32(out, transitions.len() as u32);
+    for tr in transitions {
         write_u32(out, tr.source_state as u32);
         write_transition_target(out, &tr.target);
         write_bool(out, tr.has_exit_time);
@@ -174,6 +183,35 @@ fn write_extensions(out: &mut Vec<u8>, controller: &AnimatorController) {
     for state in &controller.states {
         write_bool(out, state.write_defaults);
     }
+    if !controller.layers.is_empty() {
+        write_u32(out, EXTENSION_LAYERS_MAGIC);
+        write_u32(out, controller.layers.len() as u32);
+        for layer in &controller.layers {
+            write_str(out, &layer.name);
+            write_f32(out, layer.weight);
+            write_u8(
+                out,
+                match layer.blending_mode {
+                    LayerBlendingMode::Override => 0,
+                    LayerBlendingMode::Additive => 1,
+                },
+            );
+            match &layer.mask {
+                Some(mask) => {
+                    write_u8(out, 1);
+                    write_str(out, mask.name());
+                    write_u32(out, mask.paths().len() as u32);
+                    for path in mask.paths() {
+                        write_str(out, path);
+                    }
+                }
+                None => write_u8(out, 0),
+            }
+            write_states_slice(out, &layer.states);
+            write_u32(out, layer.entry_state as u32);
+            write_transitions_slice(out, &layer.transitions);
+        }
+    }
 }
 
 pub fn decode_controller_binary(bytes: &[u8]) -> Result<AnimatorController, AnimationError> {
@@ -193,6 +231,7 @@ pub fn decode_controller_binary(bytes: &[u8]) -> Result<AnimatorController, Anim
     let entry_state = cursor.read_u32()? as usize;
     let transitions = read_transitions(&mut cursor)?;
     read_extensions(&mut cursor, &mut states)?;
+    let layers = read_layers_extension(&mut cursor)?;
 
     Ok(AnimatorController {
         name,
@@ -200,6 +239,7 @@ pub fn decode_controller_binary(bytes: &[u8]) -> Result<AnimatorController, Anim
         states,
         entry_state,
         transitions,
+        layers,
     })
 }
 
@@ -396,6 +436,60 @@ fn read_extensions(
         state.write_defaults = cursor.read_bool("AnimatorState.write_defaults")?;
     }
     Ok(())
+}
+
+fn read_layers_extension(cursor: &mut Cursor<'_>) -> Result<Vec<AnimatorControllerLayer>, AnimationError> {
+    if cursor.remaining() < 4 || cursor.peek_u32()? != EXTENSION_LAYERS_MAGIC {
+        return Ok(Vec::new());
+    }
+    cursor.skip(4);
+    let layer_count = cursor.read_u32()? as usize;
+    let mut layers = Vec::with_capacity(layer_count.min(64));
+    for _ in 0..layer_count {
+        let name = cursor.read_str()?;
+        let weight = cursor.read_f32()?;
+        let blending_mode = match cursor.read_u8()? {
+            0 => LayerBlendingMode::Override,
+            1 => LayerBlendingMode::Additive,
+            other => {
+                return Err(AnimationError::InvalidTag {
+                    section: "LayerBlendingMode",
+                    tag: other,
+                })
+            }
+        };
+        let mask = match cursor.read_u8()? {
+            0 => None,
+            1 => {
+                let mask_name = cursor.read_str()?;
+                let path_count = cursor.read_u32()? as usize;
+                let mut mask = crate::avatar_mask::AvatarMask::new(mask_name);
+                for _ in 0..path_count.min(4096) {
+                    mask = mask.with_path(cursor.read_str()?);
+                }
+                Some(mask)
+            }
+            other => {
+                return Err(AnimationError::InvalidTag {
+                    section: "LayerMask",
+                    tag: other,
+                })
+            }
+        };
+        let states = read_states(cursor)?;
+        let entry_state = cursor.read_u32()? as usize;
+        let transitions = read_transitions(cursor)?;
+        layers.push(AnimatorControllerLayer {
+            name,
+            weight,
+            mask,
+            blending_mode,
+            states,
+            entry_state,
+            transitions,
+        });
+    }
+    Ok(layers)
 }
 
 fn write_clip(out: &mut Vec<u8>, clip: &AnimationClip) {

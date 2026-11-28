@@ -10,6 +10,8 @@ mod input_tests;
 mod jobs_tests;
 #[path = "runtime/navigation_tests.rs"]
 mod navigation_tests;
+#[path = "runtime/navigation_writeback_tests.rs"]
+mod navigation_writeback_tests;
 #[path = "runtime/physics_tests.rs"]
 mod physics_tests;
 #[path = "runtime/player_loop_tests.rs"]

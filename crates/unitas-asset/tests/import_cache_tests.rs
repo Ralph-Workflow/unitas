@@ -98,7 +98,8 @@ fn assert_no_pid_segment(path: &Path) {
         let piece = component.as_os_str().to_string_lossy();
         assert!(
             !piece.starts_with(&pid_prefix),
-            "cache path {path:?} must not contain pid prefix {pid_prefix}"
+            "cache path {} must not contain pid prefix {pid_prefix}",
+            path.display()
         );
     }
 }

@@ -942,13 +942,15 @@ fn assemble_documents(
     )?;
     set.navigation = collect_navigation(
         stream,
-        graph,
         &set.game_objects,
-        &set.transforms,
-        &instance_roots,
-        &set.physics,
-        &set.render,
-        index,
+        &scene_navigation::NavigationWorld {
+            graph,
+            transforms: &set.transforms,
+            instance_roots: &instance_roots,
+            physics: &set.physics,
+            render: &set.render,
+            index,
+        },
     )?;
     set.ui = collect_ui(stream, &set.game_objects, &instance_roots, index);
     let (particles, trails) =

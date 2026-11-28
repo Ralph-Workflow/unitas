@@ -1,5 +1,6 @@
 use std::collections::BTreeSet;
 
+use crate::avatar_mask::AvatarMask;
 use crate::clip::{AnimationClip, AnimationEvent, ClipSample, SampledBinding};
 use crate::error::AnimationError;
 use crate::wire::{decode_controller_binary, encode_controller_binary};
@@ -381,6 +382,30 @@ impl std::fmt::Display for AnimationDiagnostic {
     }
 }
 
+/// How an additional controller layer combines with the layers below it.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum LayerBlendingMode {
+    #[default]
+    Override,
+    // shortcut: additive layers currently blend like override layers (no
+    // reference-pose delta); upgrade when additive reference pose import lands
+    Additive,
+}
+
+/// An AnimatorController layer above the base layer. Unity layer 0 is the base
+/// layer and stays in `AnimatorController`'s top-level `states`/`entry_state`/
+/// `transitions` fields; layers 1..n live here.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct AnimatorControllerLayer {
+    pub name: String,
+    pub weight: f32,
+    pub mask: Option<AvatarMask>,
+    pub blending_mode: LayerBlendingMode,
+    pub states: Vec<AnimatorState>,
+    pub entry_state: usize,
+    pub transitions: Vec<StateTransition>,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct AnimatorController {
     pub name: String,
@@ -388,6 +413,7 @@ pub struct AnimatorController {
     pub states: Vec<AnimatorState>,
     pub entry_state: usize,
     pub transitions: Vec<StateTransition>,
+    pub layers: Vec<AnimatorControllerLayer>,
 }
 
 impl AnimatorController {
@@ -404,6 +430,7 @@ impl AnimatorController {
             states,
             entry_state,
             transitions,
+            layers: Vec::new(),
         }
     }
 
@@ -422,7 +449,46 @@ impl AnimatorController {
         }
         self.validate_transitions(&mut diagnostics);
         self.validate_reachability(&mut diagnostics);
+        for (layer_index, layer) in self.layers.iter().enumerate() {
+            for state in &layer.states {
+                self.validate_state(state, &mut diagnostics);
+            }
+            self.validate_layer_transitions(layer, layer_index, &mut diagnostics);
+        }
         diagnostics
+    }
+
+    fn validate_layer_transitions(
+        &self,
+        layer: &AnimatorControllerLayer,
+        layer_index: usize,
+        diagnostics: &mut Vec<AnimationDiagnostic>,
+    ) {
+        for transition in &layer.transitions {
+            let source_name = match transition.source() {
+                TransitionSource::AnyState => "Any State".to_string(),
+                TransitionSource::State(index) => layer
+                    .states
+                    .get(index)
+                    .map_or_else(|| format!("#{index}"), |state| state.name.clone()),
+            };
+            if let TransitionSource::State(index) = transition.source() {
+                if index >= layer.states.len() {
+                    diagnostics.push(AnimationDiagnostic::ConflictingTransition {
+                        source_state: format!("layer {layer_index} ({source_name})"),
+                        reason: "source state index out of bounds".to_string(),
+                    });
+                }
+            }
+            if let TransitionTarget::State(dst) = transition.target {
+                if dst >= layer.states.len() {
+                    diagnostics.push(AnimationDiagnostic::ConflictingTransition {
+                        source_state: format!("layer {layer_index} ({source_name})"),
+                        reason: "target state index out of bounds".to_string(),
+                    });
+                }
+            }
+        }
     }
 
     fn validate_state(&self, state: &AnimatorState, diagnostics: &mut Vec<AnimationDiagnostic>) {
@@ -708,9 +774,9 @@ fn state_clips(state: &AnimatorState) -> Vec<&AnimationClip> {
     }
 }
 
-fn capture_defaults(controller: &AnimatorController) -> Vec<SampledBinding> {
+fn capture_defaults(states: &[AnimatorState]) -> Vec<SampledBinding> {
     let mut defaults: Vec<SampledBinding> = Vec::new();
-    for state in &controller.states {
+    for state in states {
         for clip in state_clips(state) {
             for binding in &clip.bindings {
                 if defaults
@@ -832,6 +898,17 @@ struct ActiveTransition {
     target_frames: u32,
 }
 
+/// Per-layer playback state for additional `AnimatorControllerLayer`s.
+/// The base layer keeps using the top-level `Animator` fields.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct LayerPlayer {
+    current_state: usize,
+    state_time: f32,
+    active: Option<ActiveTransition>,
+    frames: u32,
+    machine_entered: bool,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum AnimatorRequest {
     Play(usize),
@@ -855,6 +932,8 @@ pub struct Animator {
     machine_entered: bool,
     pending_request: Option<AnimatorRequest>,
     captured_defaults: Vec<SampledBinding>,
+    layer_players: Vec<LayerPlayer>,
+    layer_defaults: Vec<Vec<SampledBinding>>,
 }
 
 impl Animator {
@@ -870,7 +949,27 @@ impl Animator {
         } else {
             0
         };
-        let captured_defaults = capture_defaults(&controller);
+        let captured_defaults = capture_defaults(&controller.states);
+        let layer_defaults: Vec<Vec<SampledBinding>> = controller
+            .layers
+            .iter()
+            .map(|layer| capture_defaults(&layer.states))
+            .collect();
+        let layer_players: Vec<LayerPlayer> = controller
+            .layers
+            .iter()
+            .map(|layer| LayerPlayer {
+                current_state: if layer.entry_state < layer.states.len() {
+                    layer.entry_state
+                } else {
+                    0
+                },
+                state_time: 0.0,
+                active: None,
+                frames: 0,
+                machine_entered: false,
+            })
+            .collect();
         Self {
             controller,
             parameter_values,
@@ -887,6 +986,8 @@ impl Animator {
             machine_entered: false,
             pending_request: None,
             captured_defaults,
+            layer_players,
+            layer_defaults,
         }
     }
 
@@ -1106,6 +1207,7 @@ impl Animator {
         }
         let dt = self.update_delta(frame);
         let mut result = self.advance(dt);
+        self.advance_layers(dt, &mut result);
         if self.culling_mode == AnimatorCullingMode::CullUpdateTransforms && !self.visible {
             result.writes_transforms = false;
         }
@@ -1516,14 +1618,27 @@ impl Animator {
         state_index: usize,
         bindings: Vec<SampledBinding>,
     ) -> Vec<SampledBinding> {
-        let Some(state) = self.controller.states.get(state_index) else {
+        self.apply_write_defaults_in(
+            self.controller.states.get(state_index),
+            &self.captured_defaults,
+            bindings,
+        )
+    }
+
+    fn apply_write_defaults_in(
+        &self,
+        state: Option<&AnimatorState>,
+        defaults: &[SampledBinding],
+        bindings: Vec<SampledBinding>,
+    ) -> Vec<SampledBinding> {
+        let Some(state) = state else {
             return bindings;
         };
         if !state.write_defaults {
             return bindings;
         }
         let mut result = bindings;
-        for default in &self.captured_defaults {
+        for default in defaults {
             if result
                 .iter()
                 .any(|binding| binding.target == default.target)
@@ -1606,6 +1721,8 @@ impl Animator {
             .position(|state| state.name == name)
     }
 
+    /// Jumps to a state. Applies to the base layer only; additional layers
+    /// follow their own state machines.
     pub fn play(&mut self, state_index: usize) {
         self.pending_request = Some(AnimatorRequest::Play(state_index));
     }
@@ -1635,9 +1752,25 @@ impl Animator {
             .iter()
             .map(|parameter| (parameter.name.clone(), parameter.default_value))
             .collect();
+        for (index, layer) in self.controller.layers.iter().enumerate() {
+            let player = &mut self.layer_players[index];
+            player.current_state = if layer.entry_state < layer.states.len() {
+                layer.entry_state
+            } else {
+                0
+            };
+            player.state_time = 0.0;
+            player.active = None;
+            player.frames = 0;
+            player.machine_entered = false;
+        }
     }
     fn state_duration(&self, state_index: usize) -> f32 {
-        let Some(state) = self.controller.states.get(state_index) else {
+        self.state_duration_in(&self.controller.states, state_index)
+    }
+
+    fn state_duration_in(&self, states: &[AnimatorState], state_index: usize) -> f32 {
+        let Some(state) = states.get(state_index) else {
             return 0.0;
         };
         let blend_param = match &state.motion {
@@ -1746,7 +1879,17 @@ impl Animator {
     }
 
     fn sample_state(&self, state_index: usize, prev_time: f32, current_time: f32) -> ClipSample {
-        let Some(state) = self.controller.states.get(state_index) else {
+        self.sample_state_in(&self.controller.states, state_index, prev_time, current_time)
+    }
+
+    fn sample_state_in(
+        &self,
+        states: &[AnimatorState],
+        state_index: usize,
+        prev_time: f32,
+        current_time: f32,
+    ) -> ClipSample {
+        let Some(state) = states.get(state_index) else {
             return empty_clip_sample();
         };
         match &state.motion {
@@ -1908,6 +2051,269 @@ impl Animator {
             normalized_time: norm_time,
             wrapped_time: wrap_time,
         }
+    }
+    // Advances every additional controller layer and blends its sampled pose
+    // into `result` by layer weight, restricted to the layer's avatar mask.
+    // Additive layers use the same weighted blend as override layers (see
+    // LayerBlendingMode).
+    fn advance_layers(&mut self, dt: f32, result: &mut AnimatorStepResult) {
+        if self.controller.layers.is_empty() {
+            return;
+        }
+        let mut acc_weight = 1.0_f32; // base layer always contributes fully
+        for layer_index in 0..self.controller.layers.len() {
+            let weight = match self.controller.layers[layer_index].weight {
+                w if w.is_finite() => w.clamp(0.0, 1.0),
+                _ => 0.0,
+            };
+            let mut callbacks = Vec::new();
+            let mut fired_events = Vec::new();
+            let bindings = self.advance_layer(layer_index, dt, &mut callbacks, &mut fired_events);
+            result.callbacks.extend(callbacks);
+            result.fired_events.extend(fired_events);
+            if weight <= 1e-6 || bindings.is_empty() {
+                continue;
+            }
+            let layer_bindings = match &self.controller.layers[layer_index].mask {
+                Some(mask) => mask.filter_bindings(&bindings),
+                None => bindings,
+            };
+            if layer_bindings.is_empty() {
+                continue;
+            }
+            let frac = weight / (acc_weight + weight);
+            result.bindings = blend_sampled_bindings(&result.bindings, &layer_bindings, frac);
+            acc_weight += weight;
+        }
+    }
+
+    // Runs one layer's state machine for a step and returns its sampled
+    // bindings. Supports entry/default states, any-state and state
+    // transitions with conditions or exit time, and duration cross-fades.
+    // shortcut: no transition interruption in additional layers; upgrade if
+    // layered interruption is ever observed in real controllers
+    fn advance_layer(
+        &mut self,
+        layer_index: usize,
+        dt: f32,
+        callbacks: &mut Vec<StateMachineCallback>,
+        fired_events: &mut Vec<AnimationEvent>,
+    ) -> Vec<SampledBinding> {
+        let entry = {
+            let layer = &self.controller.layers[layer_index];
+            if layer.states.is_empty() {
+                return Vec::new();
+            }
+            layer.entry_state.min(layer.states.len() - 1)
+        };
+        let mut player = self.layer_players[layer_index];
+        if !player.machine_entered {
+            player.machine_entered = true;
+            callbacks.push(StateMachineCallback {
+                kind: StateMachineCallbackKind::OnStateMachineEnter,
+                state_index: player.current_state,
+                state_name: String::new(),
+                machine: Some(self.controller.layers[layer_index].name.clone()),
+            });
+        }
+        player.current_state = player
+            .current_state
+            .min(self.controller.layers[layer_index].states.len() - 1);
+
+        let state_speed = self.controller.layers[layer_index].states[player.current_state].speed;
+        let prev_time = player.state_time;
+        let new_time = (prev_time + dt * self.speed * state_speed.max(0.0)).max(0.0);
+        player.state_time = new_time;
+        let current_norm = {
+            let length = self.state_duration_in(
+                &self.controller.layers[layer_index].states,
+                player.current_state,
+            );
+            if length > 1e-6 {
+                new_time / length
+            } else if new_time > 0.0 {
+                1.0
+            } else {
+                0.0
+            }
+        };
+
+        if player.active.is_none() {
+            let found = {
+                let layer = &self.controller.layers[layer_index];
+                layer
+                    .transitions
+                    .iter()
+                    .position(|tr| {
+                        tr.source() == TransitionSource::AnyState
+                            && self.layer_transition_ready(tr, player.current_state, current_norm)
+                    })
+                    .or_else(|| {
+                        layer.transitions.iter().position(|tr| {
+                            tr.source() == TransitionSource::State(player.current_state)
+                                && self.layer_transition_ready(
+                                    tr,
+                                    player.current_state,
+                                    current_norm,
+                                )
+                        })
+                    })
+            };
+            if let Some(tr_idx) = found {
+                let transition = self.controller.layers[layer_index].transitions[tr_idx].clone();
+                self.consume_transition_triggers(&transition);
+                let target = match transition.target {
+                    TransitionTarget::State(index)
+                        if index < self.controller.layers[layer_index].states.len() =>
+                    {
+                        index
+                    }
+                    TransitionTarget::State(_) | TransitionTarget::Exit => entry,
+                };
+                if transition.duration <= 1e-6 {
+                    player.current_state = target;
+                    player.state_time = 0.0;
+                    player.frames = 0;
+                    self.push_layer_state_callback(
+                        callbacks,
+                        StateMachineCallbackKind::OnStateEnter,
+                        layer_index,
+                        target,
+                    );
+                } else {
+                    player.active = Some(ActiveTransition {
+                        target_state: target,
+                        elapsed: 0.0,
+                        duration: transition.duration,
+                        target_time: 0.0,
+                        interruption_source: InterruptionSource::None,
+                        target_frames: 0,
+                    });
+                    self.push_layer_state_callback(
+                        callbacks,
+                        StateMachineCallbackKind::OnStateEnter,
+                        layer_index,
+                        target,
+                    );
+                }
+            }
+        }
+
+        let sample = if let Some(mut active) = player.active.take() {
+            let target_speed = self.controller.layers[layer_index]
+                .states
+                .get(active.target_state)
+                .map_or(1.0, |s| s.speed);
+            let prev_target_time = active.target_time;
+            active.target_time += dt * self.speed * target_speed.max(0.0);
+            active.elapsed += dt * self.speed;
+            if active.elapsed >= active.duration {
+                player.current_state = active.target_state;
+                player.state_time = active.target_time;
+                player.frames = 0;
+                if self.controller.layers[layer_index].states[player.current_state].is_exit {
+                    player.current_state = entry;
+                    player.state_time = 0.0;
+                }
+                self.sample_state_in(
+                    &self.controller.layers[layer_index].states,
+                    player.current_state,
+                    prev_target_time,
+                    player.state_time,
+                )
+            } else {
+                player.active = Some(active);
+                player.frames += 1;
+                let alpha = (active.elapsed / active.duration).clamp(0.0, 1.0);
+                let src = self.sample_state_in(
+                    &self.controller.layers[layer_index].states,
+                    player.current_state,
+                    prev_time,
+                    new_time,
+                );
+                let dst = self.sample_state_in(
+                    &self.controller.layers[layer_index].states,
+                    active.target_state,
+                    prev_target_time,
+                    active.target_time,
+                );
+                let bindings = blend_sampled_bindings(&src.bindings, &dst.bindings, alpha);
+                fired_events.extend(src.fired_events);
+                fired_events.extend(dst.fired_events);
+                ClipSample {
+                    bindings,
+                    fired_events: Vec::new(),
+                    normalized_time: src.normalized_time
+                        + (dst.normalized_time - src.normalized_time) * alpha,
+                    wrapped_time: src.wrapped_time
+                        + (dst.wrapped_time - src.wrapped_time) * alpha,
+                }
+            }
+        } else {
+            if self.controller.layers[layer_index].states[player.current_state].is_exit {
+                player.current_state = entry;
+                player.state_time = 0.0;
+            }
+            self.sample_state_in(
+                &self.controller.layers[layer_index].states,
+                player.current_state,
+                prev_time,
+                new_time,
+            )
+        };
+
+        player.frames += 1;
+        self.layer_players[layer_index] = player;
+        let bindings = self.apply_write_defaults_in(
+            self.controller.layers[layer_index].states.get(player.current_state),
+            &self.layer_defaults[layer_index],
+            sample.bindings,
+        );
+        fired_events.extend(sample.fired_events);
+        bindings
+    }
+
+    fn layer_transition_ready(
+        &self,
+        transition: &StateTransition,
+        current_state: usize,
+        normalized_time: f32,
+    ) -> bool {
+        if !transition.can_transition_to_self()
+            && transition.target == TransitionTarget::State(current_state)
+        {
+            return false;
+        }
+        if transition.has_exit_time && normalized_time + 1e-6 < transition.exit_time {
+            return false;
+        }
+        if !transition.has_exit_time && transition.conditions.is_empty() {
+            return true;
+        }
+        transition
+            .conditions
+            .iter()
+            .all(|c| self.evaluate_condition(c))
+    }
+
+    fn push_layer_state_callback(
+        &self,
+        callbacks: &mut Vec<StateMachineCallback>,
+        kind: StateMachineCallbackKind,
+        layer_index: usize,
+        state_index: usize,
+    ) {
+        let state_name = self.controller.layers[layer_index]
+            .states
+            .get(state_index)
+            .map(|state| state.name.clone())
+            .unwrap_or_default();
+        callbacks.push(StateMachineCallback {
+            kind,
+            state_index,
+            state_name,
+            machine: Some(self.controller.layers[layer_index].name.clone()),
+        });
     }
 }
 

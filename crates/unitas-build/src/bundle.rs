@@ -572,6 +572,7 @@ fn stage_project_payload(
         crate::cooked::stage_project_cooked_textures(&project_root, output_dir)?;
         crate::cooked::stage_project_cooked_audio(&project_root, output_dir)?;
         crate::cooked::stage_project_cooked_meshes(&project_root, output_dir)?;
+        crate::cooked::stage_project_cooked_videos(&project_root, output_dir)?;
         stage_project_settings(&project_root, output_dir)?;
         if project_has_scripts(&project_root) {
             script_host = ScriptHost::CoreClr;
